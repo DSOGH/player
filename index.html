@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Player</title>
+  <meta name="description" content="A beautiful music player that streams straight from your NAS.">
+  <meta name="theme-color" content="#0e0e12">
+  <meta name="color-scheme" content="dark light">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Player">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./css/app.css">
+  <link rel="modulepreload" href="./js/engine.js">
+  <link rel="modulepreload" href="./js/library.js">
+</head>
+<body>
+  <div id="app">
+    <main id="main"><div id="view"><div class="boot"><div class="spinner"></div></div></div></main>
+    <div id="mini" role="button" aria-label="Now playing"></div>
+    <nav id="tabs">
+      <a href="#/home" data-tab="home" data-icon="home" data-fill="home-fill"><span class="tab-ic"></span><span>Home</span></a>
+      <a href="#/library/albums" data-tab="library" data-icon="library" data-fill="library-fill"><span class="tab-ic"></span><span>Library</span></a>
+      <a href="#/search" data-tab="search" data-icon="search"><span class="tab-ic"></span><span>Search</span></a>
+      <a href="#/settings" data-tab="settings" data-icon="settings" data-fill="settings-fill"><span class="tab-ic"></span><span>Settings</span></a>
+    </nav>
+    <section id="np" aria-label="Now Playing"></section>
+  </div>
+  <div id="sheet"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>This app needs JavaScript.</noscript>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

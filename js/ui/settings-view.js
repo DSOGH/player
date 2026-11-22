@@ -1,0 +1,421 @@
+// Settings screens
+import { html, raw, icon, fmtBytes, $, $$ } from '../util.js';
+import { settings, EQ_FREQS, EQ_PRESETS, EQ_NAMES, DEFAULTS } from '../settings.js';
+import { library } from '../library.js';
+import { engine } from '../engine.js';
+import { scanner } from '../scanner.js';
+import { analyze, isAnalyzed } from '../analysis.js';
+import { saveSource, loadSource, testSource } from '../sources.js';
+import * as db from '../db.js';
+import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
+
+export const APP_VERSION = '1.0.0';
+
+// ---------- controls ----------
+const toggle = (k, label, sub = '') => html`<label class="set-row">
+  <div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
+  <input type="checkbox" class="switch" data-set="${k}" ${settings.get(k) ? 'checked' : ''}>
+</label>`;
+const seg = (k, label, opts, sub = '') => html`<div class="set-row col">
+  <div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
+  <div class="seg" data-seg="${k}">${opts.map(([v, l]) => html`<button class="${String(settings.get(k)) === String(v) ? 'on' : ''}" data-v="${v}">${l}</button>`)}</div>
+</div>`;
+const slider = (k, label, min, max, step, unit = '', sub = '') => html`<div class="set-row col">
+  <div class="set-text"><span>${label}</span><b class="set-val" data-val="${k}">${fmtNum(settings.get(k))}${unit}</b>${sub ? html`<small>${sub}</small>` : ''}</div>
+  <input type="range" class="range" data-range="${k}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${settings.get(k)}">
+</div>`;
+const text = (k, label, sub = '') => html`<div class="set-row col">
+  <div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
+  <input class="text-input" data-text="${k}" value="${settings.get(k)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+</div>`;
+const link = (href, ic, label, value = '') => html`<a class="set-row link" href="${href}">
+  <span class="set-ic">${icon(ic)}</span><div class="set-text"><span>${label}</span></div><span class="set-value">${value}</span>${icon('right', 'chev')}
+</a>`;
+const button = (a, ic, label, { danger = false, sub = '' } = {}) => html`<button class="set-row link${danger ? ' danger' : ''}" data-a="${a}">
+  ${ic ? html`<span class="set-ic">${icon(ic)}</span>` : ''}<div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
+</button>`;
+const group = (title, body, foot = '') => html`<section class="set-group">${title ? html`<h3>${title}</h3>` : ''}<div class="set-card">${body}</div>${foot ? html`<p class="set-foot">${raw(foot)}</p>` : ''}</section>`;
+function fmtNum(v) { return typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : v; }
+
+// ---------- pages ----------
+export async function settingsView(page = '') {
+  const fn = { '': root, source, playback, sound, library: libraryPage, appearance, storage, about }[page] || root;
+  return fn();
+}
+
+async function root() {
+  const src = await loadSource();
+  const demo = await db.kv.get('demo');
+  const srcLabel = src?.url ? new URL(src.url).host : demo ? 'Demo library' : 'Not connected';
+  const modeLabel = { smart: 'Smart', crossfade: `Crossfade ${settings.get('crossfadeSec')}s`, off: 'Gapless' }[settings.get('transition')];
+  return {
+    title: 'Settings',
+    html: html`${pageHeader('Settings')}
+    ${group('', html`
+      ${link('#/settings/source', 'server', 'Music Source', srcLabel)}
+      ${link('#/settings/playback', 'mix', 'Playback & Transitions', modeLabel)}
+      ${link('#/settings/sound', 'eq', 'Sound & EQ', settings.get('eqOn') ? EQ_NAMES[settings.get('eqPreset')] : 'EQ off')}
+      ${link('#/settings/library', 'library', 'Library', `${library.size} songs`)}
+      ${link('#/settings/appearance', 'palette', 'Appearance')}
+      ${link('#/settings/storage', 'storage', 'Downloads & Storage')}
+      ${link('#/settings/about', 'info', 'About & Help')}`)}
+    ${group('', html`${button('rescan', 'refresh', scanner.running ? 'Scanning…' : 'Scan for New Music', { sub: await lastScanText() })}`)}
+    <div class="bottom-pad"></div>`,
+  };
+}
+async function lastScanText() {
+  const t = await db.kv.get('lastScan');
+  if (!t) return 'Never scanned';
+  const m = Math.round((Date.now() - t) / 60000);
+  return 'Last scan ' + (m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`);
+}
+
+async function source() {
+  const s = (await loadSource()) || { type: 'webdav', url: '', username: '' };
+  const demo = await db.kv.get('demo');
+  return {
+    title: 'Music Source',
+    html: html`${pageHeader('Music Source', { back: true })}
+    <form class="src-form" data-src-form>
+      ${group('Connect to your NAS', html`
+        <div class="set-row col">
+          <div class="set-text"><span>Connection type</span></div>
+          <div class="seg" data-src-type>
+            <button type="button" class="${s.type !== 'http' ? 'on' : ''}" data-v="webdav">WebDAV</button>
+            <button type="button" class="${s.type === 'http' ? 'on' : ''}" data-v="http">HTTP folder</button>
+          </div>
+        </div>
+        <div class="set-row col"><div class="set-text"><span>Music folder address</span><small>Must be <b>https://</b> — e.g. https://nas.tail1234.ts.net:5006/music/</small></div>
+          <input class="text-input" name="url" type="url" inputmode="url" value="${s.url || ''}" placeholder="https://your-nas:5006/music/" autocomplete="off" autocapitalize="off" spellcheck="false" required></div>
+        <div class="set-row col"><div class="set-text"><span>Username</span></div>
+          <input class="text-input" name="username" value="${s.username || ''}" autocomplete="username" autocapitalize="off" spellcheck="false"></div>
+        <div class="set-row col"><div class="set-text"><span>Password</span><small>${s.auth ? 'Saved — leave blank to keep it' : 'Stored only on this device'}</small></div>
+          <input class="text-input" name="password" type="password" autocomplete="current-password" placeholder="${s.auth ? '••••••••' : ''}"></div>
+      `)}
+      <div class="src-status" data-src-status></div>
+      <div class="btn-row">
+        <button type="button" class="btn pill" data-a="src-test">Test Connection</button>
+        <button type="submit" class="btn pill primary">Save & Scan</button>
+      </div>
+    </form>
+    ${group('Demo', html`${toggle('__demo', 'Demo library', 'Generated songs with real tempos, fades and silences to try transitions & BPM')}`)}
+    ${group('Setup help', html`
+      <div class="help">
+        <p><b>WebDAV</b> works with Synology (WebDAV Server package), QNAP, TrueNAS, Unraid, Nextcloud and rclone. <b>HTTP folder</b> works with nginx/Caddy/Apache directory listings.</p>
+        <p>Because this app runs on GitHub Pages, your NAS address needs <b>HTTPS</b> and must allow this site with <b>CORS</b>. The easiest way: run the ready-made container in the <code>nas/</code> folder of the repo, and reach it from anywhere with Tailscale.</p>
+        <a class="btn pill" href="https://github.com/DSOGH/player#connect-your-nas" target="_blank" rel="noopener">Open the setup guide</a>
+      </div>`)}
+    <div class="bottom-pad"></div>`,
+    after(root) {
+      $('[data-set="__demo"]', root).checked = !!demo;
+      let type = s.type || 'webdav';
+      $('[data-src-type]', root).addEventListener('click', (e) => {
+        const b = e.target.closest('button'); if (!b) return;
+        type = b.dataset.v;
+        $$('[data-src-type] button', root).forEach((x) => x.classList.toggle('on', x === b));
+      });
+      const form = $('[data-src-form]', root);
+      const status = $('[data-src-status]', root);
+      const read = () => {
+        const f = new FormData(form);
+        return { type, url: String(f.get('url') || '').trim(), username: String(f.get('username') || '').trim(), password: String(f.get('password') || '') };
+      };
+      const apply = async () => {
+        const v = read();
+        if (!/^https?:\/\//i.test(v.url)) throw new Error('Enter the full address starting with https://');
+        if (location.protocol === 'https:' && v.url.startsWith('http:')) {
+          throw new Error('Your browser blocks plain http:// from an https site. Use an https:// address for your NAS (see the setup guide — Tailscale gives you one for free).');
+        }
+        const keepAuth = !v.password && s.auth && v.username === s.username;
+        const saved = await saveSource(v);
+        if (keepAuth) { saved.auth = s.auth; await db.kv.set('source', saved); navigator.serviceWorker?.controller?.postMessage({ type: 'config-changed' }); }
+        await new Promise((r) => setTimeout(r, 80));
+        return saved;
+      };
+      const test = async () => {
+        status.className = 'src-status busy';
+        status.innerHTML = '<div class="spinner"></div> Connecting…';
+        try {
+          const cfg = await apply();
+          const r = await testSource(cfg);
+          status.className = 'src-status ok';
+          status.innerHTML = html`${icon('check')} Connected — found ${r.dirs} folders and ${r.files} files at the top level.`.toString();
+          return true;
+        } catch (e) {
+          status.className = 'src-status err';
+          status.innerHTML = html`${icon('x')} ${e.message}`.toString();
+          return false;
+        }
+      };
+      root.querySelector('[data-a="src-test"]').addEventListener('click', (e) => { e.stopPropagation(); test(); });
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (await test()) {
+          toast('Scanning your NAS…');
+          scanner.run();
+          location.hash = '#/home';
+        }
+      });
+    },
+  };
+}
+
+function playback() {
+  const tm = settings.get('transition');
+  return {
+    title: 'Playback',
+    html: html`${pageHeader('Playback', { back: true })}
+    ${group('Transitions', html`
+      ${seg('transition', 'Between songs', [['smart', 'Smart'], ['crossfade', 'Crossfade'], ['off', 'Gapless']],
+        { smart: 'Reads each song’s intro & outro to pick the best mix — blends fade-outs, trims silence, keeps albums gapless, and beat-matches when tempos line up.', crossfade: 'Always crossfade for a fixed time.', off: 'No overlap — songs play back-to-back.' }[tm])}
+      ${slider('crossfadeSec', tm === 'smart' ? 'Max mix length' : 'Crossfade length', 1, 12, 0.5, 's')}
+      ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
+      ${toggle('gaplessAlbums', 'Gapless albums', 'Never crossfade between consecutive tracks of the same album (live albums, DJ mixes, concept albums)')}
+      ${toggle('skipSilence', 'Trim silence', 'Skip dead air at the start and end of songs')}
+    `)}
+    ${group('Tempo', html`
+      ${seg('bpmDetect', 'BPM detection', [['auto', 'Automatic'], ['manual', 'On demand'], ['off', 'Off']], 'Automatic analyses each song as it comes up. On demand: use “Detect BPM” in the player menu.')}
+      ${toggle('beatMatch', 'Beat-matched mixing', 'In Smart mode, line mixes up on the beat when two songs have similar tempos')}
+      ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back (pitch preserved)')}
+      ${slider('tempoMatchMax', 'Max tempo change', 1, 12, 1, '%')}
+      ${toggle('preferBpmTag', 'Prefer BPM tags', 'Use the BPM from your file tags when present')}
+      ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
+    `)}
+    ${group('Controls', html`
+      ${toggle('skipFade', 'Fade when skipping', 'Quick crossfade when you press next/previous')}
+      ${slider('skipFadeSec', 'Skip fade length', 0.3, 3, 0.1, 's')}
+      ${toggle('pauseFade', 'Soft pause', 'Fade out/in on pause and play')}
+      ${slider('prevRestarts', 'Previous restarts song after', 1, 10, 1, 's')}
+    `)}
+    ${group('Queue', html`
+      ${toggle('autoplay', 'Autoplay', 'When your queue ends, keep playing similar music (genre, artist, tempo)')}
+      ${seg('shuffleMode', 'Shuffle style', [['random', 'Random'], ['flow', 'BPM flow']], 'BPM flow orders shuffled songs so tempos change smoothly')}
+      ${toggle('resumeSession', 'Resume where you left off')}
+    `)}
+    <div class="bottom-pad"></div>`,
+  };
+}
+
+function sound() {
+  const preset = settings.get('eqPreset');
+  const bands = preset === 'custom' ? settings.get('eqBands') : EQ_PRESETS[preset] || EQ_PRESETS.flat;
+  return {
+    title: 'Sound',
+    html: html`${pageHeader('Sound & EQ', { back: true })}
+    ${group('Volume leveling', html`
+      ${seg('leveling', 'Leveling', [['smart', 'Smart'], ['track', 'Track'], ['album', 'Album'], ['off', 'Off']], 'Uses ReplayGain tags. Smart uses album gain when you play an album in order, track gain otherwise.')}
+      ${slider('levelPreamp', 'Pre-amp', -12, 12, 0.5, ' dB')}
+      ${toggle('autoLevel', 'Auto-level untagged songs', 'Measure loudness on-device for files without ReplayGain')}
+      ${toggle('limiter', 'Prevent clipping', 'Soft limiter on the output')}
+    `)}
+    ${group('Equalizer', html`
+      ${toggle('eqOn', 'Equalizer')}
+      <button class="set-row link" data-a="eq-preset"><div class="set-text"><span>Preset</span></div><span class="set-value">${EQ_NAMES[preset]}</span>${icon('right', 'chev')}</button>
+      <div class="eq${settings.get('eqOn') ? '' : ' off'}">
+        ${EQ_FREQS.map((f, i) => html`<div class="eq-band">
+          <span class="eq-db" data-eqv="${i}">${bands[i] > 0 ? '+' : ''}${bands[i]}</span>
+          <input type="range" class="eq-slider" data-eq="${i}" min="-12" max="12" step="0.5" value="${bands[i]}" orient="vertical">
+          <span class="eq-f">${f >= 1000 ? f / 1000 + 'k' : f}</span>
+        </div>`)}
+      </div>
+    `)}
+    ${group('Output', html`
+      ${seg('engine', 'Audio engine', [['enhanced', 'Enhanced'], ['simple', 'Simple']], 'Enhanced enables EQ, leveling boost, limiter and sample-accurate fades. Simple uses the plain media player (try it if audio cuts out in the background). Takes effect after reopening the app.')}
+      ${toggle('mono', 'Mono audio')}
+      ${toggle('showVolume', 'Show volume slider in player')}
+    `)}
+    <div class="bottom-pad"></div>`,
+    after(root) {
+      root.addEventListener('input', (e) => {
+        const s = e.target.closest('[data-eq]');
+        if (!s) return;
+        const cur = settings.get('eqPreset') === 'custom' ? [...settings.get('eqBands')] : [...(EQ_PRESETS[settings.get('eqPreset')] || EQ_PRESETS.flat)];
+        cur[+s.dataset.eq] = +s.value;
+        settings.set('eqBands', cur);
+        if (settings.get('eqPreset') !== 'custom') settings.set('eqPreset', 'custom');
+        if (!settings.get('eqOn')) settings.set('eqOn', true);
+        root.querySelector(`[data-eqv="${s.dataset.eq}"]`).textContent = (s.value > 0 ? '+' : '') + s.value;
+        const pv = root.querySelector('[data-a="eq-preset"] .set-value'); if (pv) pv.textContent = 'Custom';
+        root.querySelector('.eq').classList.remove('off');
+        const sw = root.querySelector('[data-set="eqOn"]'); if (sw) sw.checked = true;
+      });
+    },
+  };
+}
+
+function libraryPage() {
+  const total = library.size;
+  const analyzed = [...library.tracks.values()].filter(isAnalyzed).length;
+  return {
+    title: 'Library',
+    html: html`${pageHeader('Library', { back: true })}
+    ${group('Your library', html`
+      <div class="stats"><div><b>${total}</b><span>Songs</span></div><div><b>${library.albums.size}</b><span>Albums</span></div><div><b>${library.artists.size}</b><span>Artists</span></div><div><b>${analyzed}</b><span>Analyzed</span></div></div>
+      ${button('rescan', 'refresh', 'Scan for new music', { sub: 'Only reads new or changed files' })}
+      ${button('rescan-full', 'refresh', 'Full rescan', { sub: 'Re-read every file’s tags and artwork' })}
+      ${button('analyze-all', 'bpm', 'Analyze whole library', { sub: 'Detect BPM, silences and loudness for every song (downloads each file once — best on Wi-Fi)' })}
+    `)}
+    ${group('Organizing', html`
+      ${toggle('groupCompilations', 'Group compilations', 'Albums tagged as compilations appear under “Various Artists”')}
+      ${seg('albumSort', 'Sort albums by', [['added', 'Added'], ['title', 'Title'], ['artist', 'Artist'], ['year', 'Year']])}
+      ${toggle('scanOnLaunch', 'Check for new music on launch')}
+      ${text('artNames', 'Folder artwork names', 'Images in an album folder used when a file has no embedded art')}
+      ${text('ignoreFolders', 'Ignore folders', 'Comma-separated folder names to skip')}
+    `)}
+    ${group('', html`${button('clear-library', 'trash', 'Clear library index', { danger: true, sub: 'Your files on the NAS are never touched' })}`)}
+    <div class="bottom-pad"></div>`,
+  };
+}
+
+function appearance() {
+  const acc = settings.get('accent');
+  const swatches = ['dynamic', '#fa2d48', '#1ed760', '#0a84ff', '#bf5af2', '#ff9f0a', '#64d2ff', '#ff375f', '#ffd60a'];
+  return {
+    title: 'Appearance',
+    html: html`${pageHeader('Appearance', { back: true })}
+    ${group('Theme', html`
+      ${seg('theme', 'Theme', [['dark', 'Dark'], ['oled', 'Black'], ['light', 'Light'], ['auto', 'Auto']])}
+      <div class="set-row col"><div class="set-text"><span>Accent color</span><small>Dynamic picks a color from the current album art</small></div>
+        <div class="swatches">${swatches.map((c) => html`<button class="swatch${acc === c ? ' on' : ''}${c === 'dynamic' ? ' dyn' : ''}" data-accent="${c}" style="${c !== 'dynamic' ? `background:${c}` : ''}" aria-label="${c}">${c === 'dynamic' ? icon('smart') : ''}</button>`)}</div></div>
+      ${seg('npBackground', 'Player background', [['animated', 'Animated'], ['static', 'Artwork'], ['plain', 'Plain']])}
+      ${toggle('artShrinkOnPause', 'Shrink artwork when paused')}
+    `)}
+    ${group('Library', html`
+      ${seg('gridCols', 'Album grid', [[2, 'Large'], [3, 'Small']])}
+      ${toggle('showBadges', 'Show quality badges', 'Lossless / Hi-Res Lossless')}
+      ${toggle('showBpm', 'Show BPM in player')}
+      ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
+    `)}
+    ${group('Device', html`
+      ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Auto'], ['off', 'Off']], 'On Surface Duo and foldables, span the app across both screens: library on one side, player on the other.')}
+      ${toggle('haptics', 'Haptic feedback')}
+    `)}
+    <div class="bottom-pad"></div>`,
+    after(root) {
+      root.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-accent]');
+        if (!b) return;
+        settings.set('accent', b.dataset.accent);
+        $$('[data-accent]', root).forEach((x) => x.classList.toggle('on', x === b));
+      });
+    },
+  };
+}
+
+async function storage() {
+  let usage = 0, quota = 0;
+  try { const e = await navigator.storage.estimate(); usage = e.usage || 0; quota = e.quota || 0; } catch (e) { /* */ }
+  const dl = [...library.tracks.values()].filter((t) => library.offline.has(t.url));
+  const dlSize = dl.reduce((s, t) => s + (t.size || 0), 0);
+  const persisted = await navigator.storage?.persisted?.();
+  return {
+    title: 'Storage',
+    html: html`${pageHeader('Downloads & Storage', { back: true })}
+    ${group('Storage', html`
+      <div class="stats"><div><b>${dl.length}</b><span>Downloaded</span></div><div><b>${fmtBytes(dlSize)}</b><span>Downloads</span></div><div><b>${fmtBytes(usage)}</b><span>Total used</span></div></div>
+      <div class="meter"><i style="width:${quota ? Math.min(100, (usage / quota) * 100) : 0}%"></i></div>
+      <p class="set-foot inline">${fmtBytes(quota)} available to this app${persisted ? ' · protected from automatic cleanup' : ''}</p>
+      ${persisted ? '' : button('persist', 'check', 'Keep downloads safe', { sub: 'Ask the browser not to clear downloads when space is low' })}
+    `)}
+    ${group('Streaming', html`
+      ${seg('prefetch', 'Preload next song', [['any', 'Always'], ['wifi', 'Wi-Fi only'], ['off', 'Never']], 'Loads the next song fully ahead of time for instant, glitch-free transitions')}
+    `)}
+    ${group('', html`
+      ${button('clear-downloads', 'trash', 'Remove all downloads', { danger: true })}
+      ${button('clear-cache', 'trash', 'Clear preload & artwork cache')}
+      ${button('clear-analysis', 'trash', 'Clear song analysis', { sub: 'BPM, silences and loudness will be measured again' })}
+    `)}
+    ${group('Backup', html`
+      ${button('export', 'download', 'Export settings, playlists & likes')}
+      ${button('import', 'refresh', 'Import backup…')}
+      ${button('reset-settings', 'refresh', 'Reset all settings', { danger: true })}
+    `)}
+    <div class="bottom-pad"></div>`,
+  };
+}
+
+function about() {
+  return {
+    title: 'About',
+    html: html`${pageHeader('About', { back: true })}
+    <div class="about">
+      <div class="about-icon"><img src="./icons/icon-192.png" alt=""></div>
+      <h2>Player</h2>
+      <p>Version ${APP_VERSION}</p>
+      <p class="dim">A music player that streams straight from your NAS. Everything — tags, artwork, BPM, transitions — happens on your phone.</p>
+    </div>
+    ${group('Help', html`
+      <a class="set-row link" href="https://github.com/DSOGH/player#connect-your-nas" target="_blank" rel="noopener"><span class="set-ic">${icon('server')}</span><div class="set-text"><span>NAS setup guide</span></div>${icon('right', 'chev')}</a>
+      <a class="set-row link" href="https://github.com/DSOGH/player#install-on-your-phone" target="_blank" rel="noopener"><span class="set-ic">${icon('plus')}</span><div class="set-text"><span>Add to Home Screen</span></div>${icon('right', 'chev')}</a>
+      <a class="set-row link" href="https://github.com/DSOGH/player" target="_blank" rel="noopener"><span class="set-ic">${icon('info')}</span><div class="set-text"><span>Source code</span></div>${icon('right', 'chev')}</a>
+      ${button('check-update', 'refresh', 'Check for updates')}
+    `)}
+    ${group('Tips', html`<div class="help">
+      <p>• Swipe the mini player left/right to skip. Swipe the player down to close it.</p>
+      <p>• Long-press any song for options.</p>
+      <p>• Tap the transition button in the player to switch between Smart, Crossfade and Gapless.</p>
+      <p>• Put a <code>.lrc</code> file next to a song (same name) for synced lyrics.</p>
+      <p>• On Surface Duo, span the app across both screens for library + player side by side.</p>
+    </div>`)}
+    <div class="bottom-pad"></div>`,
+  };
+}
+
+// ---------- shared binding for all settings pages ----------
+export function bindSettings(root, rerender) {
+  root.addEventListener('change', async (e) => {
+    const sw = e.target.closest('[data-set]');
+    if (sw) {
+      const k = sw.dataset.set;
+      if (k === '__demo') { rerender.demo(sw.checked); return; }
+      settings.set(k, sw.checked);
+      if (k === 'eqOn') root.querySelector('.eq')?.classList.toggle('off', !sw.checked);
+      return;
+    }
+    const tx = e.target.closest('[data-text]');
+    if (tx) settings.set(tx.dataset.text, tx.value.trim());
+  });
+  root.addEventListener('input', (e) => {
+    const r = e.target.closest('[data-range]');
+    if (!r) return;
+    const k = r.dataset.range;
+    const v = +r.value;
+    settings.set(k, v);
+    const lab = root.querySelector(`[data-val="${k}"]`);
+    if (lab) lab.textContent = fmtNum(v) + (r.dataset.unit || '');
+  });
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-seg] button');
+    if (!b) return;
+    const k = b.closest('[data-seg]').dataset.seg;
+    const raw = b.dataset.v;
+    const v = typeof DEFAULTS[k] === 'number' ? +raw : raw;
+    settings.set(k, v);
+    $$('button', b.parentNode).forEach((x) => x.classList.toggle('on', x === b));
+    if (k === 'transition') rerender.page();
+  });
+}
+
+export async function eqPresetSheet() {
+  const cur = settings.get('eqPreset');
+  const v = await actionSheet({ title: 'Equalizer preset', items: Object.keys(EQ_NAMES).map((k) => ({ label: EQ_NAMES[k], value: k, active: k === cur })) });
+  if (!v) return false;
+  settings.set('eqPreset', v);
+  if (v !== 'flat' && !settings.get('eqOn')) settings.set('eqOn', true);
+  return true;
+}
+
+export async function analyzeAll(onProgress) {
+  const todo = [...library.tracks.values()].filter((t) => !isAnalyzed(t));
+  let done = 0;
+  for (const t of todo) {
+    if (analyzeAll.stop) break;
+    await analyze(t, { force: true });
+    done++;
+    onProgress(done, todo.length);
+  }
+  analyzeAll.stop = false;
+  return done;
+}
+
+export { confirmSheet, engine };

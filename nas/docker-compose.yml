@@ -1,0 +1,22 @@
+# Player — NAS music server
+# 1. Change the music path below to your music share.
+# 2. Make a password hash:
+#      docker run --rm caddy:2 caddy hash-password --plaintext 'your-password'
+#    and paste it into MUSIC_HASH (double every $ → $$ because this is a compose file).
+# 3. docker compose up -d
+# 4. Give it HTTPS (see README): e.g. `tailscale serve --bg 8080` on the NAS.
+# 5. In the app: Settings → Music Source → HTTP folder → https://<your-nas>.<tailnet>.ts.net/
+services:
+  player-music:
+    image: caddy:2
+    container_name: player-music
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      MUSIC_USER: music
+      MUSIC_HASH: "$$2a$$14$$REPLACE_WITH_YOUR_HASH"
+      ALLOW_ORIGIN: https://dsogh.github.io
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /volume1/music:/music:ro   # ← your music folder (Synology example)

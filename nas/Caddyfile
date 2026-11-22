@@ -1,0 +1,32 @@
+# Serves your music folder to the Player app (https://dsogh.github.io/player/)
+# - read-only directory listing + streaming with seeking (Range requests)
+# - password protected (Basic auth)
+# - CORS so the GitHub Pages app is allowed to read it
+{
+	admin off
+}
+
+:8080 {
+	@preflight method OPTIONS
+
+	header {
+		Access-Control-Allow-Origin "{$ALLOW_ORIGIN:https://dsogh.github.io}"
+		Access-Control-Allow-Headers "Authorization, Range, Depth, Content-Type, Accept"
+		Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified"
+		Access-Control-Max-Age "600"
+		Vary Origin
+	}
+
+	handle @preflight {
+		respond 204
+	}
+
+	handle {
+		basic_auth {
+			{$MUSIC_USER} {$MUSIC_HASH}
+		}
+		root * /music
+		file_server browse
+	}
+}

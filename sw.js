@@ -1,0 +1,190 @@
+/* Service worker:
+ *  - caches the app so it opens instantly and works offline
+ *  - ./__nas?u=<url>  proxies requests to your NAS, adding your login (Basic auth) and
+ *                     fixing up Range/seek headers; serves downloaded tracks from cache
+ *  - ./__art/<id>     artwork from IndexedDB
+ *  - ./__demo/<n>.wav generated demo music
+ */
+const VERSION = 'v1.0.0';
+const SHELL_CACHE = 'shell-' + VERSION;
+const SHELL = [
+  './', './index.html', './manifest.webmanifest', './css/app.css',
+  './js/app.js', './js/util.js', './js/db.js', './js/settings.js', './js/sources.js', './js/tags.js',
+  './js/scanner.js', './js/library.js', './js/art.js', './js/analysis.js', './js/engine.js', './js/demo.js',
+  './js/demo-synth.js', './js/ui/views.js', './js/ui/nowplaying.js', './js/ui/settings-view.js', './js/ui/components.js',
+  './js/ui/icons.js', './js/ui/dual.js',
+  './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
+];
+
+importScripts('./js/demo-synth.js');
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
+  self.skipWaiting();
+});
+self.addEventListener('activate', (e) => {
+  e.waitUntil((async () => {
+    for (const k of await caches.keys()) if (k.startsWith('shell-') && k !== SHELL_CACHE) await caches.delete(k);
+    await self.clients.claim();
+  })());
+});
+
+// ---------- IndexedDB (same schema as js/db.js) ----------
+let dbp;
+function idb() {
+  if (dbp) return dbp;
+  dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('nasplayer', 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      for (const s of ['tracks', 'art', 'analysis', 'playlists']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => { dbp = null; rej(r.error); };
+  });
+  return dbp;
+}
+async function idbGet(store, key) {
+  const d = await idb();
+  return new Promise((res, rej) => {
+    const q = d.transaction(store).objectStore(store).get(key);
+    q.onsuccess = () => res(q.result);
+    q.onerror = () => rej(q.error);
+  });
+}
+
+let cfg = null;
+async function getCfg() {
+  if (!cfg) cfg = (await idbGet('kv', 'source')) || {};
+  return cfg;
+}
+self.addEventListener('message', (e) => {
+  if (e.data?.type === 'config-changed') cfg = null;
+  if (e.data?.type === 'skip-waiting') self.skipWaiting();
+});
+
+const MIME = { mp3: 'audio/mpeg', flac: 'audio/flac', m4a: 'audio/mp4', m4b: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', webm: 'audio/webm', weba: 'audio/webm', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+function guessType(url, given) {
+  if (given && !/octet-stream|text\/plain/.test(given)) return given;
+  const ext = (new URL(url).pathname.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+  return MIME[ext] || given || 'application/octet-stream';
+}
+
+function parseRange(h, size) {
+  const m = /bytes=(\d*)-(\d*)/.exec(h || '');
+  if (!m) return null;
+  let start, end;
+  if (m[1] === '') { start = Math.max(0, size - parseInt(m[2], 10)); end = size - 1; }
+  else { start = parseInt(m[1], 10); end = m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1; }
+  return { start, end };
+}
+async function blobResponse(blob, req, type) {
+  const size = blob.size;
+  const r = req.headers.get('range');
+  const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
+  if (!r) return new Response(blob, { status: 200, headers: { ...base, 'Content-Length': String(size) } });
+  const rg = parseRange(r, size);
+  if (!rg || rg.start >= size) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+  return new Response(blob.slice(rg.start, rg.end + 1), {
+    status: 206,
+    headers: { ...base, 'Content-Length': String(rg.end - rg.start + 1), 'Content-Range': `bytes ${rg.start}-${rg.end}/${size}` },
+  });
+}
+
+async function nas(req, url) {
+  const target = url.searchParams.get('u');
+  const size = parseInt(url.searchParams.get('s') || '0', 10);
+  if (!target) return new Response('missing u', { status: 400 });
+  const method = req.method;
+  if (method === 'GET') {
+    for (const name of ['offline-tracks', 'prefetch']) {
+      try {
+        const c = await caches.open(name);
+        const hit = await c.match(target);
+        if (hit) return blobResponse(await hit.blob(), req, guessType(target, hit.headers.get('content-type')));
+      } catch (e) { /* ignore */ }
+    }
+  }
+  const c = await getCfg();
+  const headers = new Headers();
+  for (const h of ['range', 'depth', 'content-type', 'accept']) {
+    const v = req.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  let sameNas = false;
+  try { sameNas = c.url && new URL(target).origin === new URL(c.url).origin; } catch (e) { /* */ }
+  if (c.auth && sameNas) headers.set('Authorization', c.auth);
+  const init = { method, headers, mode: 'cors', credentials: 'omit', cache: 'no-store', redirect: 'follow' };
+  if (method !== 'GET' && method !== 'HEAD') init.body = await req.text();
+  let r;
+  try { r = await fetch(target, init); } catch (e) {
+    return new Response(JSON.stringify({ error: 'network', message: String(e) }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+  }
+  const out = new Headers();
+  const type = guessType(target, r.headers.get('content-type'));
+  out.set('Content-Type', type);
+  const len = r.headers.get('content-length');
+  if (len) out.set('Content-Length', len);
+  for (const h of ['last-modified', 'etag']) { const v = r.headers.get(h); if (v) out.set(h, v); }
+  out.set('Accept-Ranges', 'bytes');
+  if (r.status === 206) {
+    let cr = r.headers.get('content-range');
+    if (!cr) {
+      // header not exposed by the NAS's CORS config — rebuild it
+      const rg = /bytes=(\d+)-/.exec(req.headers.get('range') || '');
+      const start = rg ? parseInt(rg[1], 10) : 0;
+      const l = len ? parseInt(len, 10) : 0;
+      cr = `bytes ${start}-${start + l - 1}/${size || '*'}`;
+    }
+    out.set('Content-Range', cr);
+  }
+  return new Response(r.body, { status: r.status, statusText: r.statusText, headers: out });
+}
+
+async function art(id) {
+  try {
+    const rec = await idbGet('art', id);
+    if (!rec) return new Response(null, { status: 404 });
+    return new Response(rec.blob, { headers: { 'Content-Type': rec.blob.type || 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } });
+  } catch (e) { return new Response(null, { status: 404 }); }
+}
+
+const demoCache = new Map();
+async function demo(req, url) {
+  const key = url.pathname + url.search;
+  let blob = demoCache.get(key);
+  if (!blob) {
+    const q = Object.fromEntries(url.searchParams);
+    const p = {};
+    for (const [k, v] of Object.entries(q)) p[k] = k === 'style' ? v : parseFloat(v);
+    blob = new Blob([self.demoSynth(p)], { type: 'audio/wav' });
+    demoCache.set(key, blob);
+    if (demoCache.size > 12) demoCache.delete(demoCache.keys().next().value);
+  }
+  return blobResponse(blob, req, 'audio/wav');
+}
+
+async function shell(req) {
+  const cache = await caches.open(SHELL_CACHE);
+  const hit = await cache.match(req, { ignoreSearch: true });
+  const net = fetch(req).then((r) => {
+    if (r.ok && r.type === 'basic') cache.put(req, r.clone());
+    return r;
+  }).catch(() => null);
+  if (hit) return hit;
+  const r = await net;
+  if (r) return r;
+  if (req.mode === 'navigate') return (await cache.match('./index.html')) || new Response('Offline', { status: 503 });
+  return new Response(null, { status: 504 });
+}
+
+self.addEventListener('fetch', (e) => {
+  const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
+  const p = url.pathname;
+  if (p.endsWith('/__nas')) return e.respondWith(nas(e.request, url));
+  if (p.includes('/__art/')) return e.respondWith(art(decodeURIComponent(p.split('/__art/')[1])));
+  if (p.includes('/__demo/')) return e.respondWith(demo(e.request, url));
+  if (e.request.method === 'GET') e.respondWith(shell(e.request));
+});
