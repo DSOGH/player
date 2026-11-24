@@ -29,6 +29,14 @@ export function deviceName() {
   if (/Android/i.test(ua)) return 'Android';
   return 'Web';
 }
+// every network call gets a deadline, so nothing can hang forever on a dead route
+function withTimeout(ms, outer) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+  outer?.addEventListener?.('abort', () => c.abort(), { once: true });
+  c.signal.addEventListener('abort', () => clearTimeout(t), { once: true });
+  return c.signal;
+}
 function tvHeaders(token) {
   const h = {
     Accept: 'application/json',
@@ -146,7 +154,7 @@ class Plex extends Emitter {
 
   // ---------- servers ----------
   async servers() {
-    const r = await fetch(`${TV()}/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1`, { headers: tvHeaders(this.cfg.token) });
+    const r = await fetch(`${TV()}/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1`, { headers: tvHeaders(this.cfg.token), signal: withTimeout(15000) });
     if (r.status === 401) throw new PlexError('auth', 'Your Plex sign-in expired. Sign in again.');
     if (!r.ok) throw new PlexError('http', `plex.tv responded with ${r.status}`);
     const list = await r.json();
@@ -173,7 +181,7 @@ class Plex extends Emitter {
       const t0 = performance.now();
       try {
         const r = await fetch(`${c.uri}/identity?X-Plex-Token=${encodeURIComponent(server.token)}`, {
-          headers: { Accept: 'application/json' }, signal: AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(8000)]) : ctrl.signal,
+          headers: { Accept: 'application/json' }, signal: withTimeout(8000, ctrl.signal),
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         diag[i].ok = true; diag[i].ms = Math.round(performance.now() - t0);
@@ -188,10 +196,10 @@ class Plex extends Emitter {
       let c = await Promise.any(tries);
       // the Relay is speed-limited: if it answered first, give a direct route a little longer to answer
       if (c.relay && direct.length) {
-        try { c = await Promise.race([Promise.any(direct), sleep(3500).then(() => { throw new Error('slow'); })]); } catch (e) { /* stay on relay */ }
+        try { c = await Promise.race([Promise.any(direct), sleep(2500).then(() => { throw new Error('slow'); })]); } catch (e) { /* stay on relay */ }
       }
-      // give the others a moment to report, for the connection check in Settings
-      setTimeout(() => ctrl.abort(), 2500);
+      // give the others a moment to report (for the connection check in Settings), then stop them
+      setTimeout(() => ctrl.abort(), 3000);
       if (record) { this.diag = { at: Date.now(), list: diag }; this.emit('diag'); }
       return c;
     } catch (e) {
@@ -207,7 +215,7 @@ class Plex extends Emitter {
     const list = await Promise.all(s.connections.filter((c) => location.protocol === 'http:' || c.uri.startsWith('https:')).map(async (c) => {
       const t0 = performance.now();
       let ok = false;
-      try { ok = (await fetch(`${c.uri}/identity?X-Plex-Token=${encodeURIComponent(s.token)}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) })).ok; } catch (e) { /* */ }
+      try { ok = (await fetch(`${c.uri}/identity?X-Plex-Token=${encodeURIComponent(s.token)}`, { headers: { Accept: 'application/json' }, signal: withTimeout(8000) })).ok; } catch (e) { /* */ }
       return { uri: c.uri, kind: c.relay ? 'relay' : c.local ? 'local' : 'remote', ok, ms: Math.round(performance.now() - t0) };
     }));
     this.diag = { at: Date.now(), list };
@@ -253,7 +261,7 @@ class Plex extends Emitter {
     if (!this.connected) throw new PlexError('setup', 'Choose a Plex server first.');
     try {
       const r = await fetch(`${this.cfg.base}/identity?X-Plex-Token=${encodeURIComponent(this.cfg.server.token)}`, {
-        headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4000),
+        headers: { Accept: 'application/json' }, signal: withTimeout(4000),
       });
       if (r.ok) return;
     } catch (e) { /* fall through and re-resolve */ }
@@ -274,8 +282,13 @@ class Plex extends Emitter {
       'X-Plex-Device-Name': `${PRODUCT} (${deviceName()})`,
     }).toString();
   }
-  async api(path, params = {}, method = 'GET') {
-    const r = await fetch(`${this.cfg.base}${path}${path.includes('?') ? '&' : '?'}${this.q(params)}`, { method, headers: { Accept: 'application/json' } });
+  async api(path, params = {}, method = 'GET', ms = 0) {
+    let r;
+    try {
+      r = await fetch(`${this.cfg.base}${path}${path.includes('?') ? '&' : '?'}${this.q(params)}`, { method, headers: { Accept: 'application/json' }, signal: withTimeout(ms || (method === 'GET' ? 30000 : 15000)) });
+    } catch (e) {
+      throw new PlexError('unreachable', e?.name === 'TimeoutError' || e?.name === 'AbortError' ? 'Your Plex server is taking too long to answer.' : 'Couldn’t reach your Plex server.');
+    }
     if (r.status === 401) throw new PlexError('auth', 'Plex rejected the request. Sign in again.');
     if (!r.ok) throw new PlexError('http', `Plex server responded with ${r.status}`);
     const txt = await r.text();
@@ -283,7 +296,7 @@ class Plex extends Emitter {
     try { return JSON.parse(txt).MediaContainer || {}; } catch (e) { return {}; }
   }
   async sections() {
-    const mc = await this.api('/library/sections');
+    const mc = await this.api('/library/sections', {}, 'GET', 15000);
     return (mc.Directory || []).filter((d) => d.type === 'artist').map((d) => ({ key: String(d.key), title: d.title, agent: d.agent }));
   }
   partUrl(t) {
@@ -356,8 +369,13 @@ class Plex extends Emitter {
     this.running = true;
     const p = this.progress = { phase: 'Connecting to Plex', done: 0, total: 0, added: 0, removed: 0 };
     this.emit('progress', p);
+    const slow = setTimeout(() => { if (p.phase === 'Connecting to Plex') { p.phase = 'Still connecting to your Plex server…'; this.emit('progress', p); } }, 8000);
     try {
-      await this.ensureConnection();
+      await Promise.race([
+        this.ensureConnection(),
+        sleep(30000).then(() => { throw new PlexError('unreachable', `Couldn’t reach “${this.cfg.server?.name || 'your server'}”. Check it’s on, then try Sync again.`); }),
+      ]);
+      clearTimeout(slow);
       const server = this.cfg.server;
       let sections = this.cfg.sections?.length ? this.cfg.sections : (await this.sections()).map((s) => s.key);
       if (!sections.length) throw new PlexError('nomusic', 'This server has no music libraries.');
@@ -454,6 +472,7 @@ class Plex extends Emitter {
       this.emit('progress', p);
       this.emit('error', e);
     } finally {
+      clearTimeout(slow);
       this.running = false;
     }
   }
