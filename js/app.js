@@ -662,53 +662,81 @@ function wireGlobal() {
   document.addEventListener('pointercancel', cancelLp);
   document.addEventListener('contextmenu', (e) => { if (e.target.closest('.row.track, .card')) e.preventDefault(); });
 
-  // Swipe a song: right → Add to Queue, left → Add to Playlist (like Spotify), with a springy snap-back
+  // Swipe a song: left → Add to Queue, right → Add to Playlist. Follows the finger 1:1 (drawn once per
+  // frame), the color and icon grow with the swipe, a tap of haptics when it locks in, then a smooth glide back.
   let sw = null;
-  const SW_ARM = 76;
+  const SW_ARM = 84;
   document.addEventListener('pointerdown', (e) => {
     if (!settings.get('rowSwipe') || e.pointerType === 'mouse') return;
     const row = e.target.closest('.row.track');
-    if (!row || row.closest('#np, #sheet') || e.target.closest('button')) return;
-    sw = { row, x0: e.clientX, y0: e.clientY, id: e.pointerId, axis: null, dx: 0, armed: 0 };
+    if (!row || row.closest('#np, #sheet') || e.target.closest('button') || row.classList.contains('swiping')) return;
+    sw = { row, x0: e.clientX, y0: e.clientY, id: e.pointerId, axis: null, dx: 0, armed: 0, raf: 0 };
   }, { passive: true });
+  const swDraw = () => {
+    const s2 = sw;
+    if (!s2 || !s2.under) return;
+    s2.raf = 0;
+    const d = s2.dx, w = s2.row.offsetWidth;
+    s2.row.style.transform = `translate3d(${d}px,0,0)`;
+    const p = Math.min(1, Math.abs(d) / SW_ARM);
+    const u = s2.under;
+    u.dataset.dir = d < 0 ? 'queue' : 'playlist';
+    u.style.setProperty('--p', p.toFixed(3));
+    // the icon rides just behind the row's edge
+    const ic = u.querySelector(d < 0 ? '.su-q' : '.su-p');
+    const off = Math.max(0, Math.abs(d) - 64) * 0.5;
+    if (ic) ic.style.transform = `translate3d(${d < 0 ? -off : off}px,0,0) scale(${(0.7 + 0.3 * p).toFixed(3)})`;
+    const armed = Math.abs(d) > SW_ARM ? Math.sign(d) : 0;
+    if (armed !== s2.armed) {
+      s2.armed = armed;
+      u.classList.toggle('armed', !!armed);
+      if (armed) { haptic(12); ic?.animate?.([{ scale: '1' }, { scale: '1.25' }, { scale: '1' }], { duration: 260, easing: 'cubic-bezier(.3,1.6,.5,1)' }); }
+    }
+    void w;
+  };
   document.addEventListener('pointermove', (e) => {
     if (!sw || e.pointerId !== sw.id) return;
     const mx = e.clientX - sw.x0, my = e.clientY - sw.y0;
     if (!sw.axis) {
-      if (Math.hypot(mx, my) < 9) return;
-      sw.axis = Math.abs(mx) > Math.abs(my) * 1.4 ? 'x' : 'y';
+      if (Math.hypot(mx, my) < 10) return;
+      sw.axis = Math.abs(mx) > Math.abs(my) * 1.5 ? 'x' : 'y';
       if (sw.axis === 'y') { sw = null; return; }
       clearTimeout(lpTimer); lpTimer = null;
+      sw.x0 = e.clientX - Math.sign(mx) * 2; // no jump when the swipe starts
       const r = sw.row, par = r.offsetParent || r.parentNode;
       const under = document.createElement('div');
       under.className = 'swipe-under';
       under.style.cssText = `top:${r.offsetTop}px;left:${r.offsetLeft}px;width:${r.offsetWidth}px;height:${r.offsetHeight}px`;
-      under.innerHTML = html`<span class="su-l">${icon('add-queue')}<b>Queue</b></span><span class="su-r"><b>Playlist</b>${icon('add-playlist')}</span>`.toString();
+      under.innerHTML = html`<span class="su-p">${icon('add-playlist')}<b>Add to Playlist</b></span><span class="su-q"><b>Add to Queue</b>${icon('add-queue')}</span>`.toString();
       par.appendChild(under);
       sw.under = under;
       r.classList.add('swiping');
     }
-    // rubber-band past the trigger point
-    const lim = sw.row.offsetWidth * 0.42;
-    const d = Math.sign(mx) * (Math.abs(mx) < lim ? Math.abs(mx) : lim + (Math.abs(mx) - lim) * 0.25);
-    sw.dx = d;
-    sw.row.style.transform = `translate3d(${d}px,0,0)`;
-    const armed = Math.abs(d) > SW_ARM ? Math.sign(d) : 0;
-    sw.under.classList.toggle('right', d > 0);
-    sw.under.classList.toggle('left', d < 0);
-    if (armed !== sw.armed) { sw.armed = armed; sw.under.classList.toggle('armed', !!armed); if (armed) haptic(12); }
+    const raw = e.clientX - sw.x0;
+    const lim = sw.row.offsetWidth * 0.45;
+    sw.dx = Math.sign(raw) * (Math.abs(raw) < lim ? Math.abs(raw) : lim + (Math.abs(raw) - lim) * 0.2);
+    if (!sw.raf) sw.raf = requestAnimationFrame(swDraw);
   }, { passive: true });
   const swEnd = (e) => {
     if (!sw || (e.pointerId !== undefined && e.pointerId !== sw.id)) return;
     const s2 = sw; sw = null;
     if (s2.axis !== 'x') return;
+    cancelAnimationFrame(s2.raf);
     suppressClick = true; setTimeout(() => { suppressClick = false; }, 350);
     const t = library.track(s2.row.dataset.tid);
-    const back = s2.row.animate([{ transform: `translate3d(${s2.dx}px,0,0)` }, { transform: `translate3d(${-s2.dx * 0.06}px,0,0)`, offset: 0.7 }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.9,.25,1)' });
+    const go = e.type !== 'pointercancel' ? s2.armed : 0;
+    if (go) {
+      s2.under.classList.add('done');
+      const ic = s2.under.querySelector(go < 0 ? '.su-q' : '.su-p');
+      if (ic) ic.innerHTML = icon('check') + `<b>${go < 0 ? 'Queued' : 'Choose playlist'}</b>`;
+    }
+    const back = s2.row.animate([{ transform: `translate3d(${s2.dx}px,0,0)` }, { transform: 'translate3d(0,0,0)' }],
+      { duration: go ? 380 : 300, delay: go ? 140 : 0, easing: 'cubic-bezier(.22,.9,.3,1)', fill: 'backwards' });
     s2.row.style.transform = '';
-    back.finished.finally(() => { s2.row.classList.remove('swiping'); s2.under?.remove(); });
-    if (t && s2.armed > 0 && e.type !== 'pointercancel') { engine.addToQueue([t]); toast(`Added “${t.title}” to queue`); }
-    else if (t && s2.armed < 0 && e.type !== 'pointercancel') addToPlaylist([t]);
+    s2.under.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, delay: go ? 360 : 180, fill: 'forwards' });
+    back.finished.finally(() => setTimeout(() => { s2.row.classList.remove('swiping'); s2.under?.remove(); }, 200));
+    if (t && go < 0) { engine.addToQueue([t]); toast(`Added “${t.title}” to queue`); }
+    else if (t && go > 0) setTimeout(() => addToPlaylist([t]), 260);
   };
   document.addEventListener('pointerup', swEnd);
   document.addEventListener('pointercancel', swEnd);

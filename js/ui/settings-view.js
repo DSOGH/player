@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.13.0';
+export const APP_VERSION = '1.13.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -401,7 +401,7 @@ function extras() {
     html: html`${pageHeader('Extras', { back: true })}
     ${group('Gestures', html`
       ${toggle('likeBurst', 'Heart burst', 'A little burst of hearts when you like a song')}
-      ${toggle('rowSwipe', 'Swipe songs', 'Swipe a song right to add it to the queue, left to add it to a playlist')}
+      ${toggle('rowSwipe', 'Swipe songs', 'Swipe a song left to add it to the queue, right to add it to a playlist')}
       ${toggle('doubleTapSeek', 'Double-tap to jump', 'Double-tap the left or right side of the artwork to jump back or forward')}
       ${seg('seekStep', 'Jump length', [[10, '10s'], [15, '15s'], [30, '30s']])}
       ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}
