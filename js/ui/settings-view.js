@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.11.1';
+export const APP_VERSION = '1.12.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -396,6 +396,7 @@ function extras() {
     `)}
     ${group('Car Mode', html`
       ${toggle('carButton', 'Car Mode in player menu', 'Huge buttons and big text for the road — the screen stays on')}
+      ${toggle('carLyrics', 'Lyrics in Car Mode', 'Big, glanceable synced lyrics next to the controls')}
       ${button('car-mode', 'car', 'Open Car Mode now')}
     `)}
     <div class="bottom-pad"></div>`,

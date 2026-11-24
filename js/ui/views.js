@@ -121,15 +121,15 @@ function weekCard() {
   const max = Math.max(1, ...w.byDay);
   const days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   const today = new Date().getDay();
-  return html`<section class="week-card" data-a="open-stats" role="link">
-    <div class="wk-top"><div><small>Your week <span class="wk-more">See all stats ›</span></small><b>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m</b></div>
+  return html`<button class="week-card" data-a="open-stats" aria-label="Your stats">
+    <div class="wk-top"><div><small>Your week</small><b>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m</b></div>
       <div class="wk-bars">${w.byDay.map((m, i) => html`<div class="wk-bar"><i style="height:${Math.max(4, (m / max) * 100)}%"></i><span>${days[(today - 6 + i + 7) % 7]}</span></div>`)}</div></div>
     <div class="wk-stats">
       <div><b>${w.mixes}</b><span>DJ mixes</span></div>
       <div><b>${w.plays}</b><span>songs</span></div>
-      ${w.topArtist ? html`<a href="#/artist/${w.topArtist.id}"><b>${w.topArtist.name}</b><span>top artist</span></a>` : ''}
+      ${w.topArtist ? html`<div><b>${w.topArtist.name}</b><span>top artist</span></div>` : ''}
     </div>
-  </section>`;
+  </button>`;
 }
 
 // ---------- library ----------
@@ -176,8 +176,7 @@ export function libraryView(tab = 'albums') {
   } else if (tab === 'history') {
     const list = library.recentlyPlayed(200);
     const key = regList(list, { type: 'history', name: 'Recently Played' });
-    body = list.length ? html`<a class="stats-history-link" href="#/history">${icon('timer')}<span><b>Full listening history</b><small>Every play with the time, by day</small></span>${icon('right', 'chev')}</a>
-      <div class="lib-count">Recently played</div>${lazyRows(list, key, { showAlbum: true })}`
+    body = list.length ? html`<div class="lib-count">Recently played</div>${lazyRows(list, key, { showAlbum: true })}`
       : empty('timer', 'Nothing played yet', 'Songs you listen to show up here.');
   } else if (tab === 'downloaded') {
     const list = [...library.tracks.values()].filter((t) => library.isOffline(t));

@@ -16,6 +16,8 @@
   --mini-h: 62px;
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
   --pad: 18px;
   --cols: 2;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI Variable Text", "Segoe UI", Roboto, system-ui, sans-serif;
@@ -790,39 +792,87 @@ html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s eas
 @keyframes ripple { 0% { opacity: 0; transform: scale(.9); } 20% { opacity: 1; transform: scale(1); } 100% { opacity: 0; } }
 
 /* ---------- Car Mode ---------- */
-#car { position: fixed; inset: 0; z-index: 90; background: #000; color: #fff; display: flex; flex-direction: column; justify-content: space-between;
-  padding: calc(var(--sat, 0px) + 18px) 22px calc(var(--sab, 0px) + 22px); opacity: 0; transform: translateY(24px); pointer-events: none;
-  transition: opacity .28s ease-out, transform .38s var(--ease, ease); }
+#car { position: fixed; inset: 0; z-index: 90; background: #000; color: #fff; display: grid; grid-template-columns: 1fr; grid-template-rows: auto 0 1fr;
+  opacity: 0; transform: translateY(24px); pointer-events: none; transition: opacity .28s ease-out, transform .38s var(--ease, ease); overflow: hidden; }
 #car.open { opacity: 1; transform: none; pointer-events: auto; }
-.car-close { align-self: flex-start; width: 52px; height: 52px; border-radius: 26px; background: rgba(255,255,255,.12); color: #fff; display: grid; place-items: center; }
-.car-close .ic { width: 28px; height: 28px; }
-.car-top { display: flex; flex-direction: column; gap: 18px; align-items: flex-start; }
-.car-art { width: min(46vw, 34vh); border-radius: 14px; }
-.car-title { font: 800 clamp(30px, 8.5vw, 46px)/1.08 var(--font-d, system-ui); letter-spacing: -.02em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.car-artist { font: 600 clamp(20px, 5.5vw, 28px)/1.2 var(--font, system-ui); color: rgba(255,255,255,.65); margin-top: 6px; }
-.car-prog { height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; }
-.car-prog i { display: block; height: 100%; background: var(--accent, #fff); transform-origin: left; transform: scaleX(0); transition: transform .2s linear; }
-.car-ctl { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 14px; }
-.car-ctl button { height: min(26vw, 130px); border-radius: 28px; background: rgba(255,255,255,.1); color: #fff; display: grid; place-items: center; }
-.car-ctl button:active { background: rgba(255,255,255,.22); }
-.car-ctl .ic { width: 46%; height: 46%; max-width: 64px; max-height: 64px; }
-.car-ctl .car-play { background: #fff; color: #000; }
-.car-like { position: absolute; top: calc(var(--sat, 0px) + 18px); right: 22px; width: 52px; height: 52px; border-radius: 26px; background: rgba(255,255,255,.12); color: #fff; display: grid; place-items: center; }
+.car-side { min-width: 0; min-height: 0; }
+.car-main { display: flex; flex-direction: column; gap: 14px; padding: calc(var(--sat, 0px) + 12px) 20px calc(var(--sab, 0px) + 18px); }
+.car-bar { display: flex; justify-content: space-between; align-items: center; }
+.car-bar-r { display: flex; gap: 10px; }
+.car-round { width: 50px; height: 50px; border-radius: 25px; background: rgba(255,255,255,.12); color: #fff; display: grid; place-items: center; border: 0; }
+.car-round .ic { width: 26px; height: 26px; }
+.car-round.on { background: rgba(255,255,255,.24); }
 .car-like.on { color: var(--accent, #ff2d55); }
-.car-like .ic { width: 26px; height: 26px; }
-@media (orientation: landscape) and (max-height: 600px) {
-  #car { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr auto; column-gap: 28px; }
-  .car-close { grid-column: 1; } .car-top { grid-column: 1; grid-row: 2; flex-direction: row; align-items: center; } .car-art { width: 30vh; }
-  .car-prog { grid-column: 1 / -1; grid-row: 3; } .car-ctl { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+.car-top { display: flex; gap: 16px; align-items: center; min-width: 0; }
+.car-art { width: 96px; flex: none; border-radius: 12px; }
+.car-meta { min-width: 0; }
+.car-title { font: 800 clamp(24px, 6.5vw, 40px)/1.1 var(--font-d, system-ui); letter-spacing: -.02em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.car-artist { font: 600 clamp(17px, 4.4vw, 24px)/1.2 var(--font, system-ui); color: rgba(255,255,255,.62); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.car-prog { height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; flex: none; }
+.car-prog i { display: block; height: 100%; background: var(--accent, #fff); transform-origin: left; transform: scaleX(0); transition: transform .2s linear; }
+.car-ctl { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 12px; flex: none; }
+.car-ctl button { height: clamp(84px, 13vh, 130px); border-radius: 26px; background: rgba(255,255,255,.1); color: #fff; display: grid; place-items: center; border: 0; }
+.car-ctl button:active { background: rgba(255,255,255,.22); }
+.car-ctl .ic { width: 42%; height: 42%; max-width: 60px; max-height: 60px; }
+.car-ctl .car-play { background: #fff; color: #000; }
+.car-hinge { display: none; }
+/* lyrics */
+.car-lyrics { display: flex; flex-direction: column; justify-content: center; padding: 0 24px; overflow: hidden; position: relative; }
+#car.no-lyrics .car-lyrics { display: none; }
+.car-ly-stack { display: flex; flex-direction: column; gap: 10px; }
+.car-ly-stack p { margin: 0; font-family: var(--font-d, system-ui); letter-spacing: -.015em; line-height: 1.15; overflow-wrap: anywhere; }
+.car-ly-stack .prev { font-size: clamp(18px, 4vw, 24px); font-weight: 700; color: rgba(255,255,255,.3); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.car-ly-stack .cur { font-size: clamp(30px, 8.6vw, 54px); font-weight: 850; color: #fff; }
+.car-ly-stack .next { font-size: clamp(20px, 5vw, 30px); font-weight: 750; color: rgba(255,255,255,.42); }
+.car-ly-stack .next2 { font-size: clamp(18px, 4.2vw, 26px); font-weight: 700; color: rgba(255,255,255,.22); }
+.car-ly-stack .gap { letter-spacing: .3em; }
+.car-ly-plain { overflow-y: auto; max-height: 100%; padding: 12px 0; scrollbar-width: none; }
+.car-ly-plain p { margin: 0 0 10px; font: 750 clamp(20px, 5.4vw, 30px)/1.25 var(--font-d, system-ui); color: rgba(255,255,255,.9); }
+.car-ly-none, .car-ly-wait { display: flex; flex-direction: column; align-items: center; gap: 8px; color: rgba(255,255,255,.4); font-weight: 600; }
+.car-ly-none .ic { width: 36px; height: 36px; }
+
+/* phone upright (iPhone 18 Pro Max, folded iPhone Duo): song on top, big lyrics in the middle, buttons at the bottom */
+@media (orientation: portrait) {
+  body:not(.dual) #car { display: flex; flex-direction: column; gap: 14px; padding: calc(var(--sat, 0px) + 12px) 20px calc(var(--sab, 0px) + 18px); }
+  body:not(.dual) #car .car-main { display: contents; }
+  body:not(.dual) #car .car-bar { order: 1; } body:not(.dual) #car .car-top { order: 2; }
+  body:not(.dual) #car .car-lyrics { order: 3; flex: 1; padding: 0 2px; }
+  body:not(.dual) #car .car-prog { order: 4; } body:not(.dual) #car .car-ctl { order: 5; }
+  body:not(.dual) #car.no-lyrics .car-top, body:not(.dual) #car.lyr-none .car-top { flex: 1; flex-direction: column; align-items: flex-start; justify-content: center; }
+  body:not(.dual) #car.no-lyrics .car-art, body:not(.dual) #car.lyr-none .car-art { width: min(64vw, 36vh); }
+  body:not(.dual) #car.lyr-none .car-lyrics { flex: none; }
 }
-.diag-dot { width: 12px; height: 12px; border-radius: 6px; flex: none; margin: 0 6px 0 4px; background: var(--text3); }
-.diag-dot.ok { background: #30d158; box-shadow: 0 0 10px rgba(48,209,88,.5); }
-.diag-dot.bad { background: #ff453a; }
-.diag-help p { margin: 0 0 10px; line-height: 1.45; }
-.diag-help .ok-tip { color: #30d158; font-weight: 600; }
+/* phone sideways: controls left, lyrics right */
+@media (orientation: landscape) {
+  body:not(.dual) #car { grid-template-columns: minmax(330px, 46%) 0 1fr; grid-template-rows: 1fr; }
+  body:not(.dual) #car.no-lyrics { grid-template-columns: 1fr; }
+  .car-main { padding: calc(var(--sat, 0px) + 10px) 18px calc(var(--sab, 0px) + 12px) max(18px, var(--sal, 0px)); justify-content: space-between; }
+  .car-art { width: clamp(64px, 18vh, 120px); }
+  .car-ctl button { height: clamp(70px, 22vh, 120px); }
+  .car-lyrics { padding: 0 max(24px, var(--sar, 0px)) 0 24px; }
+  .car-ly-stack .cur { font-size: clamp(28px, 6.4vh, 50px); }
+  .car-ly-stack .next { font-size: clamp(20px, 4.4vh, 30px); }
+}
+/* unfolded iPhone Duo / foldables: one screen each side of the fold, nothing on the crease */
+body.dual-h #car { grid-template-columns: var(--seg-w, 50%) var(--hinge, 0px) 1fr; grid-template-rows: 1fr; }
+body.dual-h #car .car-lyrics { position: static; padding: 0 28px; }
+body.dual-h #car .car-main { display: flex; justify-content: space-between; }
+body.dual-h #car .car-top { flex-direction: column; align-items: flex-start; }
+body.dual-h #car .car-art { width: min(70%, 34vh); }
+body.dual-h.dual-swap #car .car-main { order: 3; } body.dual-h.dual-swap #car .car-lyrics { order: 1; }
+body.dual-v #car { grid-template-rows: var(--seg-h, 50%) var(--hinge, 0px) 1fr; grid-template-columns: 1fr; }
+body.dual-v #car .car-lyrics { position: static; order: 1; padding: calc(var(--sat, 0px) + 12px) 24px 12px; }
+body.dual-v #car .car-hinge { order: 2; } body.dual-v #car .car-main { order: 3; padding-top: 14px; }
+body.dual-v.dual-swap #car .car-lyrics { order: 3; } body.dual-v.dual-swap #car .car-main { order: 1; }
+body.dual #car.no-lyrics { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+body.dual #car.no-lyrics .car-hinge, body.dual #car.no-lyrics .car-lyrics { display: none; }
+body.dual #car .car-hinge { display: block; }
 
 /* ---------- v1.11: Stats ---------- */
-.week-card { cursor: pointer; }
+.week-card { cursor: pointer; display: block; width: calc(100% - 2 * var(--pad)); border: 0; color: inherit; font: inherit; text-align: left; -webkit-tap-highlight-color: transparent; transition: transform .16s var(--ease, ease), filter .16s; }
+.week-card:active { transform: scale(.98); filter: brightness(1.12); }
+.stats-dev { display: inline-flex; align-items: center; gap: 6px; margin: 0 16px 4px; padding: 5px 10px; border-radius: 99px; background: var(--card); color: var(--text2); font-size: 13px; font-weight: 600; }
+.stats-dev .ic { width: 15px; height: 15px; }
 .wk-more { float: right; color: var(--accent); font-weight: 700; text-transform: none; letter-spacing: 0; }
 .stats-range { padding-top: 4px; }
 .stats-range .chip { border: 0; font: inherit; }
@@ -897,3 +947,17 @@ body, #app { overflow: clip; }
 .hist-when .live { width: 7px; height: 7px; border-radius: 4px; background: var(--accent); animation: live 1.2s ease-in-out infinite; }
 @keyframes live { 50% { opacity: .3; } }
 .hist-more { display: block; margin: 16px auto; }
+/* short screens (phone sideways): compact song row so the big buttons always fit */
+@media (max-height: 560px) {
+  #car .car-main { gap: 10px; padding-top: calc(var(--sat, 0px) + 8px) !important; padding-bottom: calc(var(--sab, 0px) + 10px) !important; justify-content: space-between; }
+  #car .car-round { width: 44px; height: 44px; }
+  #car .car-top { flex-direction: row !important; align-items: center !important; }
+  #car .car-art { width: clamp(56px, 18vh, 88px) !important; }
+  #car .car-title { font-size: clamp(22px, 6.5vh, 32px); -webkit-line-clamp: 1; }
+  #car .car-artist { font-size: clamp(15px, 4.4vh, 20px); }
+  #car .car-ctl button { height: clamp(64px, 21vh, 100px); }
+  #car .car-ly-stack .cur { font-size: clamp(26px, 8.5vh, 44px); }
+  #car .car-ly-stack .prev { font-size: clamp(15px, 4.4vh, 20px); }
+  #car .car-ly-stack .next { font-size: clamp(18px, 5.4vh, 26px); }
+  #car .car-ly-stack .next2 { display: none; }
+}

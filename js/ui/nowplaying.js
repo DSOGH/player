@@ -873,8 +873,10 @@ async function autoLyrics(t) {
   else if (!l?.synced && mode === 'lyrics' && autoOpened) { setMode('lyrics'); autoOpened = false; }
 }
 
-// ---------- Car Mode: huge buttons, big text, screen stays on ----------
-let carOpen = false;
+// ---------- Car Mode: huge buttons, big text, live lyrics, screen stays on ----------
+// Layouts (css): phone upright = stacked; phone sideways = controls | lyrics; unfolded iPhone Duo = one
+// screen each side of the fold (controls on one, lyrics on the other; swaps with "Swap sides").
+let carOpen = false, carLyr = null, carLyrIdx = -2, carTrack = null;
 export function openCarMode() {
   if (!engine.track) return;
   let car = $('#car');
@@ -892,14 +894,17 @@ export function openCarMode() {
       else if (a === 'next') engine.next();
       else if (a === 'prev') engine.prev();
       else if (a === 'like' && engine.track) library.toggleLike(engine.track.id);
-      b.animate?.([{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 180, easing: 'ease-out' });
+      else if (a === 'lyrics') { settings.set('carLyrics', !settings.get('carLyrics')); carTrack = null; renderCar(); }
+      else if (a.startsWith('seek:')) engine.seek(+a.slice(5));
+      b.animate?.([{ transform: 'scale(.92)' }, { transform: 'scale(1)' }], { duration: 180, easing: 'ease-out' });
     });
-    engine.on('track', renderCar);
-    engine.on('state', renderCar);
-    engine.on('time', () => { if (carOpen) { const d = engine.duration || 0; $('#car .car-prog i').style.transform = `scaleX(${d ? clamp(engine.currentTime / d, 0, 1) : 0})`; } });
-    library.on('likes', renderCar);
+    engine.on('track', () => { carTrack = null; renderCar(); });
+    engine.on('state', renderCarState);
+    engine.on('time', carTime);
+    library.on('likes', renderCarState);
   }
   carOpen = true;
+  carTrack = null;
   renderCar();
   requestAnimationFrame(() => car.classList.add('open'));
   updateWake();
@@ -910,19 +915,76 @@ export function closeCarMode() {
   car?.classList.remove('open');
   updateWake();
 }
-function renderCar() {
+async function renderCar() {
+  const car = $('#car');
+  const t = engine.track;
+  if (!car || !carOpen || !t || carTrack === t) return;
+  carTrack = t;
+  const wantLyr = settings.get('carLyrics');
+  carLyr = null; carLyrIdx = -2;
+  car.classList.toggle('no-lyrics', !wantLyr);
+  car.innerHTML = html`
+    <div class="car-side car-main">
+      <div class="car-bar">
+        <button class="car-round" data-car="close" aria-label="Close">${icon('down')}</button>
+        <div class="car-bar-r">
+          <button class="car-round car-lyr${wantLyr ? ' on' : ''}" data-car="lyrics" aria-label="Lyrics">${icon('lyrics')}</button>
+          <button class="car-round car-like" data-car="like" aria-label="Like">${icon('heart')}</button>
+        </div>
+      </div>
+      <div class="car-top">${art(t.artId, 'car-art', t.album)}<div class="car-meta"><div class="car-title">${t.title}</div><div class="car-artist">${t.artist}</div></div></div>
+      <div class="car-prog"><i></i></div>
+      <div class="car-ctl">
+        <button data-car="prev" aria-label="Previous">${icon('prev')}</button>
+        <button data-car="toggle" class="car-play" aria-label="Play/Pause">${icon('play')}</button>
+        <button data-car="next" aria-label="Next">${icon('next')}</button>
+      </div>
+    </div>
+    <div class="car-hinge"></div>
+    <div class="car-side car-lyrics">${wantLyr ? html`<div class="car-ly-wait"><div class="spinner"></div></div>` : ''}</div>`;
+  renderCarState();
+  carTime();
+  if (!wantLyr) return;
+  const l = await getLyrics(t);
+  if (carTrack !== t || !carOpen) return;
+  carLyr = l;
+  const box = car.querySelector('.car-lyrics');
+  car.classList.toggle('lyr-none', !l);
+  if (!l) { box.innerHTML = html`<div class="car-ly-none">${icon('lyrics')}<span>No lyrics for this song</span></div>`; return; }
+  if (!l.synced) { box.innerHTML = html`<div class="car-ly-plain">${l.lines.map((x) => html`<p>${x.text || ' '}</p>`)}</div>`; return; }
+  box.innerHTML = html`<div class="car-ly-stack"></div>`;
+  carTime();
+}
+function renderCarState() {
   const car = $('#car');
   const t = engine.track;
   if (!car || !carOpen || !t) return;
-  const liked = library.likes.has(t.id);
-  car.innerHTML = html`
-    <button class="car-close" data-car="close" aria-label="Close">${icon('down')}</button>
-    <div class="car-top">${art(t.artId, 'car-art', t.album)}<div class="car-meta"><div class="car-title">${t.title}</div><div class="car-artist">${t.artist}</div></div></div>
-    <div class="car-prog"><i></i></div>
-    <div class="car-ctl">
-      <button data-car="prev" aria-label="Previous">${icon('prev')}</button>
-      <button data-car="toggle" class="car-play" aria-label="Play/Pause">${icon(engine.playing ? 'pause' : 'play')}</button>
-      <button data-car="next" aria-label="Next">${icon('next')}</button>
-    </div>
-    <button class="car-like${liked ? ' on' : ''}" data-car="like" aria-label="Like">${icon(liked ? 'heart-fill' : 'heart')}</button>`;
+  const play = car.querySelector('.car-play');
+  if (play) play.innerHTML = icon(engine.playing ? 'pause' : 'play');
+  const like = car.querySelector('.car-like');
+  if (like) { const on = library.likes.has(t.id); like.classList.toggle('on', on); like.innerHTML = icon(on ? 'heart-fill' : 'heart'); }
+}
+// synced lyrics: previous line small, the sung line huge, the next two lines dim — readable at a glance
+function carTime() {
+  if (!carOpen) return;
+  const car = $('#car');
+  const d = engine.duration || 0, t = engine.currentTime;
+  const bar = car?.querySelector('.car-prog i');
+  if (bar) bar.style.transform = `scaleX(${d ? clamp(t / d, 0, 1) : 0})`;
+  if (!carLyr?.synced) return;
+  const L = carLyr.lines;
+  let idx = -1;
+  for (let i = 0; i < L.length; i++) { if (L[i].t <= t + 0.3) idx = i; else break; }
+  if (idx === carLyrIdx) return;
+  const fwd = idx > carLyrIdx;
+  carLyrIdx = idx;
+  const stack = car.querySelector('.car-ly-stack');
+  if (!stack) return;
+  const line = (i, cls) => {
+    const x = L[i];
+    if (!x) return html`<p class="${cls} blank"> </p>`;
+    return html`<p class="${cls}${x.text ? '' : ' gap'}" data-car="seek:${x.t}">${x.text || '♪'}</p>`;
+  };
+  stack.innerHTML = html`${line(idx - 1, 'prev')}${idx < 0 ? html`<p class="cur gap">♪</p>` : line(idx, 'cur')}${line(idx + 1, 'next')}${line(idx + 2, 'next2')}`;
+  if (fwd) stack.animate?.([{ transform: 'translateY(14%)', opacity: 0.4 }, { transform: 'none', opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' });
 }
