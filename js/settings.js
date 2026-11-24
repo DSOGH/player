@@ -78,6 +78,8 @@ export const DEFAULTS = {
   smartResume: true, // rewind a couple of seconds after a long pause
   miniPrev: true, // back button in the mini player
   carLyrics: true, // live lyrics in Car Mode
+  friendsShareNp: false, // let friends see what you're listening to
+  friendRelay: 'https://ntfy.sh', // message relay (ntfy) — can be your own
   rowSwipe: true, // swipe a song right to queue it, left to add it to a playlist
   likeBurst: true, // little burst animation when you like a song
 };

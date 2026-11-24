@@ -18,6 +18,8 @@ import { plexSignIn, plexSignOut, loadServers } from './ui/plex-view.js';
 import { trackSrc } from './analysis.js';
 import { optimizeOrder } from './dj.js';
 import { statsView, setStatsRange } from './ui/stats-view.js';
+import { friends } from './friends.js';
+import { friendsView, chatView, acceptView, drafts } from './ui/friends-view.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -131,10 +133,13 @@ async function route(path) {
     case 'search': return V.searchView(searchQ);
     case 'settings': return settingsView(a || '');
     case 'stats': return statsView();
+    case 'friends': return friendsView();
+    case 'chat': return chatView(a);
+    case 'friend': return acceptView(path.slice('friend/'.length));
     default: return V.home();
   }
 }
-const TAB_OF = { stats: 'home', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
+const TAB_OF = { friends: 'friends', chat: 'friends', friend: 'friends', stats: 'home', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
 
 async function render({ keepScroll = false } = {}) {
   const path = parseHash();
@@ -346,6 +351,7 @@ async function trackMenu(t, ctx = {}) {
   const items = [
     { icon: 'play-next', label: 'Play Next', value: 'next' },
     { icon: 'add-queue', label: 'Add to Queue', value: 'queue' },
+    ...(friends.list.length ? [{ icon: 'friends', label: 'Send to Friend…', value: 'send' }] : []),
     { icon: 'add-playlist', label: 'Add to Playlist…', value: 'playlist' },
     { icon: liked ? 'heart-fill' : 'heart', label: liked ? 'Unlike' : 'Like', value: 'like' },
     { icon: off ? 'downloaded' : 'download', label: off ? 'Remove Download' : 'Download', value: 'download' },
@@ -359,6 +365,15 @@ async function trackMenu(t, ctx = {}) {
   switch (v) {
     case 'next': engine.playNext([t]); toast('Playing next'); break;
     case 'queue': engine.addToQueue([t]); toast('Added to queue'); break;
+    case 'send': {
+      const fv = await actionSheet({ header: html`<div class="sheet-track"><div><b>Send “${t.title}”</b><span>to a friend</span></div></div>`, items: friends.list.map((f) => ({ icon: 'friends', label: f.name, value: f.id })) });
+      const f = fv && friends.friend(fv);
+      if (!f) break;
+      const at = engine.track?.id === t.id && engine.currentTime > 3 ? engine.currentTime : 0;
+      friends.sendSong(f, t, at);
+      toast(`Sent to ${f.name}${at ? ` from ${fmtTimeShort(at)}` : ''}`);
+      break;
+    }
     case 'playlist': addToPlaylist([t]); break;
     case 'like': library.toggleLike(t.id); rerender(); break;
     case 'download': toggleDownload([t]); break;
@@ -449,6 +464,7 @@ async function toggleDemo(on) {
   else render({ keepScroll: true });
 }
 
+const fmtTimeShort = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 // ---------- global actions ----------
 async function doAction(a, el, e) {
   const d = el.dataset;
@@ -608,6 +624,96 @@ async function doAction(a, el, e) {
       break;
     }
     case 'force-refresh': await forceRefresh(); break;
+    case 'fr-setup': {
+      const n = document.querySelector('#fr-name')?.value.trim();
+      await friends.setup(n || plex.user?.name || 'Me');
+      render({ keepScroll: true });
+      break;
+    }
+    case 'fr-share': case 'fr-add': {
+      const { code, link } = await friends.createInvite();
+      const text = `Add me on Player 🎧 ${link}`;
+      if (navigator.share) { try { await navigator.share({ title: 'Player', text: 'Add me on Player 🎧', url: link }); break; } catch (er) { if (er.name === 'AbortError') break; } }
+      try { await navigator.clipboard.writeText(text); toast('Invite link copied — paste it to a friend'); } catch (er) { await prompt({ title: 'Your friend code', value: code, ok: 'Done' }); }
+      break;
+    }
+    case 'fr-enter': {
+      const code = await prompt({ title: 'Enter a friend code', placeholder: 'Paste the code or link', ok: 'Add' });
+      if (!code) break;
+      try { const f = await friends.acceptInvite(code); toast(`You and ${f.name} are now friends`); location.hash = `#/chat/${f.id}`; } catch (er) { toast(er.message); }
+      break;
+    }
+    case 'fr-accept': {
+      if (!friends.ready) await friends.setup(plex.user?.name || 'Me');
+      try { const f = await friends.acceptInvite(d.code); toast(`You and ${f.name} are now friends`); location.replace(`#/chat/${f.id}`); } catch (er) { toast(er.message); }
+      break;
+    }
+    case 'fr-copy': try { await navigator.clipboard.writeText(d.code); toast('Code copied'); } catch (er) { await prompt({ title: 'Friend code', value: d.code, ok: 'Done' }); } break;
+    case 'fr-rename': {
+      const n = await prompt({ title: 'Your name', value: friends.me.name, ok: 'Save' });
+      if (n) { await friends.setup(n); render({ keepScroll: true }); }
+      break;
+    }
+    case 'fr-menu': {
+      const f = friends.friend(d.fid);
+      if (!f) break;
+      const v = await actionSheet({ header: html`<div class="sheet-track"><div><b>${f.name}</b><span>Friend</span></div></div>`, items: [
+        { icon: 'edit', label: 'Rename', value: 'rename' },
+        { icon: 'trash', label: 'Remove Friend', value: 'remove', danger: true },
+      ] });
+      if (v === 'rename') { const n = await prompt({ title: 'Name', value: f.name, ok: 'Save' }); if (n) { f.name = n.slice(0, 40); await friends.save(); render({ keepScroll: true }); } }
+      if (v === 'remove' && await confirmSheet(`Remove ${f.name}? Your chat is deleted from this phone.`, 'Remove', true)) { await friends.remove(f.id); location.hash = '#/friends'; }
+      break;
+    }
+    case 'ch-send': {
+      const f = friends.friend(d.fid), inp = document.querySelector('#ch-input');
+      const text = inp?.value.trim();
+      if (!f || !text) break;
+      inp.value = ''; drafts.delete(f.id);
+      haptic(8);
+      friends.sendText(f, text);
+      inp.focus();
+      break;
+    }
+    case 'ch-attach': {
+      const f = friends.friend(d.fid);
+      if (!f) break;
+      const cur = engine.track;
+      const items = [];
+      if (cur) {
+        items.push({ icon: 'play', label: `${cur.title} — from the start`, value: 'cur0' });
+        if (engine.currentTime > 3) items.push({ icon: 'timer', label: `${cur.title} — from ${fmtTimeShort(engine.currentTime)}`, value: 'curT' });
+        items.push({ icon: 'edit', label: 'Pick a moment…', value: 'curPick' });
+        items.push({ sep: true });
+      }
+      const recent = library.recentlyPlayed(8).filter((t) => t.id !== cur?.id).slice(0, 6);
+      recent.forEach((t, i) => items.push({ icon: 'note', label: `${t.title} — ${t.artist}`, value: 'r' + i }));
+      if (!items.length) { toast('Play a song first, then share it here'); break; }
+      const v = await actionSheet({ header: html`<div class="sheet-track"><div><b>Send a song</b><span>to ${f.name}</span></div></div>`, items });
+      if (!v) break;
+      let t = cur, at = 0;
+      if (v === 'curT') at = engine.currentTime;
+      else if (v === 'curPick') {
+        const ans = await prompt({ title: 'Start at (m:ss)', value: fmtTimeShort(engine.currentTime), ok: 'Send' });
+        if (!ans) break;
+        const [mm, ss] = ans.includes(':') ? ans.split(':') : [0, ans];
+        at = Math.min((+mm || 0) * 60 + (+ss || 0), (cur.duration || 9999) - 1);
+      } else if (v[0] === 'r') t = recent[+v.slice(1)];
+      const note = document.querySelector('#ch-input')?.value.trim() || '';
+      if (note) { document.querySelector('#ch-input').value = ''; drafts.delete(f.id); }
+      friends.sendSong(f, t, at, note);
+      break;
+    }
+    case 'ch-play': {
+      const t = library.track(d.tid);
+      if (!t) break;
+      engine.playTracks([t], 0, { context: { type: 'friend', name: 'Shared by a friend' } });
+      const at = +d.at || 0;
+      if (at > 0) { const go = () => engine.seek(at); setTimeout(go, 250); setTimeout(() => { if (engine.currentTime < at - 2) go(); }, 1200); }
+      break;
+    }
+    case 'ch-search': searchQ = d.q; location.hash = '#/search'; break;
+    case 'ch-retry': friends.retry(d.fid, d.mid); break;
     case 'open-stats': location.hash = '#/stats'; break;
     case 'stats-range': setStatsRange(el.dataset.v); render({ keepScroll: true }); break;
     case 'stats-import': {
@@ -786,6 +892,29 @@ function wireEngineEvents() {
   let fellBack = false;
   engine.on('fallback', () => { if (!fellBack) { fellBack = true; toast('Playing Plex directly — EQ & DJ effects are limited on this server', { ms: 4000 }); } });
   // Plex: fill in hi-res info/loudness/lyrics and report "now playing"
+  engine.on('track', (t) => friends.shareNowPlaying(t));
+  // friends: live chat updates, unread badge, a toast when a message arrives elsewhere in the app
+  const badge = () => { const b = document.querySelector('#tabs .tab-badge'); if (!b) return; const n = friends.unread; b.hidden = !n; b.textContent = n > 9 ? '9+' : n; };
+  friends.on('change', () => { badge(); if (currentPath === 'friends') rerender(); });
+  settings.on('change', (k) => { if (k === 'friendRelay') friends.reconnect(); });
+  friends.on('friend', (f) => { toast(`${f.name} accepted your invite 🎉`); if (currentPath === 'friends') render({ keepScroll: true }); });
+  friends.on('message', (fid, m, incoming) => {
+    badge();
+    if (currentPath === 'chat/' + fid) {
+      const atBottom = main().scrollHeight - main().scrollTop - main().clientHeight < 120;
+      render({ keepScroll: true }).then(() => { if (atBottom || !incoming) main().scrollTo({ top: main().scrollHeight, behavior: 'smooth' }); });
+      if (incoming) haptic(10);
+    } else if (incoming) {
+      const f = friends.friend(fid);
+      toast(`${f?.name || 'Friend'}: ${m.type === 'song' ? '♪ ' + m.song.title : m.text}`.slice(0, 90), { action: { label: 'Open', run: () => { location.hash = '#/chat/' + fid; } }, ms: 5000 });
+    }
+  });
+  addEventListener('hashchange', () => { if (!location.hash.startsWith('#/chat/')) friends.viewing = null; });
+  // switches on non-settings pages (e.g. Friends)
+  document.addEventListener('change', (e) => {
+    const sw = e.target.closest?.('#view [data-set]');
+    if (sw && !currentPath?.startsWith('settings')) settings.set(sw.dataset.set, sw.type === 'checkbox' ? sw.checked : sw.value);
+  });
   engine.on('track', (t) => { if (t?.plex) { plex.enrich(t); plex.timeline(t, engine.playing ? 'playing' : 'paused', 0, t.duration); } });
   engine.on('state', () => { const t = engine.track; if (t?.plex) { plex.timelineAt = 0; plex.timeline(t, engine.playing ? 'playing' : 'paused', engine.currentTime, engine.duration); } });
   engine.on('time', () => { const t = engine.track; if (t?.plex && engine.playing) plex.timeline(t, 'playing', engine.currentTime, engine.duration); });
@@ -870,6 +999,7 @@ async function boot() {
   await loadKnown();
   await library.load();
   await plex.load();
+  friends.load().catch(() => {});
   initNowPlaying({ addToPlaylist, toggleDownload, onAccent: applyAccent, djOrderQueue });
   initDual((mode) => {
     if (mode !== 'single') { closeNP(true); }

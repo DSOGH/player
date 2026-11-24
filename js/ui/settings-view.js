@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.13.2';
+export const APP_VERSION = '1.14.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -414,6 +414,9 @@ function extras() {
       ${toggle('autoLyrics', 'Open lyrics automatically', 'Shows time-synced lyrics as soon as a song that has them starts')}
       ${toggle('keepAwake', 'Keep screen on', 'While the player is open and music is playing')}
       ${toggle('smartResume', 'Smart resume', 'After a pause longer than 10 minutes, start 3 seconds earlier so you don’t lose your place')}
+    `)}
+    ${group('Friends', html`
+      ${text('friendRelay', 'Message relay', 'Where encrypted chat messages pass through (ntfy). Default https://ntfy.sh keeps them a few hours. To use your own, run ntfy on your NAS (tiny) and put its https address here — your friends need the same one.')}
     `)}
     ${group('Car Mode', html`
       ${toggle('carButton', 'Car Mode in player menu', 'Huge buttons and big text for the road — the screen stays on')}
