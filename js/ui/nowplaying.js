@@ -5,7 +5,7 @@ import { library } from '../library.js';
 import { settings } from '../settings.js';
 import { analyze } from '../analysis.js';
 import { artColors, artUrl } from '../art.js';
-import { art, badges, haptic, actionSheet, toast, formatLine, preloadArt } from './components.js';
+import { art, badges, haptic, actionSheet, toast, formatLine, preloadArt, likeBurst } from './components.js';
 import { getLyrics } from '../lyrics.js';
 import { renderBooth, tickBooth } from './djbooth.js';
 
@@ -176,7 +176,7 @@ async function act(a, el) {
     case 'shuffle': engine.toggleShuffle(); toast(engine.shuffle ? (settings.get('shuffleMode') === 'flow' ? 'Shuffle on · BPM flow' : 'Shuffle on') : 'Shuffle off'); break;
     case 'repeat': engine.cycleRepeat(); toast({ off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[engine.repeat]); break;
     case 'close': closeNP(); break;
-    case 'like': if (t) { const on = library.toggleLike(t.id); haptic(on ? 15 : 6); } break;
+    case 'like': if (t) { const on = library.toggleLike(t.id); haptic(on ? 15 : 6); if (on && settings.get('likeBurst')) likeBurst(el); } break;
     case 'queue': setMode('queue'); break;
     case 'lyrics': setMode('lyrics'); break;
     case 'lyrics-retry': { const { forgetLyrics } = await import('../lyrics.js'); forgetLyrics(engine.track); renderLyrics(true); break; }
@@ -439,7 +439,7 @@ function renderTime() {
   const pct = d ? clamp(t / d, 0, 1) : 0;
   $('#mini .mini-progress i').style.transform = `scaleX(${pct})`;
   // a drag that lost its finger (iOS cancelled the touch) must never freeze the slider
-  if (dragging && performance.now() - dragAt > 4000) { dragging = false; np.querySelector('.scrub').classList.remove('drag'); }
+  if (dragging && performance.now() - dragAt > 1500) { dragging = false; np.querySelector('.scrub').classList.remove('drag'); }
   if (!dragging) {
     np.querySelector('.scrub').style.setProperty('--p', pct);
     np.querySelector('.t-cur').textContent = fmtTime(t);
@@ -615,6 +615,8 @@ function wireScrubber() {
   sc.addEventListener('pointerup', end);
   sc.addEventListener('pointercancel', end);
   sc.addEventListener('lostpointercapture', end);
+  sc.addEventListener('touchend', () => setTimeout(end, 0), { passive: true });
+  sc.addEventListener('touchcancel', () => setTimeout(end, 0), { passive: true });
 }
 
 function wireSwipe() {
@@ -690,7 +692,7 @@ function startPulse() {
     lastT = now;
     const visible = (open || document.body.classList.contains('dual')) && !document.hidden;
     // smooth, exact clock & slider while the player is on screen (not just 5× a second)
-    if (visible && engine.playing && engine.track && !dragging) renderTime();
+    if (visible && engine.track && !dragging && (engine.playing || !engine.cur.el.paused)) renderTime();
     const an = engine.analyser;
     const art = np.querySelector('.np-art .art');
     const glow = np.querySelector('.np-glow');
@@ -893,7 +895,7 @@ export function openCarMode() {
       else if (a === 'toggle') engine.toggle();
       else if (a === 'next') engine.next();
       else if (a === 'prev') engine.prev();
-      else if (a === 'like' && engine.track) library.toggleLike(engine.track.id);
+      else if (a === 'like' && engine.track) { if (library.toggleLike(engine.track.id) && settings.get('likeBurst')) likeBurst(b); }
       else if (a === 'lyrics') { settings.set('carLyrics', !settings.get('carLyrics')); carTrack = null; renderCar(); }
       else if (a.startsWith('seek:')) engine.seek(+a.slice(5));
       b.animate?.([{ transform: 'scale(.92)' }, { transform: 'scale(1)' }], { duration: 180, easing: 'ease-out' });

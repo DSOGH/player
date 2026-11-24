@@ -12,7 +12,7 @@ import * as V from './ui/views.js';
 import { settingsView, bindSettings, eqPresetSheet, analyzeAll, APP_VERSION } from './ui/settings-view.js';
 import { initNowPlaying, openNP, closeNP, isOpen, openCarMode } from './ui/nowplaying.js';
 import { initDual } from './ui/dual.js';
-import { getList, actionSheet, prompt, toast, confirmSheet, haptic, art } from './ui/components.js';
+import { getList, actionSheet, prompt, toast, confirmSheet, haptic, art, closeSheet } from './ui/components.js';
 import { plex } from './plex.js';
 import { plexSignIn, plexSignOut, loadServers } from './ui/plex-view.js';
 import { trackSrc } from './analysis.js';
@@ -200,12 +200,18 @@ function paint(path, res, { keepScroll, changed, prevScroll, fade = false }) {
   const tab = TAB_OF[path.split('/')[0]] || 'home';
   $$('#tabs a').forEach((t) => {
     const on = t.dataset.tab === tab;
+    if (on && !t.classList.contains('on')) t.querySelector('.tab-ic')?.animate?.([{ transform: 'scale(.78)' }, { transform: 'scale(1.12)', offset: 0.55 }, { transform: 'scale(1)' }], { duration: 380, easing: 'cubic-bezier(.3,1.4,.5,1)' });
     t.classList.toggle('on', on);
     t.querySelector('.tab-ic').innerHTML = icon(on && t.dataset.fill ? t.dataset.fill : t.dataset.icon);
   });
   if (keepScroll) main().scrollTop = prevScroll;
   else main().scrollTop = changed ? (scrollMem.get(path) || 0) : prevScroll;
   if (fade) v.animate?.([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'ease-out' });
+  // content cascades in (Apple Music-style) on a new page
+  if (changed && !keepScroll && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter');
+    clearTimeout(v._enterT); v._enterT = setTimeout(() => v.classList.remove('enter'), 900);
+  }
   onScroll();
 }
 const rerender = debounce(() => {
@@ -656,9 +662,61 @@ function wireGlobal() {
   document.addEventListener('pointercancel', cancelLp);
   document.addEventListener('contextmenu', (e) => { if (e.target.closest('.row.track, .card')) e.preventDefault(); });
 
+  // Swipe a song: right → Add to Queue, left → Add to Playlist (like Spotify), with a springy snap-back
+  let sw = null;
+  const SW_ARM = 76;
+  document.addEventListener('pointerdown', (e) => {
+    if (!settings.get('rowSwipe') || e.pointerType === 'mouse') return;
+    const row = e.target.closest('.row.track');
+    if (!row || row.closest('#np, #sheet') || e.target.closest('button')) return;
+    sw = { row, x0: e.clientX, y0: e.clientY, id: e.pointerId, axis: null, dx: 0, armed: 0 };
+  }, { passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!sw || e.pointerId !== sw.id) return;
+    const mx = e.clientX - sw.x0, my = e.clientY - sw.y0;
+    if (!sw.axis) {
+      if (Math.hypot(mx, my) < 9) return;
+      sw.axis = Math.abs(mx) > Math.abs(my) * 1.4 ? 'x' : 'y';
+      if (sw.axis === 'y') { sw = null; return; }
+      clearTimeout(lpTimer); lpTimer = null;
+      const r = sw.row, par = r.offsetParent || r.parentNode;
+      const under = document.createElement('div');
+      under.className = 'swipe-under';
+      under.style.cssText = `top:${r.offsetTop}px;left:${r.offsetLeft}px;width:${r.offsetWidth}px;height:${r.offsetHeight}px`;
+      under.innerHTML = html`<span class="su-l">${icon('add-queue')}<b>Queue</b></span><span class="su-r"><b>Playlist</b>${icon('add-playlist')}</span>`.toString();
+      par.appendChild(under);
+      sw.under = under;
+      r.classList.add('swiping');
+    }
+    // rubber-band past the trigger point
+    const lim = sw.row.offsetWidth * 0.42;
+    const d = Math.sign(mx) * (Math.abs(mx) < lim ? Math.abs(mx) : lim + (Math.abs(mx) - lim) * 0.25);
+    sw.dx = d;
+    sw.row.style.transform = `translate3d(${d}px,0,0)`;
+    const armed = Math.abs(d) > SW_ARM ? Math.sign(d) : 0;
+    sw.under.classList.toggle('right', d > 0);
+    sw.under.classList.toggle('left', d < 0);
+    if (armed !== sw.armed) { sw.armed = armed; sw.under.classList.toggle('armed', !!armed); if (armed) haptic(12); }
+  }, { passive: true });
+  const swEnd = (e) => {
+    if (!sw || (e.pointerId !== undefined && e.pointerId !== sw.id)) return;
+    const s2 = sw; sw = null;
+    if (s2.axis !== 'x') return;
+    suppressClick = true; setTimeout(() => { suppressClick = false; }, 350);
+    const t = library.track(s2.row.dataset.tid);
+    const back = s2.row.animate([{ transform: `translate3d(${s2.dx}px,0,0)` }, { transform: `translate3d(${-s2.dx * 0.06}px,0,0)`, offset: 0.7 }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.9,.25,1)' });
+    s2.row.style.transform = '';
+    back.finished.finally(() => { s2.row.classList.remove('swiping'); s2.under?.remove(); });
+    if (t && s2.armed > 0 && e.type !== 'pointercancel') { engine.addToQueue([t]); toast(`Added “${t.title}” to queue`); }
+    else if (t && s2.armed < 0 && e.type !== 'pointercancel') addToPlaylist([t]);
+  };
+  document.addEventListener('pointerup', swEnd);
+  document.addEventListener('pointercancel', swEnd);
+
   main().addEventListener('scroll', onScroll, { passive: true });
   addEventListener('hashchange', () => {
     const p = parseHash();
+    if (document.querySelector('#sheet.open')) closeSheet(null); // leaving the page closes any open menu
     if (p === currentPath) { swipeBack = false; return; }
     if (isOpen() && !location.hash.endsWith('?np')) closeNP(true);
     render();

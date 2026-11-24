@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.12.1';
+export const APP_VERSION = '1.13.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -31,11 +31,14 @@ const text = (k, label, sub = '') => html`<div class="set-row col">
   <div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
   <input class="text-input" data-text="${k}" value="${settings.get(k)}" autocomplete="off" autocapitalize="off" spellcheck="false">
 </div>`;
+// iOS-style colored icon tiles
+const TILE = { server: '#0a84ff', mix: '#ff375f', eq: '#ff9f0a', library: '#bf5af2', palette: '#5e5ce6', sparkle: '#30b0c7', bpm: '#30d158', storage: '#8e8e93', info: '#8e8e93', refresh: '#64d2ff', car: '#ff9f0a', wifi: '#ff9f0a', download: '#30d158', trash: '#ff453a', timer: '#ff9f0a' };
+const tile = (ic) => (TILE[ic] ? `style="background:${TILE[ic]}"` : '');
 const link = (href, ic, label, value = '') => html`<a class="set-row link" href="${href}">
-  <span class="set-ic">${icon(ic)}</span><div class="set-text"><span>${label}</span></div><span class="set-value">${value}</span>${icon('right', 'chev')}
+  <span class="set-ic" ${raw(tile(ic))}>${icon(ic)}</span><div class="set-text"><span>${label}</span></div><span class="set-value">${value}</span>${icon('right', 'chev')}
 </a>`;
 const button = (a, ic, label, { danger = false, sub = '' } = {}) => html`<button class="set-row link${danger ? ' danger' : ''}" data-a="${a}">
-  ${ic ? html`<span class="set-ic">${icon(ic)}</span>` : ''}<div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
+  ${ic ? html`<span class="set-ic" ${raw(danger ? '' : tile(ic))}>${icon(ic)}</span>` : ''}<div class="set-text"><span>${label}</span>${sub ? html`<small>${sub}</small>` : ''}</div>
 </button>`;
 const group = (title, body, foot = '') => html`<section class="set-group">${title ? html`<h3>${title}</h3>` : ''}<div class="set-card">${body}</div>${foot ? html`<p class="set-foot">${raw(foot)}</p>` : ''}</section>`;
 function fmtNum(v) { return typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : v; }
@@ -46,6 +49,19 @@ export async function settingsView(page = '') {
   return fn();
 }
 
+function profileCard() {
+  const u = plex.user;
+  const name = u?.name || u?.username || 'Your Music';
+  const albums = library.albums?.size || 0, artists = library.artists?.size || 0;
+  const w = library.weekStats?.() || { minutes: 0 };
+  const where = plex.connected ? plex.cfg.server.name : 'This device';
+  return html`<a class="set-profile" href="#/stats">
+    ${u?.thumb ? html`<img class="sp-avatar" src="${u.thumb}" alt="" referrerpolicy="no-referrer">` : html`<div class="sp-avatar">${(name[0] || '♪').toUpperCase()}</div>`}
+    <div class="sp-text"><b>${name}</b><small>${library.size.toLocaleString()} songs · ${albums.toLocaleString()} albums · ${artists.toLocaleString()} artists</small>
+      <span class="sp-chips"><i>${where}</i><i>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m this week</i><i>v${APP_VERSION}</i></span></div>
+    ${icon('right', 'chev')}</a>`;
+}
+
 async function root() {
   const src = await loadSource();
   const demo = await db.kv.get('demo');
@@ -54,6 +70,7 @@ async function root() {
   return {
     title: 'Settings',
     html: html`${pageHeader('Settings')}
+    ${profileCard()}
     ${plex.connected && plex.cfg.connKind === 'relay' ? html`<a class="set-alert" href="#/settings/plex">
       <span class="set-alert-ic">${icon('wifi')}</span><div><b>Plex is on a slow connection</b><small>It’s using Plex Relay, so songs can start slowly. Tap to see how to fix it.</small></div>${icon('right', 'chev')}</a>` : ''}
     ${group('', html`
@@ -383,6 +400,8 @@ function extras() {
     title: 'Extras',
     html: html`${pageHeader('Extras', { back: true })}
     ${group('Gestures', html`
+      ${toggle('likeBurst', 'Heart burst', 'A little burst of hearts when you like a song')}
+      ${toggle('rowSwipe', 'Swipe songs', 'Swipe a song right to add it to the queue, left to add it to a playlist')}
       ${toggle('doubleTapSeek', 'Double-tap to jump', 'Double-tap the left or right side of the artwork to jump back or forward')}
       ${seg('seekStep', 'Jump length', [[10, '10s'], [15, '15s'], [30, '30s']])}
       ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}

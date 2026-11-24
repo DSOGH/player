@@ -78,6 +78,8 @@ export const DEFAULTS = {
   smartResume: true, // rewind a couple of seconds after a long pause
   miniPrev: true, // back button in the mini player
   carLyrics: true, // live lyrics in Car Mode
+  rowSwipe: true, // swipe a song right to queue it, left to add it to a playlist
+  likeBurst: true, // little burst animation when you like a song
 };
 
 export const EQ_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];

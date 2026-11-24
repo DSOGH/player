@@ -123,7 +123,25 @@ class Engine extends Emitter {
   get currentTime() {
     const d = this.cur;
     if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 1200 && (d.el.seeking || performance.now() - this._seekAt < 250)) return this._seekTo;
-    return d.el.currentTime || 0;
+    const ct = d.el.currentTime || 0;
+    // iPhone can stop updating the clock after a seek while the audio carries on: keep counting ourselves
+    const c = this._clk;
+    if (c && c.d === d && c.ct === ct && this.playing && !d.el.seeking && performance.now() - c.at > 450 && this.audible()) {
+      return Math.min(c.ct + ((performance.now() - c.at) / 1000) * (d.el.playbackRate || 1), this.duration || Infinity);
+    }
+    return ct;
+  }
+  // is sound actually coming out right now? (tells a frozen clock apart from real buffering)
+  audible() {
+    const now = performance.now();
+    if (this._audAt && now - this._audAt < 120) return this._aud;
+    this._audAt = now;
+    if (!this.analyser || !this.ctx || this.ctx.state !== 'running') return (this._aud = false);
+    const buf = this._audBuf || (this._audBuf = new Float32Array(512));
+    this.analyser.getFloatTimeDomainData(buf);
+    let pk = 0;
+    for (let i = 0; i < buf.length; i++) { const v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > pk) pk = v; }
+    return (this._aud = pk > 0.004);
   }
   get duration() { return this.durationOf(this.cur); }
   durationOf(d) {
@@ -491,7 +509,8 @@ class Engine extends Emitter {
     el.addEventListener('waiting', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
     el.addEventListener('pause', () => {
       // paused by the OS (another app took audio focus, headphones unplugged...)
-      if (el === d.el && d === this.cur && this.playing && !this.transition && !this._pausing && !d.switching && !el.ended && d.track) {
+      if (el === d.el && d === this.cur && this.playing && !this.transition && !this._pausing && !d.switching && !el.ended && d.track
+        && !el.seeking && performance.now() - (this._seekAt || 0) > 1500) {
         this.playing = false;
         this.emit('state');
         this.updatePosition();
@@ -1339,6 +1358,8 @@ class Engine extends Emitter {
     const d = this.cur;
     if (!d.track) return;
     this.checkSeek(d);
+    const ctNow = d.el.currentTime || 0;
+    if (!this._clk || this._clk.d !== d || this._clk.ct !== ctNow || !this.playing) this._clk = { d, ct: ctNow, at: performance.now() };
     this.syncPlayState(d);
     this.emit('time');
     if (this.playing && !d.el.paused) {
@@ -1389,7 +1410,7 @@ class Engine extends Emitter {
   // it's paused (or the other way round for 2s), fix the state, the controls and the lock screen.
   syncPlayState(d) {
     const ct = d.el.currentTime;
-    const moving = !d.el.paused && ct > (this._lastCt ?? -1) + 0.05;
+    const moving = (!d.el.paused && ct > (this._lastCt ?? -1) + 0.05) || (!d.el.paused && this.audible());
     this._lastCt = ct;
     if (this._pausing || d.switching || this.transition || d.el.seeking) { this._stuck = 0; return; }
     if (!this.playing && moving) {
@@ -1398,7 +1419,7 @@ class Engine extends Emitter {
       this.updateMediaSession();
       this.updatePosition();
       this._stuck = 0;
-    } else if (this.playing && d.el.paused && !d.el.ended && !d.recovering) {
+    } else if (this.playing && d.el.paused && !d.el.ended && !d.recovering && !this.audible()) {
       if ((this._stuck = (this._stuck || 0) + 1) >= 10) { // 10 ticks × 200 ms
         this._stuck = 0;
         this.playing = false;

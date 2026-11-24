@@ -200,3 +200,24 @@ export function pageHeader(title, { back = false, actions = '' } = {}) {
 }
 
 export { fmtTime, esc };
+
+// A little burst of hearts when you like something
+export function likeBurst(el, color = 'var(--accent)') {
+  if (!el?.getBoundingClientRect || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const r = el.getBoundingClientRect();
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  for (let i = 0; i < 9; i++) {
+    const p = document.createElement('div');
+    p.className = 'burst-p';
+    p.innerHTML = icon('heart-fill');
+    p.style.cssText = `left:${cx}px;top:${cy}px;color:${color}`;
+    document.body.appendChild(p);
+    const a = (i / 9) * Math.PI * 2 + Math.random() * 0.4, dist = 34 + Math.random() * 26, sc = 0.45 + Math.random() * 0.45;
+    p.animate([
+      { transform: 'translate(-50%,-50%) scale(.2)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${Math.cos(a) * dist}px), calc(-50% + ${Math.sin(a) * dist}px)) scale(${sc})`, opacity: 1, offset: 0.6 },
+      { transform: `translate(calc(-50% + ${Math.cos(a) * dist * 1.25}px), calc(-50% + ${Math.sin(a) * dist * 1.25 - 12}px)) scale(${sc * 0.6})`, opacity: 0 },
+    ], { duration: 650 + Math.random() * 200, easing: 'cubic-bezier(.2,.8,.2,1)' }).finished.finally(() => p.remove());
+  }
+  el.animate?.([{ transform: 'scale(1)' }, { transform: 'scale(1.35)', offset: 0.35 }, { transform: 'scale(.92)', offset: 0.7 }, { transform: 'scale(1)' }], { duration: 480, easing: 'ease-out' });
+}
