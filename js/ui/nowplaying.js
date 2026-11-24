@@ -165,7 +165,7 @@ async function act(a, el) {
     case 'lyrics': setMode('lyrics'); break;
     case 'booth': setMode('booth'); break;
     case 'dj-style': {
-      const order = ['auto', 'beats', 'wordplay'];
+      const order = ['beats', 'auto', 'wordplay'];
       const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % 3];
       settings.set('djStyle', nx);
       toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play' }[nx]);

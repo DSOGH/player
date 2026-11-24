@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.7.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -191,8 +191,8 @@ function playback() {
         { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings; and the next song slides under natural fade-outs. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
       ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
       ${tm === 'smart' ? html`
-        ${seg('djStyle', 'DJ style', [['auto', 'Auto'], ['beats', 'Beat match'], ['wordplay', 'Word play']],
-          { auto: 'Word play when two songs share words (or one sings the other’s title), otherwise beat-matched blends.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
+        ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play']],
+          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
         ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
         ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}` : ''}
       ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}

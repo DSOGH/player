@@ -6,7 +6,7 @@ export const DEFAULTS = {
   transition: 'smart',        // 'off' | 'crossfade' | 'smart' (DJ Mix)
   crossfadeSec: 8,
   djEffects: true,            // bass swaps, filter sweeps, echo outs in DJ Mix
-  djStyle: 'auto',            // 'auto' | 'beats' | 'wordplay'
+  djStyle: 'beats',           // 'beats' | 'auto' | 'wordplay'
   harmonicMix: true,          // use musical key (Camelot) to choose blend length
   onlineLyrics: true,         // look up lyrics by title + artist (LRCLIB)
   fadeCurve: 'equalpower',    // 'equalpower' | 'linear' | 'scurve'
@@ -15,7 +15,7 @@ export const DEFAULTS = {
   beatMatch: true,            // align mixes to the beat when BPMs are known
   tempoMatch: true,           // nudge incoming tempo during the mix
   tempoMatchMax: 12,          // percent (each song); songs meet in the middle for bigger gaps
-  sv: 2,                      // settings schema version
+  sv: 3,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
   analysisNetwork: 'any',     // 'any' | 'wifi'
@@ -101,6 +101,7 @@ class Settings extends Emitter {
       saved.crossfadeSec = Math.max(saved.crossfadeSec || 0, 8);
       saved.sv = 2;
     }
+    if (saved.sv < 3) { saved.djStyle = 'beats'; saved.sv = 3; } // v1.7: beat match is the default DJ style
     this.v = { ...DEFAULTS, ...saved };
   }
   get(k) { return this.v[k]; }

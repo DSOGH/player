@@ -70,7 +70,7 @@ export function findCue(A, B, lyrA = cachedLyrics(A)) {
     const sung = (end - L.t) * 0.85;
     const phraseEnd = L.t + Math.max(0.5, sung * ratio) + 0.18;
     if (ratio > 0.7) score += 1; // title at the end of the line = cleanest cut
-    const cand = { t: L.t, end, phraseEnd: Math.min(phraseEnd, end), text: L.text, score, phrase: k.phrase, ratio };
+    const cand = { t: L.t, end, phraseEnd: Math.min(phraseEnd, end), lineEnd: L.t + sung + 0.1, text: L.text, score, phrase: k.phrase, ratio };
     // prefer the last strong occurrence (closest to the end of the song)
     if (!best || score > best.score || (score === best.score && L.t > best.t)) best = cand;
   }
@@ -230,6 +230,8 @@ export function findHandoff(A, B, lyrA = cachedLyrics(A), lyrB = cachedLyrics(B)
         const content = phrase.filter((x) => !STOP.has(x) && x.length >= 3);
         if (!content.length || (phrase.length === 1 && w.length < 4)) continue;
         const pa = posInLine(wsA, a0, a1), pb = posInLine(m.ws, b0, b0 + phrase.length);
+        // clean cuts only: the shared words must finish A's line and open B's line
+        if (a1 < wsA.length - 1 || b0 > 1) continue;
         const ta = lineTimes(LA, li), tb = lineTimes(LB, m.li);
         let score = phrase.length * 3 + content.reduce((s, x) => s + Math.min(3, x.length / 3), 0);
         score += pa.a > 0.25 ? 1.5 : 0;          // some vocal before the shared words = a nice acapella lead-in
@@ -240,6 +242,7 @@ export function findHandoff(A, B, lyrA = cachedLyrics(A), lyrB = cachedLyrics(B)
           best = {
             score, phrase: phrase.join(' '),
             aLine: { t: ta.start, text: L.text }, aStart: ta.start + ta.sung * pa.a, aEnd: ta.start + ta.sung * pa.b + 0.15,
+            cut: ta.start + ta.sung + 0.1, // end of A's sung line
             bLine: { t: tb.start, text: LB[m.li].text }, bStart: tb.start + tb.sung * pb.a,
           };
         }

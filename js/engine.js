@@ -100,6 +100,7 @@ class Engine extends Emitter {
     settings.on('change', (k) => this.onSetting(k));
     library.on('analysis', (id) => this.onAnalysis(id));
     this.saveState = this.debouncedSave();
+    this.skipToken = 0;
   }
 
   get cur() { return this.decks[this.ai]; }
@@ -181,8 +182,19 @@ class Engine extends Emitter {
     d.lp = ctx.createBiquadFilter(); d.lp.type = 'lowpass'; d.lp.frequency.value = LP_OFF; d.lp.Q.value = 0.7;
     d.fade = ctx.createGain();
     d.send = ctx.createGain(); d.send.gain.value = 0;
-    d.node.connect(d.rg).connect(d.bass).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
+    // constant delay equal to the vocal isolator's latency, so dry and isolated vocal stay sample-aligned
+    d.lat = ctx.createDelay(0.2); d.lat.delayTime.value = 2048 / ctx.sampleRate;
+    d.node.connect(d.rg).connect(d.lat).connect(d.bass).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
     d.fade.connect(d.send).connect(this.echoIn);
+    // "karaoke" underlay: side signal (L-R removes centered vocals) + the low end, cheap native nodes
+    d.instGain = ctx.createGain(); d.instGain.gain.value = 0;
+    const sp = ctx.createChannelSplitter(2), inv = ctx.createGain(), side = ctx.createGain(), low = ctx.createBiquadFilter();
+    inv.gain.value = -1; side.gain.value = 0.8; low.type = 'lowpass'; low.frequency.value = 150;
+    d.lat.connect(sp); sp.connect(side, 0); sp.connect(inv, 1); inv.connect(side);
+    d.lat.connect(low);
+    side.connect(d.instGain); low.connect(d.instGain);
+    d.instGain.connect(this.input);
+    d.kara = [sp, inv, side, low];
     if (this.voxReady) this.attachVox(d);
   }
   attachVox(d) {
@@ -191,20 +203,19 @@ class Engine extends Emitter {
     try {
       d.vox = new AudioWorkletNode(ctx, 'vocal-split', { numberOfInputs: 1, numberOfOutputs: 2, outputChannelCount: [2, 2] });
       d.voxGain = ctx.createGain(); d.voxGain.gain.value = 0;
-      d.instGain = ctx.createGain(); d.instGain.gain.value = 0;
       d.voxSend = ctx.createGain(); d.voxSend.gain.value = 0;
       d.rg.connect(d.vox);
       d.vox.connect(d.voxGain, 0);
-      d.vox.connect(d.instGain, 1);
       d.voxGain.connect(this.input);
       d.voxGain.connect(d.voxSend).connect(this.echoIn);
-      d.instGain.connect(this.input);
     } catch (e) { d.vox = null; }
   }
   voxActive(d, on) { try { d.vox?.port.postMessage({ active: on }); } catch (e) { /* */ } }
   detachNodes(d) {
     this.voxActive(d, false);
-    for (const n of ['node', 'rg', 'bass', 'hp', 'lp', 'fade', 'send', 'vox', 'voxGain', 'instGain', 'voxSend']) { try { d[n]?.disconnect(); } catch (e) { /* */ } d[n] = null; }
+    for (const k of d.kara || []) { try { k.disconnect(); } catch (e) { /* */ } }
+    d.kara = null;
+    for (const n of ['node', 'rg', 'lat', 'bass', 'hp', 'lp', 'fade', 'send', 'vox', 'voxGain', 'instGain', 'voxSend']) { try { d[n]?.disconnect(); } catch (e) { /* */ } d[n] = null; }
   }
   // Swap a deck's <audio> element when it needs to change between Web Audio (CORS) and raw mode.
   prepareDeck(d, track) {
@@ -226,7 +237,7 @@ class Engine extends Emitter {
     if (!d.node || !this.ctx) return;
     const now = this.ctx.currentTime;
     for (const [p, v] of [[d.bass.gain, 0], [d.hp.frequency, HP_OFF], [d.lp.frequency, LP_OFF], [d.send.gain, 0],
-      ...(d.vox ? [[d.voxGain.gain, 0], [d.instGain.gain, 0], [d.voxSend.gain, 0]] : [])]) {
+      [d.instGain.gain, 0], ...(d.vox ? [[d.voxGain.gain, 0], [d.voxSend.gain, 0]] : [])]) {
       p.cancelScheduledValues(0);
       p.setValueAtTime(v, now);
     }
@@ -640,6 +651,16 @@ class Engine extends Emitter {
     const old = this.cur;
     this.notePlayed(old);
     this.index = i;
+    // iPhone: Now Playing (lock screen / Dynamic Island / CarPlay) follows the audio element, so a skip
+    // keeps the same element — quick fade out, switch songs, fade in — and iOS never sees a "pause".
+    let fadeIn = false;
+    if (mode === 'quick' && IOS && old.track && !old.el.paused && old.node) {
+      const tok = ++this.skipToken;
+      this.fade(old, 0, 0.14, { shape: 'linear' });
+      await new Promise((r) => setTimeout(r, 150));
+      if (tok !== this.skipToken) return;
+      mode = 'cut'; fadeIn = true;
+    }
     if (mode === 'quick' && old.track && !old.el.paused) {
       const dur = settings.get('skipFadeSec');
       this.ai = 1 - this.ai;
@@ -652,12 +673,16 @@ class Engine extends Emitter {
       this.fade(d, 1, dur * 0.8);
       this.fade(old, 0, dur);
       const tok = old.token;
-      setTimeout(() => { if (old.token === tok && old !== this.cur) old.unload(); }, dur * 1000 + 80);
+      setTimeout(() => { if (old.token === tok && old !== this.cur) { old.unload(); this.reassertNowPlaying(); } }, dur * 1000 + 80);
     } else {
       this.other.unload();
       this.loadDeck(old, t, startAt);
       this.applyDeckGain(old);
-      this.setFade(old, 1);
+      this.setFade(old, fadeIn ? 0 : 1);
+      if (fadeIn) {
+        const tokL = old.token;
+        old.el.addEventListener('playing', () => { if (old.token === tokL) this.fade(old, 1, 0.3, { shape: 'equalpower' }); }, { once: true });
+      }
       if (autoplay) {
         this.playing = true;
         old.el.play().catch((e) => {
@@ -805,12 +830,19 @@ class Engine extends Emitter {
     if (djStyle !== 'beats') {
       // 0a) shared words: A sings them near its end, B sings them early → hand the vocal over
       const ho = findHandoff(A, B);
-      if (ho && ho.aStart < end - 1) {
+      if (ho && ho.cut < end - 1 && (djStyle === 'wordplay' || ho.score >= 10)) {
         const beatA = bpmA ? 60 / bpmA : 0.5;
         const pre = clamp(beatA, 0.35, 0.75);
-        const iso = clamp(ho.aStart - ho.aLine.t, 0.9, 6); // acapella lead-in: A's line up to the shared words
-        const mixStart = ho.aStart - iso - pre;
-        const bDrop = Math.max(0, ho.bStart - 0.03);
+        // the acapella is A's whole line (it ends on the shared words); B comes in at the start of its
+        // line (which begins with those words): both cut points are line boundaries, the most precise timing
+        let cut = ho.cut;
+        if (bpmA && aA?.beatOffset !== undefined) {           // land the drop on A's beat grid if it's close
+          const k = Math.round((cut - aA.beatOffset) / beatA), snap = aA.beatOffset + k * beatA;
+          if (Math.abs(snap - cut) < 0.18) cut = snap;
+        }
+        const iso = clamp(cut - ho.aLine.t, 0.9, 6.5);
+        const mixStart = cut - iso - pre;
+        const bDrop = Math.max(0, ho.bLine.t - 0.06);
         const under = pre + iso;
         const canUnder = bDrop >= under + 0.15;
         if (mixStart > 3) {
@@ -819,7 +851,7 @@ class Engine extends Emitter {
             return {
               ...base, type: 'wordplay', style: 'acapella', handoff: true, fx, cue,
               label: `Word play · “${ho.phrase}” → same words`,
-              mixStart, pre, iso, phraseEnd: ho.aStart, overlap: pre + iso + 0.6,
+              mixStart, pre, iso, phraseEnd: cut, overlap: pre + iso + 0.6,
               inDur: 0.1, outDur: 0.06, outDelay: pre + iso,
               bStart: canUnder ? bDrop - under : bDrop, bDrop, under: canUnder ? under : 0,
               echoTime: clamp(beatA * 0.75, 0.2, 0.75),
@@ -827,13 +859,13 @@ class Engine extends Emitter {
           }
           return {
             ...base, type: 'wordplay', style: 'echo', fx, cue, label: `Word play · “${ho.phrase}”`,
-            mixStart: ho.aStart - 1.2, overlap: 1.6, inDur: 0.12, outDur: 0.06, outDelay: 1.2, lead: 1.2,
+            mixStart: cut - 1.2, overlap: 1.6, inDur: 0.12, outDur: 0.06, outDelay: 1.2, lead: 1.2,
             bStart: bDrop, echoTime: clamp(beatA * 0.75, 0.2, 0.75),
           };
         }
       }
       const cue = findCue(A, B);
-      if (cue && cue.end < end - 0.5) {
+      if (cue && cue.end < end - 0.5 && (djStyle === 'wordplay' || cue.score >= 6)) {
         const lead = clamp(cue.end - cue.t, 1.2, 6);
         const entry = titleEntry(B);
         const beatA = bpmA ? 60 / bpmA : 0.5;
@@ -841,7 +873,8 @@ class Engine extends Emitter {
         // underneath, then drop the next song in full on its own title line
         if (this.voxReady && fx && this.cur.node && cue.t > 3) {
           const pre = clamp(beatA, 0.35, 0.75);
-          const phraseEnd = Math.min(cue.phraseEnd ?? cue.end, end - 0.3);
+          // title at the end of its line → cut on the line boundary (precise); otherwise the in-line estimate
+          const phraseEnd = Math.min(cue.ratio > 0.6 ? cue.lineEnd : (cue.phraseEnd ?? cue.end), end - 0.3);
           const iso = Math.max(0.6, phraseEnd - cue.t);
           const bDrop = entry != null ? Math.max(0, entry - 0.04) : bStart;
           const under = pre + iso;
@@ -923,7 +956,7 @@ class Engine extends Emitter {
     if (B.track !== nx.track) { this.loadDeck(B, nx.track, p.bStart); this.applyDeckGain(B); }
     else if (Math.abs(B.el.currentTime - p.bStart) > 0.08) { try { B.el.currentTime = p.bStart; } catch (e) { /* */ } }
     const useFx = p.fx && A.node && B.node && this.ctx;
-    if (p.style === 'acapella' && useFx && A.vox && B.vox) return this.runAcapella(A, B, p, nx);
+    if (p.style === 'acapella' && useFx && A.vox) return this.runAcapella(A, B, p, nx);
     if (p.style === 'acapella') { p.style = 'echo'; p.lead = p.iso; p.bStart = p.bDrop; } // no worklet: classic echo word play
     this.resetFx(B);
     this.setFade(B, p.style === 'gapless' ? 1 : 0);
@@ -1046,72 +1079,74 @@ class Engine extends Emitter {
       if (Math.abs(B.el.playbackRate - q) >= 0.002) { B.el.playbackRate = q; lastChange = now; }
     }, 150);
   }
-  // Word play, acapella style
+  // Word play, acapella style. Everything at the critical moment is scheduled on the audio clock
+  // (sample-accurate); the next song is already running (muted, lined up) before the drop.
   async runAcapella(A, B, p, nx) {
     const ctx = this.ctx;
     const ra = A.el.playbackRate || 1;
     this.voxActive(A, true);
-    if (p.under) this.voxActive(B, true);
     this.resetFx(B);
-    if (p.under) this.voxActive(B, true);
     this.setFade(B, 0);
     B.el.playbackRate = 1;
     const t0 = ctx.currentTime + 0.03;
     const tIso = t0 + p.pre / ra, tEnd = t0 + (p.pre + p.iso) / ra;
     const N = 64, up = new Float32Array(N), down = new Float32Array(N);
-    for (let i = 0; i < N; i++) { const x = i / (N - 1); up[i] = Math.sin((x * Math.PI) / 2) * 1.15; down[i] = Math.cos((x * Math.PI) / 2); }
-    // 1) the beat drops out, the vocal stays
+    for (let i = 0; i < N; i++) { const x = i / (N - 1); up[i] = Math.sin((x * Math.PI) / 2) * 1.1; down[i] = Math.cos((x * Math.PI) / 2); }
+    // 1) the beat drops out, the (latency-matched) isolated vocal stays
     this.hold(A.fade.gain, t0); A.fade.gain.setValueCurveAtTime(down, t0 + 0.01, p.pre / ra);
     this.hold(A.voxGain.gain, t0); A.voxGain.gain.setValueCurveAtTime(up, t0 + 0.01, p.pre / ra);
-    // 2) the last word rings out through a tempo-synced echo, then the vocal is cut
-    this.echoDelay.delayTime.setValueAtTime(p.echoTime, t0);
-    this.echoFb.gain.setValueAtTime(0.48, t0);
+    // 2) end of the line: vocal out (title cue: last word echoes; shared words: short duck under B)
     this.hold(A.voxSend.gain, t0);
     if (p.handoff) {
-      // B sings the very same words: A's voice ducks under it over ~a syllable — one continuous vocal
-      A.voxGain.gain.setValueAtTime(1.15, tEnd - 0.01);
-      A.voxGain.gain.linearRampToValueAtTime(0, tEnd + 0.22);
+      A.voxGain.gain.setValueAtTime(1.1, tEnd - 0.01);
+      A.voxGain.gain.linearRampToValueAtTime(0, tEnd + 0.12);
     } else {
+      this.echoDelay.delayTime.setValueAtTime(p.echoTime, t0);
+      this.echoFb.gain.setValueAtTime(0.45, t0);
       A.voxSend.gain.setValueAtTime(0, Math.max(tIso, tEnd - 0.4));
-      A.voxSend.gain.linearRampToValueAtTime(0.9, tEnd);
-      A.voxGain.gain.setValueAtTime(1.15, tEnd - 0.01);
+      A.voxSend.gain.linearRampToValueAtTime(0.85, tEnd);
+      A.voxGain.gain.setValueAtTime(1.1, tEnd - 0.01);
       A.voxGain.gain.linearRampToValueAtTime(0, tEnd + 0.07);
+      this.echoFb.gain.setValueAtTime(0.45, tEnd + 1.2);
+      this.echoFb.gain.linearRampToValueAtTime(0, tEnd + 3.5);
     }
-    this.echoFb.gain.setValueAtTime(0.48, tEnd + 1.2);
-    this.echoFb.gain.linearRampToValueAtTime(0, tEnd + 3.5);
-    // 3) the next song: instrumental builds underneath, then the full mix drops on its title
-    const drop = () => {
-      const now = Math.max(ctx.currentTime, tEnd - 0.02);
-      this.hold(B.fade.gain, now); B.fade.gain.setValueAtTime(0, now); B.fade.gain.linearRampToValueAtTime(1, now + 0.08);
-      if (B.instGain) { this.hold(B.instGain.gain, now); B.instGain.gain.linearRampToValueAtTime(0, now + 0.08); }
-      this.hold(B.bass.gain, now); B.bass.gain.setValueAtTime(-10, now); B.bass.gain.linearRampToValueAtTime(0, now + 2);
-    };
+    // 3) next song: instrumental (vocals removed) builds underneath, full mix drops exactly at tEnd
+    this.hold(B.fade.gain, t0);
+    B.fade.gain.setValueAtTime(0, tEnd - 0.004);
+    B.fade.gain.linearRampToValueAtTime(1, tEnd + 0.05);
+    this.hold(B.instGain.gain, t0);
     if (p.under) {
-      this.hold(B.instGain.gain, t0);
       B.instGain.gain.setValueAtTime(0, t0);
-      B.instGain.gain.linearRampToValueAtTime(0.9, t0 + (p.pre + p.iso) * 0.85 / ra);
-      try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } }
-      // keep B on schedule so its title lands exactly when A's line ends
-      clearInterval(this.lockTimer);
-      const tokB = B.token;
-      this.lockTimer = setInterval(() => {
-        if (B.token !== tokB || ctx.currentTime > tEnd + 0.3) { clearInterval(this.lockTimer); if (B.token === tokB) B.el.playbackRate = 1; return; }
-        const exp = p.bDrop - (tEnd - ctx.currentTime);
-        const err = B.el.currentTime - exp;
-        // B is silent / instrumental-only until the drop, so jumps are inaudible here
-        if (Math.abs(err) > 0.06) { try { B.el.currentTime = exp + 0.02; } catch (e) { /* */ } return; }
-        const q = Math.abs(err) < 0.012 ? 1 : Math.round((1 + clamp(-err / 1.2, -0.03, 0.03)) * 400) / 400;
-        if (Math.abs(B.el.playbackRate - q) >= 0.002) B.el.playbackRate = q;
-      }, 200);
-      setTimeout(drop, Math.max(0, (tEnd - ctx.currentTime) * 1000 - 20));
-    } else {
-      this.echoPending = true;
-      await new Promise((r) => setTimeout(r, Math.max(0, (tEnd - ctx.currentTime) * 1000 - 60)));
-      this.echoPending = false;
-      if (this.cur !== A || !this.playing) return;
-      try { B.el.currentTime = p.bDrop; await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } }
-      drop();
+      B.instGain.gain.linearRampToValueAtTime(0.85, t0 + Math.max(0.3, (tEnd - t0) * 0.85));
+      B.instGain.gain.setValueAtTime(0.85, tEnd - 0.004);
     }
+    B.instGain.gain.linearRampToValueAtTime(0, tEnd + 0.05);
+    this.hold(B.bass.gain, t0);
+    B.bass.gain.setValueAtTime(-10, tEnd);
+    B.bass.gain.linearRampToValueAtTime(0, tEnd + 2);
+    // start B muted so that it reaches bDrop exactly at tEnd; corrections happen while it's silent
+    const tokB = B.token;
+    const startB = async () => {
+      if (B.token !== tokB) return;
+      const exp = p.bDrop - (tEnd - ctx.currentTime);
+      try { if (Math.abs(B.el.currentTime - exp) > 0.03) B.el.currentTime = Math.max(0, exp); } catch (e) { /* */ }
+      try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') this.onEnded(); }
+    };
+    const lead = tEnd - ctx.currentTime;
+    if (p.bDrop >= lead) await startB();
+    else setTimeout(startB, Math.max(0, (lead - p.bDrop) * 1000 - 40));
+    clearInterval(this.lockTimer);
+    this.lockTimer = setInterval(() => {
+      const now = ctx.currentTime;
+      if (B.token !== tokB || now > tEnd + 0.25) { clearInterval(this.lockTimer); if (B.token === tokB && B.el.playbackRate !== 1) B.el.playbackRate = 1; return; }
+      if (B.el.paused) return;
+      const err = B.el.currentTime - (p.bDrop - (tEnd - now));
+      if (now < tEnd - 0.35) {
+        if (Math.abs(err) > 0.04) { try { B.el.currentTime = p.bDrop - (tEnd - now) + 0.03; } catch (e) { /* */ } }
+        else if (Math.abs(err) > 0.012) { const q = Math.round((1 - clamp(err / 0.6, -0.04, 0.04)) * 400) / 400; if (Math.abs(B.el.playbackRate - q) >= 0.002) B.el.playbackRate = q; }
+        else if (B.el.playbackRate !== 1) B.el.playbackRate = 1;
+      } else if (B.el.playbackRate !== 1 && Math.abs(err) < 0.02) B.el.playbackRate = 1;
+    }, 150);
     this.notePlayed(A);
     library.addMix('acapella');
     this.transition = { from: A, to: B, plan: p };
@@ -1121,7 +1156,7 @@ class Engine extends Emitter {
     this.plan = null;
     this.emit('plan', null);
     const tok = A.token;
-    const total = ((tEnd - ctx.currentTime) + 3.8) * 1000;
+    const total = ((tEnd - ctx.currentTime) + (p.handoff ? 1.2 : 3.8)) * 1000;
     this.transitionTimer = setTimeout(() => { if (A.token === tok) this.finishTransition(); }, Math.max(500, total));
     this.afterTrackChange(p);
   }
@@ -1130,11 +1165,11 @@ class Engine extends Emitter {
     clearTimeout(this.transitionTimer);
     const { from, to } = this.transition;
     this.transition = null;
-    if (from !== this.cur) { this.resetFx(from); from.unload(); }
-    if (to?.vox && this.ctx) {
+    if (from !== this.cur) { this.resetFx(from); from.unload(); this.reassertNowPlaying(); }
+    if (to?.node && this.ctx) {
       this.voxActive(to, false);
       const now = this.ctx.currentTime;
-      for (const prm of [to.instGain.gain, to.voxGain.gain, to.voxSend.gain]) { this.hold(prm, now); prm.setTargetAtTime(0, now, 0.05); }
+      for (const prm of [to.instGain.gain, to.voxGain?.gain, to.voxSend?.gain].filter(Boolean)) { this.hold(prm, now); prm.setTargetAtTime(0, now, 0.05); }
     }
     // make sure the new song ends up with clean filters even if the mix was interrupted
     if (to === this.cur && to.node && this.ctx) {
@@ -1154,7 +1189,7 @@ class Engine extends Emitter {
     if (this.playing && !d.el.paused) {
       // keep the lock screen / CarPlay clock in step (tempo-synced mixes change the playback speed)
       const nowMs = performance.now();
-      if (nowMs - (this._posAt || 0) > 2000 || Math.abs((d.el.playbackRate || 1) - (this._posRate || 1)) > 0.004) {
+      if (nowMs - (this._posAt || 0) > 1000 || Math.abs((d.el.playbackRate || 1) - (this._posRate || 1)) > 0.004) {
         this._posAt = nowMs; this._posRate = d.el.playbackRate || 1;
         this.updatePosition();
       }
@@ -1197,7 +1232,11 @@ class Engine extends Emitter {
     if (['eqPreset', 'eqBands', 'eqOn'].includes(k)) this.applyEq();
     if (k === 'mono') this.applyMono();
     if (['leveling', 'levelPreamp', 'autoLevel', 'limiter', '*'].includes(k)) this.decks.forEach((d) => d.track && this.applyDeckGain(d, true));
-    if (['transition', 'crossfadeSec', 'fadeCurve', 'gaplessAlbums', 'skipSilence', 'beatMatch', 'tempoMatch', 'tempoMatchMax', '*'].includes(k)) {
+    if (k === 'djStyle' && this.upcoming && settings.get('djStyle') !== 'beats') {
+      const t = this.upcoming.track;
+      Promise.all([getLyrics(this.cur.track), getLyrics(t)]).then(() => { if (this.upcoming?.track === t) this.computePlan(); });
+    }
+    if (['transition', 'crossfadeSec', 'fadeCurve', 'gaplessAlbums', 'skipSilence', 'beatMatch', 'tempoMatch', 'tempoMatchMax', 'djStyle', 'harmonicMix', 'djEffects', '*'].includes(k)) {
       if (this.upcoming) this.computePlan();
       clearTimeout(this.planTimer); this.planTimer = null;
       if (this.track && this.wantsAnalysis()) analyze(this.track);
@@ -1245,6 +1284,10 @@ class Engine extends Emitter {
       set('seekforward', (e) => this.seek(this.currentTime + (e.seekOffset || 10)));
     }
     this.updatePosition();
+  }
+  // After one element stops, tell the OS again that we're playing, with the exact position & speed
+  reassertNowPlaying() {
+    for (const ms of [60, 400, 1200]) setTimeout(() => { if (this.track) { this.updateMediaSession(); } }, ms);
   }
   updatePosition() {
     if (!('mediaSession' in navigator)) return;
