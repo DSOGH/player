@@ -820,3 +820,68 @@ html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s eas
 .diag-dot.bad { background: #ff453a; }
 .diag-help p { margin: 0 0 10px; line-height: 1.45; }
 .diag-help .ok-tip { color: #30d158; font-weight: 600; }
+
+/* ---------- v1.11: Stats ---------- */
+.week-card { cursor: pointer; }
+.wk-more { float: right; color: var(--accent); font-weight: 700; text-transform: none; letter-spacing: 0; }
+.stats-range { padding-top: 4px; }
+.stats-range .chip { border: 0; font: inherit; }
+.stats-hero { margin: 8px 16px 14px; padding: 20px; border-radius: 20px; background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 38%, var(--card)), var(--card)); }
+.sh-main small { display: block; color: var(--text2); font-weight: 600; }
+.sh-main b { font: 800 52px/1.05 var(--font-d, system-ui); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.stats-hero em, .sh-grid em { font-style: normal; font-size: 12px; font-weight: 700; margin-left: 8px; }
+em.up { color: #30d158; } em.down { color: #ff6961; }
+.sh-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; margin-top: 16px; }
+.sh-grid b { display: block; font: 750 22px/1.1 var(--font-d, system-ui); font-variant-numeric: tabular-nums; }
+.sh-grid span { font-size: 12px; color: var(--text2); }
+.stats-card { margin: 0 16px 14px; padding: 16px; border-radius: 18px; background: var(--card); }
+.stats-card h2 { font-size: 19px; margin: 0 0 12px; }
+.st-head { display: flex; align-items: center; justify-content: space-between; }
+.st-head h2 { margin: 0 0 10px; }
+.st-sub { margin: -4px 0 12px; color: var(--text2); font-size: 14px; }
+.st-chart, .st-hours { display: flex; align-items: flex-end; gap: 3px; height: 130px; padding-bottom: 18px; position: relative; }
+.st-hours { height: 90px; }
+.st-col { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; position: relative; }
+.st-col i { display: block; border-radius: 4px 4px 2px 2px; background: var(--accent); min-height: 2px; transform-origin: bottom; animation: st-grow .6s var(--ease, ease) both; }
+.st-col span { position: absolute; top: 100%; left: 0; font-size: 10px; color: var(--text3); white-space: nowrap; margin-top: 4px; }
+@keyframes st-grow { from { transform: scaleY(0); } }
+.st-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 14px; }
+.st-week div { text-align: center; }
+.st-week i { display: block; height: 28px; border-radius: 8px; background: var(--accent); }
+.st-week span { font-size: 11px; color: var(--text3); }
+.stats-top-artist { display: flex; align-items: center; gap: 16px; margin: 0 16px 14px; padding: 16px; border-radius: 18px; background: var(--card); color: inherit; text-decoration: none; }
+.stats-top-artist .art { width: 92px; }
+.stats-top-artist small { color: var(--accent); font-weight: 700; }
+.stats-top-artist b { display: block; font: 800 26px/1.1 var(--font-d, system-ui); margin: 2px 0 4px; }
+.stats-top-artist span { color: var(--text2); font-size: 13px; }
+.st-list { list-style: none; margin: 0; padding: 0; }
+.st-list a { display: flex; align-items: center; gap: 12px; padding: 7px 0; color: inherit; text-decoration: none; }
+.st-list .art { width: 44px; }
+.st-n { width: 22px; flex: none; text-align: center; font-weight: 800; color: var(--text3); font-variant-numeric: tabular-nums; }
+.st-meta b { display: block; font-weight: 650; } .st-meta small { color: var(--text2); }
+.st-song { display: flex; align-items: center; }
+.st-song .row { flex: 1; min-width: 0; padding-left: 4px; }
+.st-plays { color: var(--text3); font-size: 12px; font-weight: 700; margin: 0 4px; }
+.st-albums { display: flex; gap: 12px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; scroll-snap-type: x mandatory; }
+.st-albums::-webkit-scrollbar { display: none; }
+.st-album { flex: none; width: 128px; color: inherit; text-decoration: none; scroll-snap-align: start; }
+.st-album b { display: block; font-size: 13px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-album small { color: var(--text2); font-size: 12px; }
+.st-obs { display: flex; gap: 12px; align-items: center; }
+.st-obs .art { width: 56px; } .st-obs b { display: block; } .st-obs small { color: var(--text2); }
+.st-streak, .st-sound { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; }
+.st-streak b, .st-sound b { display: block; font: 800 30px/1.1 var(--font-d, system-ui); font-variant-numeric: tabular-nums; }
+.st-streak span, .st-sound span { font-size: 12px; color: var(--text2); }
+.st-bars { display: grid; gap: 8px; }
+.st-bar { display: grid; grid-template-columns: 96px 1fr 34px; align-items: center; gap: 8px; font-size: 13px; }
+.st-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text2); }
+.st-bar i { height: 10px; border-radius: 5px; background: var(--accent); min-width: 4px; animation: st-wide .6s var(--ease, ease) both; transform-origin: left; }
+.st-bar b { text-align: right; font-variant-numeric: tabular-nums; }
+@keyframes st-wide { from { transform: scaleX(0); } }
+.stats-plex { display: flex; align-items: center; gap: 10px; margin: 0 16px 10px; padding: 14px 16px; width: calc(100% - 32px); border-radius: 14px; background: var(--card); color: var(--accent); font: 600 15px var(--font, system-ui); border: 0; }
+.stats-plex .ic { width: 20px; height: 20px; }
+@media (prefers-reduced-motion: reduce) { .st-col i, .st-bar i { animation: none; } }
+.mini-prev .ic { width: 24px; height: 24px; }
+#mini .mini-prev { margin-right: -6px; }
+/* the app frame must never scroll as a whole (that slid the hidden player up into view) */
+body, #app { overflow: clip; }

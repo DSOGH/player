@@ -23,6 +23,7 @@ export function initNowPlaying(h) {
     <div class="mini-progress"><i></i></div>
     <div class="mini-art"></div>
     <div class="mini-meta"><div class="mini-title">Not Playing</div><div class="mini-artist"></div></div>
+    ${settings.get('miniPrev') ? html`<button class="icon-btn mini-prev" data-np="prev" aria-label="Previous">${icon('prev')}</button>` : ''}
     <button class="icon-btn mini-play" data-np="toggle" aria-label="Play">${icon('play')}</button>
     <button class="icon-btn mini-next" data-np="next" aria-label="Next">${icon('next')}</button>`;
   const np = $('#np');
@@ -92,7 +93,14 @@ export function initNowPlaying(h) {
   engine.on('track', autoLyrics);
   engine.on('state', updateWake);
   document.addEventListener('visibilitychange', updateWake);
-  settings.on('change', (k) => { if (k === 'keepAwake') updateWake(); });
+  settings.on('change', (k) => {
+    if (k === 'keepAwake') updateWake();
+    if (k === 'miniPrev') {
+      const m = $('#mini'), b = m.querySelector('.mini-prev');
+      if (settings.get('miniPrev') && !b) m.querySelector('.mini-play').insertAdjacentHTML('beforebegin', html`<button class="icon-btn mini-prev" data-np="prev" aria-label="Previous">${icon('prev')}</button>`.toString());
+      else if (!settings.get('miniPrev') && b) b.remove();
+    }
+  });
   engine.on('state', renderState);
   engine.on('time', renderTime);
   engine.on('queue', () => { if (mode === 'queue') renderQueue(); });

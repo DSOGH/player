@@ -15,11 +15,11 @@ export const DEFAULTS = {
   beatMatch: true,            // align mixes to the beat when BPMs are known
   tempoMatch: true,           // nudge incoming tempo during the mix
   tempoMatchMax: 12,          // percent (each song); songs meet in the middle for bigger gaps
-  sv: 3,                      // settings schema version
+  sv: 4,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
   analysisNetwork: 'any',     // 'any' | 'wifi'
-  skipFade: true,             // quick crossfade when you press next/prev
+  skipFade: false,            // quick crossfade when you press next/prev (off = instant cut)
   skipFadeSec: 1.2,
   pauseFade: true,
   resumeSession: true,
@@ -76,6 +76,7 @@ export const DEFAULTS = {
   autoLyrics: false, // open the player in lyrics view when a song has synced lyrics
   carButton: true, // show the Car Mode button in the player menu
   smartResume: true, // rewind a couple of seconds after a long pause
+  miniPrev: true, // back button in the mini player
 };
 
 export const EQ_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -110,6 +111,7 @@ class Settings extends Emitter {
       saved.sv = 2;
     }
     if (saved.sv < 3) { saved.djStyle = 'beats'; saved.sv = 3; } // v1.7: beat match is the default DJ style
+    if (saved.sv < 4) { saved.skipFade = false; saved.sv = 4; } // v1.11: skipping is an instant cut
     this.v = { ...DEFAULTS, ...saved };
   }
   get(k) { return this.v[k]; }

@@ -782,9 +782,10 @@ class Engine extends Emitter {
     // keeps the same element — quick fade out, switch songs, fade in — and iOS never sees a "pause".
     let fadeIn = false;
     if (mode === 'quick' && IOS && old.track && !old.el.paused && old.fx) {
+      // a 25 ms dip is enough to avoid a click — you don't hear a gap
       const tok = ++this.skipToken;
-      this.fade(old, 0, 0.14, { shape: 'linear' });
-      await new Promise((r) => setTimeout(r, 150));
+      this.fade(old, 0, 0.025, { shape: 'linear' });
+      await new Promise((r) => setTimeout(r, 28));
       if (tok !== this.skipToken) return;
       mode = 'cut'; fadeIn = true;
     }
@@ -808,7 +809,7 @@ class Engine extends Emitter {
       this.setFade(old, fadeIn ? 0 : 1);
       if (fadeIn) {
         const tokL = old.token;
-        old.el.addEventListener('playing', () => { if (old.token === tokL) this.fade(old, 1, 0.3, { shape: 'equalpower' }); }, { once: true });
+        old.el.addEventListener('playing', () => { if (old.token === tokL) this.fade(old, 1, 0.06, { shape: 'equalpower' }); }, { once: true });
       }
       if (autoplay) {
         this.playing = true;
@@ -833,16 +834,27 @@ class Engine extends Emitter {
     // download never competes with the song you just picked; a skipped song's download is cancelled
     this.scheduleAnalysis(t);
   }
+  // Download the song that's up next onto the phone ahead of time, so pressing ⏭ starts it instantly
+  warmNext(t) {
+    clearTimeout(this._warmTimer);
+    this._warmTimer = setTimeout(() => {
+      if (this.track !== t || !this.playing) return;
+      const i = this.nextIndex(true);
+      const n = i >= 0 ? library.track(this.queue[i]) : null;
+      if (n && n !== this.upcoming?.track) prefetchTrack(n);
+    }, 4000);
+  }
   scheduleAnalysis(t) {
     clearTimeout(this._anTimer);
     if (this._anCtl && this._anFor !== t?.id && this._anFor !== this.upcoming?.track?.id) { this._anCtl.abort(); this._anCtl = null; }
-    if (!t || !this.wantsAnalysis() || isAnalyzed(t)) return;
+    if (t && (!this.wantsAnalysis() || isAnalyzed(t))) { this.warmNext(t); return; }
+    if (!t) return;
     const go = () => {
       if (this.track !== t) return;
       const el = this.cur.el;
       if (this.playing && (el.paused || el.readyState < 3)) { this._anTimer = setTimeout(go, 1500); return; }
       this._anCtl = new AbortController(); this._anFor = t.id;
-      analyze(t, { signal: this._anCtl.signal });
+      analyze(t, { signal: this._anCtl.signal }).then(() => this.warmNext(t));
     };
     this._anTimer = setTimeout(go, 2500);
   }
@@ -1339,7 +1351,7 @@ class Engine extends Emitter {
       // listening time (for stats)
       const dt = Math.min(1, (nowMs - (this._lastTick || nowMs)) / 1000);
       this._lastTick = nowMs;
-      if (dt > 0) library.addListening(dt);
+      if (dt > 0) library.addListening(dt, d.track.id);
     } else this._lastTick = 0;
     if (this.sleepAt && Date.now() >= this.sleepAt) {
       this.sleepAt = 0;

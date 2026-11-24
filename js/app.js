@@ -17,6 +17,7 @@ import { plex } from './plex.js';
 import { plexSignIn, plexSignOut, loadServers } from './ui/plex-view.js';
 import { trackSrc } from './analysis.js';
 import { optimizeOrder } from './dj.js';
+import { statsView, setStatsRange } from './ui/stats-view.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -129,10 +130,11 @@ async function route(path) {
     case 'mix': return V.mixView(a);
     case 'search': return V.searchView(searchQ);
     case 'settings': return settingsView(a || '');
+    case 'stats': return statsView();
     default: return V.home();
   }
 }
-const TAB_OF = { home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
+const TAB_OF = { stats: 'home', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
 
 async function render({ keepScroll = false } = {}) {
   const path = parseHash();
@@ -600,6 +602,14 @@ async function doAction(a, el, e) {
       break;
     }
     case 'force-refresh': await forceRefresh(); break;
+    case 'open-stats': if (!e?.target?.closest('a')) location.hash = '#/stats'; break;
+    case 'stats-range': setStatsRange(el.dataset.v); render({ keepScroll: true }); break;
+    case 'stats-import': {
+      toast('Reading your Plex history…', { ms: 4000 });
+      try { const n = await plex.importHistory(); toast(n ? `Added ${n.toLocaleString()} plays from Plex` : 'No Plex history found for your music'); } catch (e) { toast('Couldn’t read history from Plex'); }
+      if (currentPath === 'stats') render({ keepScroll: true });
+      break;
+    }
     case 'car-mode': if (engine.track) openCarMode(); else toast('Play something first'); break;
     case 'eq-preset': if (await eqPresetSheet()) render({ keepScroll: true }); break;
     default: break;

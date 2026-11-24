@@ -290,11 +290,61 @@ class Library extends Emitter {
     return this.likes.has(id);
   }
   // listening stats: seconds per day + DJ mixes
-  addListening(sec) {
+  addListening(sec, id = null) {
     const day = new Date().toISOString().slice(0, 10);
     const L = this.listen || (this.listen = {});
     L[day] = (L[day] || 0) + sec;
-    if (!this._lsave || Date.now() - this._lsave > 15000) { this._lsave = Date.now(); db.kv.set('listen', L); }
+    if (id) this.logListen(id, sec);
+    if (!this._lsave || Date.now() - this._lsave > 15000) { this._lsave = Date.now(); db.kv.set('listen', L); this.saveLog(); }
+  }
+
+  // ---- play log (for Stats): one entry per listen [trackId, startedAt (s), secondsListened], kept per month ----
+  logListen(id, sec) {
+    const cur = this._curListen;
+    if (!cur || cur[0] !== id || Date.now() / 1000 - (cur[1] + cur[2]) > 600) {
+      this.flushListen();
+      this._curListen = [id, Math.round(Date.now() / 1000 - sec), 0];
+    }
+    this._curListen[2] += sec;
+  }
+  flushListen() {
+    const c = this._curListen;
+    this._curListen = null;
+    if (!c || c[2] < 20) return; // under 20 s doesn't count as a listen
+    c[2] = Math.round(c[2]);
+    const m = new Date(c[1] * 1000).toISOString().slice(0, 7);
+    const log = this.playLog || (this.playLog = {});
+    (log[m] || (log[m] = [])).push(c);
+    this._dirtyMonths = (this._dirtyMonths || new Set()).add(m);
+    this.saveLog();
+  }
+  saveLog() {
+    // persist the song in progress too, so a closed app never loses it
+    const c = this._curListen;
+    db.kv.set('listen:cur', c && c[2] >= 20 ? c : null);
+    for (const m of this._dirtyMonths || []) db.kv.set('plays:' + m, this.playLog[m]);
+    this._dirtyMonths = new Set();
+  }
+  async loadPlayLog() {
+    if (this._logLoaded) return this.playLog;
+    const keys = (await db.keys('kv')).filter((k) => String(k).startsWith('plays:'));
+    const log = {};
+    await Promise.all(keys.map(async (k) => { log[k.slice(6)] = (await db.kv.get(k)) || []; }));
+    // merge with anything recorded this session before the log was loaded
+    for (const [m, arr] of Object.entries(this.playLog || {})) {
+      const have = new Set((log[m] || []).map((e) => e[0] + ':' + e[1]));
+      log[m] = [...(log[m] || []), ...arr.filter((e) => !have.has(e[0] + ':' + e[1]))];
+    }
+    const pending = await db.kv.get('listen:cur');
+    if (pending && !this._curListen) {
+      const m = new Date(pending[1] * 1000).toISOString().slice(0, 7);
+      const arr = log[m] || (log[m] = []);
+      if (!arr.some((e) => e[0] === pending[0] && e[1] === pending[1])) arr.push(pending);
+      db.kv.set('plays:' + m, arr); db.kv.set('listen:cur', null);
+    }
+    this.playLog = log;
+    this._logLoaded = true;
+    return log;
   }
   addMix(style) {
     const M = this.mixesDone || (this.mixesDone = {});

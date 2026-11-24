@@ -327,6 +327,30 @@ class Plex extends Emitter {
     return out;
   }
 
+  // Your listening history from Plex (Plexamp and every other Plex app) → seeds Stats with years of plays
+  async importHistory() {
+    if (!this.connected) return 0;
+    const byKey = new Map();
+    for (const t of library.tracks.values()) if (t.plex?.key) byKey.set(String(t.plex.key), t);
+    if (!byKey.size) return 0;
+    const sections = this.cfg.sections?.length ? this.cfg.sections : (await this.sections()).map((x) => x.key);
+    const out = [];
+    for (const sec of sections) {
+      let items = [];
+      try { items = await this.pageAll('/status/sessions/history/all', { sort: 'viewedAt:desc', librarySectionID: sec }); } catch (e) { continue; }
+      for (const it of items) {
+        if (this.cfg.server.owned && it.accountID != null && +it.accountID !== 1) continue; // only your own plays
+        const t = byKey.get(String(it.ratingKey));
+        if (!t || !it.viewedAt) continue;
+        out.push([t.id, +it.viewedAt, Math.round(t.duration || 180)]);
+      }
+    }
+    await db.kv.set('plexHistory', { at: Date.now(), list: out });
+    library.plexHistory = out;
+    library.emit('stats');
+    return out.length;
+  }
+
   async sync() {
     if (this.running || !this.connected) return;
     this.running = true;

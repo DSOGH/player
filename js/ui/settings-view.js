@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.10.0';
+export const APP_VERSION = '1.11.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -61,6 +61,7 @@ async function root() {
       ${link('#/settings/library', 'library', 'Library', `${library.size} songs`)}
       ${link('#/settings/appearance', 'palette', 'Appearance')}
       ${link('#/settings/extras', 'sparkle', 'Extras', 'Gestures, Car Mode & more')}
+      ${link('#/stats', 'bpm', 'Your Stats', 'Top songs, artists, minutes')}
       ${link('#/settings/storage', 'storage', 'Downloads & Storage')}
       ${link('#/settings/about', 'info', 'About & Help')}`)}
     ${group('', html`${button('rescan', 'refresh', scanner.running ? 'Scanning…' : 'Scan for New Music', { sub: await lastScanText() })}`)}
@@ -210,7 +211,7 @@ function playback() {
       ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
     `)}
     ${group('Controls', html`
-      ${toggle('skipFade', 'Fade when skipping', 'Quick crossfade when you press next/previous')}
+      ${toggle('skipFade', 'Fade when skipping', 'Off = the next song starts instantly when you press ⏭ / ⏮')}
       ${slider('skipFadeSec', 'Skip fade length', 0.3, 3, 0.1, 's')}
       ${toggle('pauseFade', 'Soft pause', 'Fade out/in on pause and play')}
       ${slider('prevRestarts', 'Previous restarts song after', 1, 10, 1, 's')}
@@ -383,6 +384,7 @@ function extras() {
       ${toggle('doubleTapSeek', 'Double-tap to jump', 'Double-tap the left or right side of the artwork to jump back or forward')}
       ${seg('seekStep', 'Jump length', [[10, '10s'], [15, '15s'], [30, '30s']])}
       ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}
+      ${toggle('miniPrev', 'Back button in mini player', 'Shows ⏮ next to play and skip at the bottom')}
     `)}
     ${group('Lock screen, CarPlay & headphones', html`
       ${seg('lockButtons', 'Side buttons', [['tracks', 'Skip songs'], ['seek', 'Jump in song']], 'What the ⏮ ⏭ buttons do outside the app')}

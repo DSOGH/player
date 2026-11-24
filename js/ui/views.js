@@ -121,8 +121,8 @@ function weekCard() {
   const max = Math.max(1, ...w.byDay);
   const days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   const today = new Date().getDay();
-  return html`<section class="week-card">
-    <div class="wk-top"><div><small>Your week</small><b>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m</b></div>
+  return html`<section class="week-card" data-a="open-stats" role="link">
+    <div class="wk-top"><div><small>Your week <span class="wk-more">See all stats ›</span></small><b>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m</b></div>
       <div class="wk-bars">${w.byDay.map((m, i) => html`<div class="wk-bar"><i style="height:${Math.max(4, (m / max) * 100)}%"></i><span>${days[(today - 6 + i + 7) % 7]}</span></div>`)}</div></div>
     <div class="wk-stats">
       <div><b>${w.mixes}</b><span>DJ mixes</span></div>
