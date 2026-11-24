@@ -78,6 +78,7 @@ export function initNowPlaying(h) {
     if (b) act(b.dataset.np, b);
   });
   wireScrubber();
+  wireDoubleTap();
   wireSwipe();
   wireMiniSwipe();
   startPulse();
@@ -88,6 +89,10 @@ export function initNowPlaying(h) {
   engine.on('volume', (v) => { vol.value = v; });
 
   engine.on('track', onTrack);
+  engine.on('track', autoLyrics);
+  engine.on('state', updateWake);
+  document.addEventListener('visibilitychange', updateWake);
+  settings.on('change', (k) => { if (k === 'keepAwake') updateWake(); });
   engine.on('state', renderState);
   engine.on('time', renderTime);
   engine.on('queue', () => { if (mode === 'queue') renderQueue(); });
@@ -127,6 +132,7 @@ export function openNP() {
   open = true;
   $('#np').classList.add('open');
   document.body.classList.add('np-open');
+  setTimeout(updateWake, 0);
   history.pushState({ np: 1 }, '', (location.hash || '#/home').replace(/\?np$/, '') + '?np');
   haptic(6);
 }
@@ -135,6 +141,7 @@ export function closeNP(fromPop = false) {
   open = false;
   $('#np').classList.remove('open');
   document.body.classList.remove('np-open');
+  setTimeout(updateWake, 0);
   $('#np').style.transform = '';
   if (!fromPop && location.hash.endsWith('?np')) history.back();
 }
@@ -220,6 +227,7 @@ async function npMenu() {
       { icon: 'eq', label: 'Equalizer', value: 'eq' },
       { icon: 'mix', label: 'Transitions…', value: 'transitions' },
       { icon: 'info', label: 'Track Info', value: 'info' },
+      ...(settings.get('carButton') ? [{ icon: 'car', label: 'Car Mode', value: 'car' }] : []),
     ],
   });
   if (!v) return;
@@ -228,6 +236,7 @@ async function npMenu() {
   else if (v === 'playlist') hooks.addToPlaylist([t]);
   else if (v === 'download') hooks.toggleDownload([t]);
   else if (v === 'sleep') sleepMenu();
+  else if (v === 'car') openCarMode();
   else if (v === 'bpm') {
     toast('Analyzing…');
     const r = await analyze(t, { force: true });
@@ -415,11 +424,14 @@ function renderHint() {
 }
 
 let lastLyricIdx = -1;
+let dragAt = 0;
 function renderTime() {
   const np = $('#np');
   const t = engine.currentTime, d = engine.duration || 0;
   const pct = d ? clamp(t / d, 0, 1) : 0;
   $('#mini .mini-progress i').style.transform = `scaleX(${pct})`;
+  // a drag that lost its finger (iOS cancelled the touch) must never freeze the slider
+  if (dragging && performance.now() - dragAt > 4000) { dragging = false; np.querySelector('.scrub').classList.remove('drag'); }
   if (!dragging) {
     np.querySelector('.scrub').style.setProperty('--p', pct);
     np.querySelector('.t-cur').textContent = fmtTime(t);
@@ -572,18 +584,19 @@ function wireScrubber() {
   const preview = () => {
     const d = engine.duration || 0;
     sc.style.setProperty('--p', val);
+    sc.dataset.time = fmtTime(val * d);
     $('#np .t-cur').textContent = fmtTime(val * d);
     $('#np .t-rem').textContent = '-' + fmtTime(d - val * d);
   };
   sc.addEventListener('pointerdown', (e) => {
     if (!engine.track) return;
     rect = sc.getBoundingClientRect();
-    dragging = true;
+    dragging = true; dragAt = performance.now();
     sc.classList.add('drag');
     sc.setPointerCapture(e.pointerId);
     val = pos(e); preview();
   });
-  sc.addEventListener('pointermove', (e) => { if (dragging) { val = pos(e); preview(); } });
+  sc.addEventListener('pointermove', (e) => { if (dragging) { dragAt = performance.now(); val = pos(e); preview(); } });
   const end = () => {
     if (!dragging) return;
     dragging = false;
@@ -593,6 +606,7 @@ function wireScrubber() {
   };
   sc.addEventListener('pointerup', end);
   sc.addEventListener('pointercancel', end);
+  sc.addEventListener('lostpointercapture', end);
 }
 
 function wireSwipe() {
@@ -667,6 +681,8 @@ function startPulse() {
     if (now - lastT < 33) return;
     lastT = now;
     const visible = (open || document.body.classList.contains('dual')) && !document.hidden;
+    // smooth, exact clock & slider while the player is on screen (not just 5× a second)
+    if (visible && engine.playing && engine.track && !dragging) renderTime();
     const an = engine.analyser;
     const art = np.querySelector('.np-art .art');
     const glow = np.querySelector('.np-glow');
@@ -796,4 +812,109 @@ function wireQueueDrag() {
   };
   box.addEventListener('pointerup', end);
   box.addEventListener('pointercancel', end);
+}
+
+// ---------- extras ----------
+// Double-tap the left/right half of the artwork to jump back/forward
+function wireDoubleTap() {
+  const np = $('#np');
+  const wrap = () => np.querySelector('.np-art-wrap');
+  let last = 0, lx = 0, ly = 0, down = null;
+  const inside = (e) => { const r = wrap()?.getBoundingClientRect(); return r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
+  // listen on the whole player (the swipe gesture may capture the pointer) and test the position
+  np.addEventListener('pointerdown', (e) => { down = inside(e) ? [e.clientX, e.clientY] : null; }, true);
+  np.addEventListener('pointerup', (e) => {
+    if (!settings.get('doubleTapSeek') || !engine.track || mode !== 'art' || !down) return;
+    if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 14) { last = 0; return; }
+    const now = performance.now();
+    if (now - last < 350 && Math.hypot(e.clientX - lx, e.clientY - ly) < 70) {
+      last = 0;
+      const w = wrap(), r = w.getBoundingClientRect();
+      const back = e.clientX < r.left + r.width / 2;
+      const step = settings.get('seekStep') || 15;
+      engine.seek(engine.currentTime + (back ? -step : step));
+      haptic(8);
+      const rip = document.createElement('div');
+      rip.className = 'seek-ripple ' + (back ? 'l' : 'r');
+      rip.innerHTML = `${icon(back ? 'prev' : 'next')}<b>${back ? '−' : '+'}${step}s</b>`;
+      w.appendChild(rip);
+      setTimeout(() => rip.remove(), 650);
+    } else { last = now; lx = e.clientX; ly = e.clientY; }
+  }, true);
+}
+
+// Keep the screen on while the player (or Car Mode) is showing
+let wakeLock = null;
+async function updateWake() {
+  const want = (settings.get('keepAwake') && open && engine.playing && !document.hidden) || (carOpen && !document.hidden);
+  try {
+    if (want && !wakeLock && navigator.wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener?.('release', () => { wakeLock = null; });
+    } else if (!want && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+  } catch (e) { wakeLock = null; }
+}
+
+// Open lyrics automatically for songs with time-synced lyrics
+let autoOpened = false;
+async function autoLyrics(t) {
+  if (!t || !settings.get('autoLyrics')) return;
+  const l = await getLyrics(t);
+  if (engine.track !== t) return;
+  if (l?.synced && mode === 'art') { setMode('lyrics'); autoOpened = true; }
+  else if (!l?.synced && mode === 'lyrics' && autoOpened) { setMode('lyrics'); autoOpened = false; }
+}
+
+// ---------- Car Mode: huge buttons, big text, screen stays on ----------
+let carOpen = false;
+export function openCarMode() {
+  if (!engine.track) return;
+  let car = $('#car');
+  if (!car) {
+    car = document.createElement('div');
+    car.id = 'car';
+    document.body.appendChild(car);
+    car.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-car]');
+      if (!b) return;
+      haptic(10);
+      const a = b.dataset.car;
+      if (a === 'close') closeCarMode();
+      else if (a === 'toggle') engine.toggle();
+      else if (a === 'next') engine.next();
+      else if (a === 'prev') engine.prev();
+      else if (a === 'like' && engine.track) library.toggleLike(engine.track.id);
+      b.animate?.([{ transform: 'scale(.9)' }, { transform: 'scale(1)' }], { duration: 180, easing: 'ease-out' });
+    });
+    engine.on('track', renderCar);
+    engine.on('state', renderCar);
+    engine.on('time', () => { if (carOpen) { const d = engine.duration || 0; $('#car .car-prog i').style.transform = `scaleX(${d ? clamp(engine.currentTime / d, 0, 1) : 0})`; } });
+    library.on('likes', renderCar);
+  }
+  carOpen = true;
+  renderCar();
+  requestAnimationFrame(() => car.classList.add('open'));
+  updateWake();
+}
+export function closeCarMode() {
+  const car = $('#car');
+  carOpen = false;
+  car?.classList.remove('open');
+  updateWake();
+}
+function renderCar() {
+  const car = $('#car');
+  const t = engine.track;
+  if (!car || !carOpen || !t) return;
+  const liked = library.likes.has(t.id);
+  car.innerHTML = html`
+    <button class="car-close" data-car="close" aria-label="Close">${icon('down')}</button>
+    <div class="car-top">${art(t.artId, 'car-art', t.album)}<div class="car-meta"><div class="car-title">${t.title}</div><div class="car-artist">${t.artist}</div></div></div>
+    <div class="car-prog"><i></i></div>
+    <div class="car-ctl">
+      <button data-car="prev" aria-label="Previous">${icon('prev')}</button>
+      <button data-car="toggle" class="car-play" aria-label="Play/Pause">${icon(engine.playing ? 'pause' : 'play')}</button>
+      <button data-car="next" aria-label="Next">${icon('next')}</button>
+    </div>
+    <button class="car-like${liked ? ' on' : ''}" data-car="like" aria-label="Like">${icon(liked ? 'heart-fill' : 'heart')}</button>`;
 }

@@ -775,3 +775,48 @@ html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s eas
 .ly.space { height: 14px; margin: 0; }
 .np-lyrics { -webkit-transform: translateZ(0); transform: translateZ(0); }
 .np-lyrics .ly { transform: none !important; }
+
+/* ---------- v1.10: seeking polish ---------- */
+.scrub.drag::before { content: attr(data-time); position: absolute; bottom: calc(100% + 6px); left: calc(var(--p) * 100%); transform: translateX(-50%);
+  font: 700 13px/1 var(--font, system-ui); font-variant-numeric: tabular-nums; color: #111; background: #fff; padding: 6px 9px; border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35); pointer-events: none; animation: bubble-in .14s ease-out; }
+@keyframes bubble-in { from { opacity: 0; transform: translate(-50%, 4px) scale(.9); } }
+.np-art-wrap { position: relative; }
+.seek-ripple { position: absolute; top: 0; bottom: 0; width: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #fff; pointer-events: none; z-index: 3;
+  background: radial-gradient(circle at center, rgba(255,255,255,.22), rgba(255,255,255,0) 65%); animation: ripple 650ms ease-out forwards; }
+.seek-ripple.l { left: 0; border-radius: 12px 0 0 12px; } .seek-ripple.r { right: 0; border-radius: 0 12px 12px 0; }
+.seek-ripple .ic { width: 34px; height: 34px; filter: drop-shadow(0 2px 8px rgba(0,0,0,.5)); }
+.seek-ripple b { font-size: 15px; text-shadow: 0 2px 8px rgba(0,0,0,.6); }
+@keyframes ripple { 0% { opacity: 0; transform: scale(.9); } 20% { opacity: 1; transform: scale(1); } 100% { opacity: 0; } }
+
+/* ---------- Car Mode ---------- */
+#car { position: fixed; inset: 0; z-index: 90; background: #000; color: #fff; display: flex; flex-direction: column; justify-content: space-between;
+  padding: calc(var(--sat, 0px) + 18px) 22px calc(var(--sab, 0px) + 22px); opacity: 0; transform: translateY(24px); pointer-events: none;
+  transition: opacity .28s ease-out, transform .38s var(--ease, ease); }
+#car.open { opacity: 1; transform: none; pointer-events: auto; }
+.car-close { align-self: flex-start; width: 52px; height: 52px; border-radius: 26px; background: rgba(255,255,255,.12); color: #fff; display: grid; place-items: center; }
+.car-close .ic { width: 28px; height: 28px; }
+.car-top { display: flex; flex-direction: column; gap: 18px; align-items: flex-start; }
+.car-art { width: min(46vw, 34vh); border-radius: 14px; }
+.car-title { font: 800 clamp(30px, 8.5vw, 46px)/1.08 var(--font-d, system-ui); letter-spacing: -.02em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.car-artist { font: 600 clamp(20px, 5.5vw, 28px)/1.2 var(--font, system-ui); color: rgba(255,255,255,.65); margin-top: 6px; }
+.car-prog { height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; }
+.car-prog i { display: block; height: 100%; background: var(--accent, #fff); transform-origin: left; transform: scaleX(0); transition: transform .2s linear; }
+.car-ctl { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 14px; }
+.car-ctl button { height: min(26vw, 130px); border-radius: 28px; background: rgba(255,255,255,.1); color: #fff; display: grid; place-items: center; }
+.car-ctl button:active { background: rgba(255,255,255,.22); }
+.car-ctl .ic { width: 46%; height: 46%; max-width: 64px; max-height: 64px; }
+.car-ctl .car-play { background: #fff; color: #000; }
+.car-like { position: absolute; top: calc(var(--sat, 0px) + 18px); right: 22px; width: 52px; height: 52px; border-radius: 26px; background: rgba(255,255,255,.12); color: #fff; display: grid; place-items: center; }
+.car-like.on { color: var(--accent, #ff2d55); }
+.car-like .ic { width: 26px; height: 26px; }
+@media (orientation: landscape) and (max-height: 600px) {
+  #car { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr auto; column-gap: 28px; }
+  .car-close { grid-column: 1; } .car-top { grid-column: 1; grid-row: 2; flex-direction: row; align-items: center; } .car-art { width: 30vh; }
+  .car-prog { grid-column: 1 / -1; grid-row: 3; } .car-ctl { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+}
+.diag-dot { width: 12px; height: 12px; border-radius: 6px; flex: none; margin: 0 6px 0 4px; background: var(--text3); }
+.diag-dot.ok { background: #30d158; box-shadow: 0 0 10px rgba(48,209,88,.5); }
+.diag-dot.bad { background: #ff453a; }
+.diag-help p { margin: 0 0 10px; line-height: 1.45; }
+.diag-help .ok-tip { color: #30d158; font-weight: 600; }

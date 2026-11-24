@@ -10,7 +10,7 @@ import { installDemo, removeDemo } from './demo.js';
 import { sprite } from './ui/icons.js';
 import * as V from './ui/views.js';
 import { settingsView, bindSettings, eqPresetSheet, analyzeAll, APP_VERSION } from './ui/settings-view.js';
-import { initNowPlaying, openNP, closeNP, isOpen } from './ui/nowplaying.js';
+import { initNowPlaying, openNP, closeNP, isOpen, openCarMode } from './ui/nowplaying.js';
 import { initDual } from './ui/dual.js';
 import { getList, actionSheet, prompt, toast, confirmSheet, haptic, art } from './ui/components.js';
 import { plex } from './plex.js';
@@ -145,7 +145,8 @@ async function render({ keepScroll = false } = {}) {
   if (path !== currentPath) return; // navigated again meanwhile
   lastShown = path;
   // native-feeling page motion: push in from the right going deeper, slide back going up, cross-fade between tabs
-  const nav = changed && !keepScroll && prevPath ? navDirection(prevPath, path) : null;
+  let nav = changed && !keepScroll && prevPath ? navDirection(prevPath, path) : null;
+  if (swipeBack) { swipeBack = false; nav = null; } // the system swipe already showed the motion
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (nav && document.startViewTransition && !reduce && !document.hidden) {
     activeVT?.skipTransition?.();
@@ -157,7 +158,17 @@ async function render({ keepScroll = false } = {}) {
   }
   paint(path, res, { keepScroll, changed, prevScroll, fade: nav && !reduce });
 }
-let lastShown = null, activeVT = null;
+let lastShown = null, activeVT = null, appBack = 0, swipeBack = false;
+// Back/forward that the phone already animated itself (iOS edge swipe): don't animate a second time.
+// Only the app's own back button (or a link) gets our slide.
+let histSeq = 0;
+addEventListener('popstate', (e) => {
+  const traversal = e.state && e.state.vi != null; // going back/forward through history (new links have no state yet)
+  swipeBack = !!(traversal && (e.hasUAVisualTransition || performance.now() - appBack > 600));
+});
+function tagHistory() {
+  try { if (!history.state || history.state.vi == null) history.replaceState({ ...(history.state || {}), vi: ++histSeq }, ''); } catch (e) { /* */ }
+}
 function navDirection(from, to) {
   const a = from.split('/').filter(Boolean), b = to.split('/').filter(Boolean);
   const tabA = TAB_OF[a[0]] || 'home', tabB = TAB_OF[b[0]] || 'home';
@@ -169,6 +180,7 @@ function navDirection(from, to) {
 }
 const navStack = [];
 function paint(path, res, { keepScroll, changed, prevScroll, fade = false }) {
+  tagHistory();
   if (navStack.at(-2) === path) navStack.pop(); else if (navStack.at(-1) !== path) navStack.push(path);
   if (navStack.length > 30) navStack.shift();
   const v = view();
@@ -481,7 +493,7 @@ async function doAction(a, el, e) {
     case 'plex-signout': await plexSignOut(() => render({ keepScroll: false })); break;
     case 'plex-servers': loadServers(view()); break;
     case 'plex-sync': if (!plex.running) { plex.sync(); toast('Syncing with Plex…'); render({ keepScroll: true }); } break;
-    case 'back': if (history.length > 1) history.back(); else location.hash = '#/home'; break;
+    case 'back': appBack = performance.now(); if (history.length > 1) history.back(); else location.hash = '#/home'; break;
     case 'search-q': searchQ = d.q; render({ keepScroll: false }); break;
     case 'clear-q': searchQ = ''; render({ keepScroll: false }); break;
     case 'clear-recent': library.recentSearches = []; db.kv.set('recentSearches', []); render({ keepScroll: true }); break;
@@ -588,6 +600,7 @@ async function doAction(a, el, e) {
       break;
     }
     case 'force-refresh': await forceRefresh(); break;
+    case 'car-mode': if (engine.track) openCarMode(); else toast('Play something first'); break;
     case 'eq-preset': if (await eqPresetSheet()) render({ keepScroll: true }); break;
     default: break;
   }
@@ -636,7 +649,7 @@ function wireGlobal() {
   main().addEventListener('scroll', onScroll, { passive: true });
   addEventListener('hashchange', () => {
     const p = parseHash();
-    if (p === currentPath) return;
+    if (p === currentPath) { swipeBack = false; return; }
     if (isOpen() && !location.hash.endsWith('?np')) closeNP(true);
     render();
   });
@@ -759,7 +772,7 @@ async function boot() {
   applyTheme();
   settings.on('change', (k) => {
     if (['theme', 'accent', 'gridCols', '*'].includes(k)) applyTheme();
-    if (['albumSort', 'groupCompilations', 'showBadges', 'showBpm', 'gridCols', 'explicitPref', '*'].includes(k)) {
+    if (['albumSort', 'groupCompilations', 'showBadges', 'showBpmRows', 'gridCols', 'explicitPref', '*'].includes(k)) {
       if (k === 'groupCompilations' || k === 'explicitPref') library.build();
       if (!currentPath?.startsWith('settings')) rerender();
     }

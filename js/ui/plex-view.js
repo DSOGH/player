@@ -127,6 +127,8 @@ export function plexPage() {
     ${s ? group('Server', html`
       <div class="set-row"><span class="set-ic plex-ic">${plexLogo()}</span><div class="set-text"><span>${s.name}</span><small data-conn>${{ local: 'Connected on your network', remote: 'Connected remotely', relay: 'Connected via Plex Relay (limited speed)' }[plex.cfg.connKind] || 'Connected'}</small></div></div>
       <button class="set-row link" data-a="plex-servers"><div class="set-text"><span class="accent">Change Server…</span></div></button>`) : ''}
+    ${s ? html`<section class="set-group"><h3>Connection check</h3><div class="set-card" data-diag>${diagHtml()}</div>
+      <p class="set-foot">Shows every way this phone can reach your server. Run it at home on Wi-Fi and again on cellular.</p></section>` : ''}
     <section class="set-group" data-servers ${s ? 'hidden' : ''}><h3>Choose a server</h3><div class="set-card" data-server-list><div class="set-row"><div class="spinner"></div><div class="set-text"><span>Looking for your servers…</span></div></div></div></section>
     ${s ? html`<section class="set-group"><h3>Music libraries</h3><div class="set-card" data-sections><div class="set-row"><div class="spinner"></div></div></div></section>` : ''}
     ${s ? group('Sync', html`
@@ -136,6 +138,20 @@ export function plexPage() {
     `, 'Loves (♥) sync both ways. Plex playlists appear in your Library.') : ''}
     <div class="bottom-pad"></div>`,
     async after(root) {
+      if (s) {
+        const box = root.querySelector('[data-diag]');
+        const paint = () => { if (box.isConnected) box.innerHTML = diagHtml(); };
+        plex.on('diag', paint);
+        plex.on('connection', paint);
+        box.addEventListener('click', async (e) => {
+          if (!e.target.closest('[data-diag-run]')) return;
+          box.innerHTML = html`<div class="set-row"><div class="spinner"></div><div class="set-text"><span>Testing every route to your server…</span></div></div>`;
+          try { await plex.checkConnections(); } catch (er) { /* */ }
+          paint();
+          const conn = root.querySelector('[data-conn]');
+          if (conn) conn.textContent = { local: 'Connected on your network', remote: 'Connected remotely', relay: 'Connected via Plex Relay (limited speed)' }[plex.cfg.connKind] || 'Connected';
+        });
+      }
       if (!s) loadServers(root);
       else loadSections(root);
     },
@@ -196,3 +212,23 @@ export async function plexSignOut(after) {
 }
 
 export { PlexError };
+
+// Plain-language result of the connection check + exactly what to change
+function diagHtml() {
+  const d = plex.diag;
+  const run = html`<button class="set-row link" data-diag-run><span class="set-ic">${icon('wifi')}</span><div class="set-text"><span class="accent">${d ? 'Test again' : 'Test connection'}</span><small>${d ? `Last checked ${new Date(d.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Find out why it’s slow and how to fix it'}</small></div></button>`;
+  if (!d) return run;
+  const by = (k) => d.list.filter((x) => x.kind === k);
+  const st = (k) => { const l = by(k); if (!l.length) return null; const ok = l.filter((x) => x.ok).sort((a, b) => a.ms - b.ms)[0]; return ok ? { ok: true, ms: ok.ms } : { ok: false }; };
+  const local = st('local'), remote = st('remote'), relay = st('relay');
+  const row = (name, r, sub) => html`<div class="set-row"><span class="diag-dot ${r == null ? 'na' : r.ok ? 'ok' : 'bad'}"></span><div class="set-text"><span>${name}</span><small>${r == null ? 'Not offered by your server' : r.ok ? `Works · ${r.ms} ms${sub ? ' · ' + sub : ''}` : 'Doesn’t work from here'}</small></div></div>`;
+  const tips = [];
+  const onCell = navigator.connection?.type === 'cellular';
+  if (!remote?.ok) tips.push(html`<p><b>Turn on Remote Access in Plex.</b> On a computer open <b>app.plex.tv → Settings → (your server) → Remote Access</b> and press <b>Enable</b>. It has to say <b>“Fully accessible outside your network”</b>.</p>
+    <p>If it stays red: on your router, forward <b>TCP port 32400</b> to the computer/NAS running Plex (or turn on <b>UPnP</b>), then tick <b>“Manually specify public port”</b> = 32400 in Plex and press Apply.</p>
+    <p>Still red after that? Your internet provider is probably sharing one public address between customers (“CGNAT”) — ask them for a public IPv4 address. The other route is Tailscale on the server and the phone.</p>`);
+  if (local && !local.ok && !onCell) tips.push(html`<p><b>At home on Wi-Fi and “On your network” is red?</b> Your router (or Pi-hole/AdGuard) is blocking Plex’s secure local addresses. Allow the domain <b>plex.direct</b> in its “DNS rebinding protection” setting.</p>`);
+  if (remote?.ok || local?.ok) tips.unshift(html`<p class="ok-tip">A direct route works — the app uses it instead of the Relay.</p>`);
+  return html`${row('On your network', local, 'fastest')}${row('Direct over the internet', remote, 'full speed')}${row('Plex Relay', relay, 'speed-limited backup')}
+    ${tips.length ? html`<div class="help diag-help">${tips}</div>` : ''}${run}`;
+}

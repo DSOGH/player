@@ -50,7 +50,7 @@ export const DEFAULTS = {
   npBackground: 'animated',   // 'animated' | 'static' | 'plain'
   gridCols: 2,
   showBadges: true,
-  showBpm: true,
+  showBpmRows: true,
   showBpm: true,
   showNextTransition: true,
   haptics: true,
@@ -69,6 +69,13 @@ export const DEFAULTS = {
   visualizer: 'bars',         // 'bars' | 'off'
   waveform: true,             // waveform scrubber with DJ markers
   dualSwap: false,            // put the player on the left/top when unfolded
+  doubleTapSeek: true, // double-tap the left/right of the artwork to jump back/forward
+  seekStep: 15, // seconds
+  lockButtons: 'tracks', // 'tracks' | 'seek' — lock screen / CarPlay / headphone buttons
+  keepAwake: false, // keep the screen on while the player is open
+  autoLyrics: false, // open the player in lyrics view when a song has synced lyrics
+  carButton: true, // show the Car Mode button in the player menu
+  smartResume: true, // rewind a couple of seconds after a long pause
 };
 
 export const EQ_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];

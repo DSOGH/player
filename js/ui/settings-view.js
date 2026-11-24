@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.9.2';
+export const APP_VERSION = '1.10.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -42,7 +42,7 @@ function fmtNum(v) { return typeof v === 'number' ? (Number.isInteger(v) ? v : v
 
 // ---------- pages ----------
 export async function settingsView(page = '') {
-  const fn = { '': root, sources, plex: plexPage, source, playback, sound, library: libraryPage, appearance, storage, about }[page] || root;
+  const fn = { '': root, sources, plex: plexPage, source, playback, sound, library: libraryPage, appearance, storage, about, extras }[page] || root;
   return fn();
 }
 
@@ -60,6 +60,7 @@ async function root() {
       ${link('#/settings/sound', 'eq', 'Sound & EQ', settings.get('eqOn') ? EQ_NAMES[settings.get('eqPreset')] : 'EQ off')}
       ${link('#/settings/library', 'library', 'Library', `${library.size} songs`)}
       ${link('#/settings/appearance', 'palette', 'Appearance')}
+      ${link('#/settings/extras', 'sparkle', 'Extras', 'Gestures, Car Mode & more')}
       ${link('#/settings/storage', 'storage', 'Downloads & Storage')}
       ${link('#/settings/about', 'info', 'About & Help')}`)}
     ${group('', html`${button('rescan', 'refresh', scanner.running ? 'Scanning…' : 'Scan for New Music', { sub: await lastScanText() })}`)}
@@ -318,7 +319,7 @@ function appearance() {
     ${group('Library', html`
       ${seg('gridCols', 'Album grid', [[2, 'Large'], [3, 'Small']])}
       ${toggle('showBadges', 'Show quality badges', 'Lossless / Hi-Res Lossless')}
-      ${toggle('showBpm', 'Show BPM & key on songs', 'Measured once and saved on this phone')}
+      ${toggle('showBpmRows', 'Show BPM & key on songs', 'Measured once and saved on this phone')}
       ${toggle('showBpm', 'Show BPM in player')}
       ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
     `)}
@@ -369,6 +370,31 @@ async function storage() {
       ${button('export', 'download', 'Export settings, playlists, likes & BPM')}
       ${button('import', 'refresh', 'Import backup…')}
       ${button('reset-settings', 'refresh', 'Reset all settings', { danger: true })}
+    `)}
+    <div class="bottom-pad"></div>`,
+  };
+}
+
+function extras() {
+  return {
+    title: 'Extras',
+    html: html`${pageHeader('Extras', { back: true })}
+    ${group('Gestures', html`
+      ${toggle('doubleTapSeek', 'Double-tap to jump', 'Double-tap the left or right side of the artwork to jump back or forward')}
+      ${seg('seekStep', 'Jump length', [[10, '10s'], [15, '15s'], [30, '30s']])}
+      ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}
+    `)}
+    ${group('Lock screen, CarPlay & headphones', html`
+      ${seg('lockButtons', 'Side buttons', [['tracks', 'Skip songs'], ['seek', 'Jump in song']], 'What the ⏮ ⏭ buttons do outside the app')}
+    `)}
+    ${group('Player', html`
+      ${toggle('autoLyrics', 'Open lyrics automatically', 'Shows time-synced lyrics as soon as a song that has them starts')}
+      ${toggle('keepAwake', 'Keep screen on', 'While the player is open and music is playing')}
+      ${toggle('smartResume', 'Smart resume', 'After a pause longer than 10 minutes, start 3 seconds earlier so you don’t lose your place')}
+    `)}
+    ${group('Car Mode', html`
+      ${toggle('carButton', 'Car Mode in player menu', 'Huge buttons and big text for the road — the screen stays on')}
+      ${button('car-mode', 'car', 'Open Car Mode now')}
     `)}
     <div class="bottom-pad"></div>`,
   };

@@ -119,7 +119,12 @@ class Engine extends Emitter {
   get other() { return this.decks[1 - this.ai]; }
   get track() { return this.cur.track; }
   get enhanced() { return !!this.ctx; }
-  get currentTime() { return this.cur.el.currentTime || 0; }
+  // while a seek is still loading, report where you asked to go (the slider/clock jump there immediately)
+  get currentTime() {
+    const d = this.cur;
+    if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 1200 && (d.el.seeking || performance.now() - this._seekAt < 250)) return this._seekTo;
+    return d.el.currentTime || 0;
+  }
   get duration() { return this.durationOf(this.cur); }
   durationOf(d) {
     const x = d.el.duration;
@@ -477,6 +482,12 @@ class Engine extends Emitter {
       // iOS/CarPlay take "Now Playing" from whichever element just started: re-send the song info
       this.updateMediaSession();
     });
+    el.addEventListener('seeked', () => {
+      if (el !== d.el) return;
+      if (this._seekDeck === d) this._seekTo = null;
+      if (d === this.cur) { this.emit('time'); this.updatePosition(); this.emit('buffering', false); }
+    });
+    el.addEventListener('seeking', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
     el.addEventListener('waiting', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
     el.addEventListener('pause', () => {
       // paused by the OS (another app took audio focus, headphones unplugged...)
@@ -661,6 +672,11 @@ class Engine extends Emitter {
     }
     this.playing = true;
     const d = this.cur;
+    // coming back after a long break: pick up a few seconds earlier so you don't lose your place
+    if (settings.get('smartResume') && this._pausedAt && Date.now() - this._pausedAt > 10 * 60000 && !this.transition && d.el.currentTime > 8) {
+      try { d.el.currentTime = d.el.currentTime - 3; } catch (e) { /* */ }
+    }
+    this._pausedAt = 0;
     if (settings.get('pauseFade') && this.ctx) { this.setFade(d, 0); this.fade(d, 1, 0.25, { shape: 'equalpower' }); }
     else this.setFade(d, 1);
     try { await d.el.play(); } catch (e) { if (e.name === 'NotAllowedError') { this.playing = false; this.emit('state'); } /* load failures are handled by recover() */ }
@@ -670,6 +686,7 @@ class Engine extends Emitter {
   }
   async pause() {
     this.playing = false;
+    this._pausedAt = Date.now();
     this.emit('state');
     const ds = [this.cur, this.transition?.from].filter(Boolean);
     clearTimeout(this.planTimer); this.planTimer = null;
@@ -700,11 +717,46 @@ class Engine extends Emitter {
     this.finishTransition();
     const d = this.cur;
     if (!d.track) return;
-    try { d.el.currentTime = clamp(t, 0, Math.max(0, this.duration - 0.25)); } catch (e) { /* */ }
+    const to = clamp(t, 0, Math.max(0, this.duration - 0.25));
+    this._seekTo = to; this._seekAt = performance.now(); this._seekDeck = d; this._seekRetried = false;
+    // jumped past where the DJ mix was going to start: don't mix away right away — let you hear the
+    // part you picked, then a short crossfade into the next song at the very end
+    const p = this.plan;
+    this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 3);
+    this._lateGo = false;
+    if (p && !this.lateSeek) p.aRamped = false;
+    if (Math.abs(d.el.playbackRate - 1) > 0.001 && !this.transition) { clearInterval(d.rateTimer); d.el.playbackRate = 1; }
+    try {
+      d.el.currentTime = to;
+    } catch (e) { /* not seekable yet: retry once it is */
+      d.el.addEventListener('loadedmetadata', () => { try { d.el.currentTime = to; } catch (er) { /* */ } }, { once: true });
+    }
     clearTimeout(this.planTimer); this.planTimer = null;
+    if (this.playing && d.el.paused) d.el.play().catch(() => {});
     this.emit('time');
     this.updatePosition();
     this.saveState();
+  }
+  // a seek that hangs (stream stalled on a slow connection): reopen the song right at that spot
+  checkSeek(d) {
+    if (this._seekTo == null || this._seekDeck !== d) return;
+    const age = performance.now() - this._seekAt;
+    const el = d.el;
+    // landed (or the browser reports a position near the target): done
+    if (!el.seeking || Math.abs(el.currentTime - this._seekTo) < 1 || age > 15000) {
+      if (age > 250) this._seekTo = null;
+      return;
+    }
+    // only a song that should be playing, is stuck seeking, and has nothing to play gets reopened at that spot
+    if (!this._seekRetried && this.playing && age > 6000 && el.readyState < 2) {
+      this._seekRetried = true;
+      const to = this._seekTo, t = d.track;
+      const att = d.attempt || 0;
+      d.load(t, to, att > 0 ? (el.currentSrc || '').split('#')[0] || null : null);
+      d.attempt = att;
+      this._seekTo = to; this._seekAt = performance.now(); this._seekDeck = d;
+      d.el.play().catch(() => {});
+    }
   }
   jumpTo(i) { this.playIndex(i, { mode: this.playing && settings.get('skipFade') ? 'quick' : 'cut' }); }
 
@@ -770,6 +822,7 @@ class Engine extends Emitter {
 
   afterTrackChange(transitionPlan = null) {
     const t = this.track;
+    this.lateSeek = false; this._lateGo = false;
     this.emit('track', t, transitionPlan);
     this.emit('state');
     this.emit('queue');
@@ -1273,6 +1326,7 @@ class Engine extends Emitter {
   tick() {
     const d = this.cur;
     if (!d.track) return;
+    this.checkSeek(d);
     this.syncPlayState(d);
     this.emit('time');
     if (this.playing && !d.el.paused) {
@@ -1299,6 +1353,14 @@ class Engine extends Emitter {
     const t = d.el.currentTime;
     const remaining = dur - t;
     if (!this.upcoming && remaining < 90) this.prepareNext();
+    if (this.lateSeek) {
+      if (remaining < 1.6 && !this._lateGo) {
+        this._lateGo = true;
+        const i = this.upcoming?.index ?? this.nextIndex(true);
+        if (i >= 0) this.playIndex(i, { mode: 'quick' });
+      }
+      return;
+    }
     const pl = this.plan;
     if (pl && pl.aRate && Math.abs(pl.aRate - 1) > 0.001 && !pl.aRamped && t >= pl.mixStart - (pl.preroll || 4)) {
       pl.aRamped = true;
@@ -1317,7 +1379,7 @@ class Engine extends Emitter {
     const ct = d.el.currentTime;
     const moving = !d.el.paused && ct > (this._lastCt ?? -1) + 0.05;
     this._lastCt = ct;
-    if (this._pausing || d.switching || this.transition) { this._stuck = 0; return; }
+    if (this._pausing || d.switching || this.transition || d.el.seeking) { this._stuck = 0; return; }
     if (!this.playing && moving) {
       this.playing = true;
       this.emit('state');
@@ -1343,6 +1405,7 @@ class Engine extends Emitter {
     if (['eqOn', 'limiter'].includes(k)) { this.rewire(); this.decks.forEach((d) => this.applyDeckGain(d, true)); }
     if (['eqPreset', 'eqBands', 'eqOn'].includes(k)) this.applyEq();
     if (k === 'mono') this.applyMono();
+    if (k === 'lockButtons' || k === 'seekStep') this.applyLockButtons();
     if (['leveling', 'levelPreamp', 'autoLevel', 'limiter', '*'].includes(k)) this.decks.forEach((d) => d.track && this.applyDeckGain(d, true));
     if (k === 'djStyle' && this.upcoming && settings.get('djStyle') !== 'beats') {
       const t = this.upcoming.track;
@@ -1389,13 +1452,26 @@ class Engine extends Emitter {
       set('play', () => this.play());
       set('pause', () => this.pause());
       set('stop', () => this.pause());
-      set('previoustrack', () => this.prev());
-      set('nexttrack', () => this.next());
       set('seekto', (e) => this.seek(e.seekTime));
-      set('seekbackward', (e) => this.seek(this.currentTime - (e.seekOffset || 10)));
-      set('seekforward', (e) => this.seek(this.currentTime + (e.seekOffset || 10)));
+      this.applyLockButtons();
     }
     this.updatePosition();
+  }
+  // Lock screen / CarPlay / headphones: skip songs (default) or jump back/forward inside the song
+  applyLockButtons() {
+    if (!('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+    const set = (a, f) => { try { ms.setActionHandler(a, f); } catch (e) { /* unsupported */ } };
+    const step = settings.get('seekStep') || 15;
+    if (settings.get('lockButtons') === 'seek') {
+      set('previoustrack', null); set('nexttrack', null);
+      set('seekbackward', (e) => this.seek(this.currentTime - (e.seekOffset || step)));
+      set('seekforward', (e) => this.seek(this.currentTime + (e.seekOffset || step)));
+    } else {
+      set('seekbackward', null); set('seekforward', null);
+      set('previoustrack', () => this.prev());
+      set('nexttrack', () => this.next());
+    }
   }
   // After one element stops, tell the OS again that we're playing, with the exact position & speed
   reassertNowPlaying() {

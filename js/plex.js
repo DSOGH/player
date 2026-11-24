@@ -63,6 +63,8 @@ class Plex extends Emitter {
 
   async load() {
     this.cfg = (await db.kv.get('plex')) || null;
+    this.startUpgradeLoop();
+    if (this.connected && this.cfg.connKind === 'relay') setTimeout(() => this.checkConnections().catch(() => {}), 4000);
     // covers load straight from the Plex server (no CORS needed for <img>)
     setArtResolver((id, size) => {
       const th = library.plexThumbs?.get(id);
@@ -157,29 +159,86 @@ class Plex extends Emitter {
   }
   // Try every secure address for the server at once and use the first that answers
   // (local network first, then remote, then Plex Relay).
-  async pickConnection(server) {
+  async pickConnection(server, { record = true } = {}) {
     const http = location.protocol === 'http:';
     const conns = server.connections.filter((c) => http || c.uri.startsWith('https:'));
     if (!conns.length) throw new PlexError('nohttps', 'This server has no secure connection. In Plex settings, set “Secure connections” to Preferred.');
     const rank = (c) => (c.relay ? 2 : c.local ? 0 : 1);
     conns.sort((a, b) => rank(a) - rank(b));
     const ctrl = new AbortController();
+    const diag = conns.map((c) => ({ uri: c.uri, kind: c.relay ? 'relay' : c.local ? 'local' : 'remote', ok: null, ms: 0 }));
     const tries = conns.map((c, i) => (async () => {
-      await sleep(rank(c) * 600 + i * 40);
+      await sleep(rank(c) * 400 + i * 40);
       if (ctrl.signal.aborted) throw new Error('aborted');
-      const r = await fetch(`${c.uri}/identity?X-Plex-Token=${encodeURIComponent(server.token)}`, {
-        headers: { Accept: 'application/json' }, signal: AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(8000)]) : ctrl.signal,
-      });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return c;
+      const t0 = performance.now();
+      try {
+        const r = await fetch(`${c.uri}/identity?X-Plex-Token=${encodeURIComponent(server.token)}`, {
+          headers: { Accept: 'application/json' }, signal: AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(8000)]) : ctrl.signal,
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        diag[i].ok = true; diag[i].ms = Math.round(performance.now() - t0);
+        return c;
+      } catch (e) {
+        if (!ctrl.signal.aborted) { diag[i].ok = false; diag[i].ms = Math.round(performance.now() - t0); }
+        throw e;
+      }
     })());
+    const direct = tries.filter((_, i) => !conns[i].relay);
     try {
-      const c = await Promise.any(tries);
-      ctrl.abort();
+      let c = await Promise.any(tries);
+      // the Relay is speed-limited: if it answered first, give a direct route a little longer to answer
+      if (c.relay && direct.length) {
+        try { c = await Promise.race([Promise.any(direct), sleep(3500).then(() => { throw new Error('slow'); })]); } catch (e) { /* stay on relay */ }
+      }
+      // give the others a moment to report, for the connection check in Settings
+      setTimeout(() => ctrl.abort(), 2500);
+      if (record) { this.diag = { at: Date.now(), list: diag }; this.emit('diag'); }
       return c;
     } catch (e) {
+      if (record) { this.diag = { at: Date.now(), list: diag }; this.emit('diag'); }
       throw new PlexError('unreachable', `Couldn’t reach “${server.name}”. Make sure it’s on and Remote Access is enabled in Plex.`);
     }
+  }
+  // Full connection check for Settings: tries every route and waits for all of them
+  async checkConnections() {
+    if (!this.connected) return null;
+    const s = (await this.servers()).find((x) => x.id === this.cfg.server.id);
+    if (!s) return null;
+    const list = await Promise.all(s.connections.filter((c) => location.protocol === 'http:' || c.uri.startsWith('https:')).map(async (c) => {
+      const t0 = performance.now();
+      let ok = false;
+      try { ok = (await fetch(`${c.uri}/identity?X-Plex-Token=${encodeURIComponent(s.token)}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) })).ok; } catch (e) { /* */ }
+      return { uri: c.uri, kind: c.relay ? 'relay' : c.local ? 'local' : 'remote', ok, ms: Math.round(performance.now() - t0) };
+    }));
+    this.diag = { at: Date.now(), list };
+    this.emit('diag');
+    // switch to the best working route right away
+    const best = ['local', 'remote', 'relay'].map((k) => list.filter((x) => x.ok && x.kind === k).sort((a, b) => a.ms - b.ms)[0]).find(Boolean);
+    if (best && best.uri.replace(/\/$/, '') !== this.cfg.base) {
+      this.cfg.base = best.uri.replace(/\/$/, '');
+      this.cfg.connKind = best.kind;
+      await this.save();
+      this.emit('connection');
+    }
+    return this.diag;
+  }
+  // While stuck on the Relay, keep looking for a direct route in the background
+  startUpgradeLoop() {
+    clearInterval(this._upgrade);
+    this._upgrade = setInterval(async () => {
+      if (!this.connected || this.cfg.connKind !== 'relay' || document.hidden) return;
+      try {
+        const s = (await this.servers()).find((x) => x.id === this.cfg.server.id);
+        if (!s) return;
+        const c = await this.pickConnection({ ...s, connections: s.connections.filter((x) => !x.relay) }, { record: false });
+        if (c && !c.relay) {
+          this.cfg.base = c.uri.replace(/\/$/, '');
+          this.cfg.connKind = c.local ? 'local' : 'remote';
+          await this.save();
+          this.emit('connection');
+        }
+      } catch (e) { /* still no direct route */ }
+    }, 90000);
   }
   async connect(server) {
     const c = await this.pickConnection(server);

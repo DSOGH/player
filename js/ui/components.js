@@ -64,7 +64,7 @@ export function formatLine(t) {
 
 // ---------- rows & cards ----------
 export function bpmChip(t) {
-  if (!settings.get('showBpm')) return '';
+  if (!settings.get('showBpmRows')) return '';
   const bpm = library.bpmOf(t);
   if (!bpm) return '';
   const k = library.analysis.get(t.id)?.camelot;
