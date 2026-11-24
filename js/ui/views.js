@@ -4,6 +4,7 @@ import { library } from '../library.js';
 import { settings } from '../settings.js';
 import { engine } from '../engine.js';
 import { scanner } from '../scanner.js';
+import { artUrl } from '../art.js';
 import { plex } from '../plex.js';
 import { plexLogo } from './plex-view.js';
 import {
@@ -73,7 +74,10 @@ export function home() {
           <img class="welcome-icon" src="./icons/icon-192.png" alt="">
           <h1>Player</h1>
           <p>All your music. Beautiful transitions.<br>Lossless, from your own server.</p>
-          ${busy ? scanBanner() : plex.signedIn && !plex.connected ? html`
+          ${busy ? scanBanner() : plex.connected ? html`
+            <div class="welcome-status">${plexLogo()}<div><b>Signed in as ${plex.user?.name || 'you'}</b><span>${plex.progress?.phase === 'Error' ? plex.progress.error : `Server: ${plex.cfg.server.name}`}</span></div></div>
+            <button class="btn pill primary big plex-btn" data-a="plex-sync">${icon('refresh')}${plex.progress?.phase === 'Error' ? 'Try again' : 'Load my music'}</button>
+            <a class="btn pill big glass" href="#/settings/plex">Plex settings</a>` : plex.signedIn ? html`
             <a class="btn pill primary big plex-btn" href="#/settings/plex">${plexLogo()}Choose your Plex server</a>` : html`
             <button class="btn pill primary big plex-btn" data-a="plex-signin">${plexLogo()}Sign in with Plex</button>
             <a class="btn pill big glass" href="#/settings/source">${icon('server')}Connect a NAS folder</a>
@@ -150,7 +154,7 @@ export function libraryView(tab = 'albums') {
     body = list.length ? html`<div class="lib-count">Recently played</div>${lazyRows(list, key, { showAlbum: true })}`
       : empty('timer', 'Nothing played yet', 'Songs you listen to show up here.');
   } else if (tab === 'downloaded') {
-    const list = [...library.tracks.values()].filter((t) => library.offline.has(t.url));
+    const list = [...library.tracks.values()].filter((t) => library.isOffline(t));
     const key = regList(list, { type: 'downloaded', name: 'Downloaded' });
     body = list.length ? html`${playButtons(key)}${lazyRows(list, key, { showAlbum: true })}`
       : empty('download', 'Nothing downloaded', 'Download albums or playlists to play them without your NAS — great for the car or a flight.');
@@ -162,7 +166,7 @@ const GENRE_COLORS = ['#e13300', '#7358ff', '#1e3264', '#e8115b', '#148a08', '#b
 function genreTile(g, i) {
   const a = library.album([...g.albums][0]);
   return html`<a class="genre-tile" href="#/genre/${encodeURIComponent(g.id)}" style="background:${GENRE_COLORS[i % GENRE_COLORS.length]}">
-    <span>${g.name}</span>${a?.artId ? html`<img src="./__art/${a.artId}" alt="" loading="lazy">` : ''}
+    <span>${g.name}</span>${a?.artId ? html`<img src="${artUrl(a.artId, 200)}" alt="" loading="lazy">` : ''}
   </a>`;
 }
 
@@ -174,7 +178,7 @@ export function playlistArt(p, cls = '') {
     if (ids.length >= 4) break;
   }
   if (ids.length < 4) return art(ids[0], cls);
-  return html`<div class="art mosaic ${cls}">${ids.map((id) => html`<img src="./__art/${id}" alt="" loading="lazy">`)}</div>`;
+  return html`<div class="art mosaic ${cls}">${ids.map((id) => html`<img src="${artUrl(id, 300)}" alt="" loading="lazy">`)}</div>`;
 }
 
 // ---------- album ----------
@@ -190,7 +194,7 @@ export function albumView(id) {
     const extra = t.artist !== a.artist && a.artist !== '' ? '' : '';
     return html`${head}${trackRow(t, i, key, { num: true, extra })}`;
   });
-  const allOff = a.tracks.every((t) => library.offline.has(t.url));
+  const allOff = a.tracks.every((t) => library.isOffline(t));
   const more = library.artist(a.artistId);
   const others = more ? library.artistAlbums(more).filter((x) => x.id !== a.id) : [];
   const first = a.tracks[0];
@@ -225,7 +229,7 @@ export function artistView(id) {
     title: ar.name,
     html: html`${pageHeader('', { back: true })}
     <div class="artist-hero">
-      ${ar.artId ? html`<div class="artist-bg" style="background-image:url('./__art/${ar.artId}')"></div>` : ''}
+      ${ar.artId ? html`<div class="artist-bg" style="background-image:url('${artUrl(ar.artId, 300)}')"></div>` : ''}
       ${art(ar.artId, 'artist-avatar round', ar.name)}
       <h1 class="hero-title">${ar.name}</h1>
       <div class="hero-meta">${albums.length} album${albums.length === 1 ? '' : 's'} · ${all.length} songs</div>

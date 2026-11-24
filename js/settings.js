@@ -3,8 +3,9 @@ import { Emitter } from './util.js';
 
 export const DEFAULTS = {
   // Playback
-  transition: 'smart',        // 'off' | 'crossfade' | 'smart'
-  crossfadeSec: 6,
+  transition: 'smart',        // 'off' | 'crossfade' | 'smart' (DJ Mix)
+  crossfadeSec: 8,
+  djEffects: true,            // bass swaps, filter sweeps, echo outs in DJ Mix
   fadeCurve: 'equalpower',    // 'equalpower' | 'linear' | 'scurve'
   gaplessAlbums: true,        // never crossfade consecutive album tracks
   skipSilence: true,          // trim leading/trailing silence

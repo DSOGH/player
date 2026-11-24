@@ -14,7 +14,8 @@ const PREFETCH_KEEP = 6;
 
 export function trackSrc(t) {
   if (t.demo) return t.url;
-  if (t.plex) return nasUrl(plex.connected ? plex.partUrl(t) : t.url, t.size, t.url);
+  // Plex: stream straight from the server (the service worker serves it from cache when downloaded)
+  if (t.plex) return plex.connected ? plex.partUrl(t) : library.cacheKey(t);
   return nasUrl(t.url, t.size);
 }
 export function isAnalyzed(t) {
@@ -30,7 +31,7 @@ function networkOk() {
 
 // Download a track fully and keep it in the "prefetch" cache so playback starts instantly.
 export async function fetchTrackBuffer(t) {
-  const key = t.demo ? new URL(t.url, location.href).href : t.url;
+  const key = library.cacheKey(t);
   for (const name of ['offline-tracks', 'prefetch']) {
     const c = await caches.open(name);
     const hit = await c.match(key);
@@ -45,6 +46,7 @@ export async function fetchTrackBuffer(t) {
       await c.put(key, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Content-Length': String(blob.size) } }));
       const ks = await c.keys();
       for (let i = 0; i < ks.length - PREFETCH_KEEP; i++) await c.delete(ks[i]);
+      navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' });
     } catch (e) { /* quota */ }
   }
   return blob.arrayBuffer();

@@ -3,6 +3,7 @@ import { html, raw, esc, icon, fmtTime, $ } from '../util.js';
 import { library } from '../library.js';
 import { settings } from '../settings.js';
 import { engine } from '../engine.js';
+import { artUrl } from '../art.js';
 
 // ---------- lists registry (so a tapped row knows what to queue) ----------
 const lists = new Map();
@@ -22,7 +23,8 @@ export function haptic(ms = 8) {
 // ---------- art ----------
 export function art(id, cls = '', alt = '') {
   if (!id) return html`<div class="art ${cls} art-empty">${icon('note')}</div>`;
-  return html`<div class="art ${cls}"><img src="./__art/${encodeURIComponent(id)}" alt="${alt}" loading="lazy" decoding="async" onerror="this.parentNode.classList.add('art-empty');this.remove()"></div>`;
+  const big = /hero|np-art|card|top-art|avatar/.test(cls);
+  return html`<div class="art ${cls}"><img src="${artUrl(id, big ? 640 : 200)}" alt="${alt}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('art-empty');this.remove()"></div>`;
 }
 
 export function badges(t, { compact = false } = {}) {
@@ -48,7 +50,7 @@ export function formatLine(t) {
 export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum = false, extra = '' } = {}) {
   const playing = engine.track?.id === t.id;
   const liked = library.likes.has(t.id);
-  const off = library.offline.has(t.url);
+  const off = library.isOffline(t);
   return html`<div class="row track${playing ? ' playing' : ''}" data-a="play-list" data-list="${listKey}" data-i="${i}" data-tid="${t.id}">
     ${num ? html`<div class="num">${playing ? html`<span class="eqbars"><i></i><i></i><i></i></span>` : t.track || ''}</div>` : ''}
     ${showArt && !num ? art(t.artId, 'sm') : ''}

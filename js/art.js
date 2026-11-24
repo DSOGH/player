@@ -11,7 +11,13 @@ export async function loadKnown() {
   knownLoaded = true;
 }
 export const hasArt = (id) => known.has(id);
-export const artUrl = (id) => (id ? `./__art/${id}` : '');
+// Sources can supply their own artwork URLs (Plex serves covers directly from your server).
+let resolver = null;
+export function setArtResolver(fn) { resolver = fn; }
+export function artUrl(id, size = 640) {
+  if (!id) return '';
+  return (resolver && resolver(id, size)) || `./__art/${encodeURIComponent(id)}`;
+}
 
 async function toBitmap(blob) {
   try { return await createImageBitmap(blob); } catch (e) {
@@ -102,7 +108,9 @@ export async function artColors(id) {
     // artwork fetched lazily (e.g. from Plex): measure its colors once
     try {
       const img = new Image();
-      img.src = artUrl(id);
+      const u = artUrl(id, 64);
+      if (/^https?:/.test(u)) img.crossOrigin = 'anonymous';
+      img.src = u;
       await img.decode();
       const sm = canvas(24, 24);
       const ctx = sm.getContext('2d', { willReadFrequently: true });
@@ -110,6 +118,7 @@ export async function artColors(id) {
       c = palette(ctx, 24, 24);
       rec = await db.get('art', id);
       if (rec) { rec.colors = c; await db.put('art', rec); }
+      else await db.put('art', { id, colors: c, src: null });
     } catch (e) { c = null; }
   }
   colorCache.set(id, c);

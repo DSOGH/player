@@ -5,7 +5,7 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.0';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -19,7 +19,8 @@ const SHELL = [
 importScripts('./js/demo-synth.js');
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
+  // cache:'reload' bypasses the browser's HTTP cache so an update never mixes old and new files
+  e.waitUntil(caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).catch(() => {}));
   self.skipWaiting();
 });
 self.addEventListener('activate', (e) => {
@@ -71,8 +72,33 @@ async function idbPut(store, val) {
     q.onerror = () => rej(q.error);
   });
 }
+// ---- downloaded / preloaded Plex songs (served when the player asks the Plex server for them) ----
+let plexKeys = null, plexServerId = null;
+async function loadPlexKeys() {
+  const set = new Set();
+  for (const name of ['offline-tracks', 'prefetch']) {
+    try { for (const r of await (await caches.open(name)).keys()) if (r.url.includes('/__pc/')) set.add(r.url); } catch (e) { /* */ }
+  }
+  plexKeys = set;
+  try { plexServerId = (await getPlex()).server?.id || null; } catch (e) { plexServerId = null; }
+}
+loadPlexKeys();
+const scopeBase = () => self.registration.scope;
+function plexKeyFor(url) {
+  if (!plexServerId) return null;
+  return `${scopeBase()}__pc/${plexServerId}${url.pathname}`;
+}
+async function fromCachesByKey(key, req) {
+  for (const name of ['offline-tracks', 'prefetch']) {
+    const hit = await (await caches.open(name)).match(key);
+    if (hit) return blobResponse(await hit.blob(), req, hit.headers.get('content-type') || 'audio/mpeg');
+  }
+  return null;
+}
+
 self.addEventListener('message', (e) => {
-  if (e.data?.type === 'config-changed') { cfg = null; plexCfg = null; }
+  if (e.data?.type === 'cache-changed') loadPlexKeys();
+  if (e.data?.type === 'config-changed') { cfg = null; plexCfg = null; loadPlexKeys(); }
   if (e.data?.type === 'skip-waiting') self.skipWaiting();
 });
 
@@ -189,24 +215,38 @@ async function demo(req, url) {
   return blobResponse(blob, req, 'audio/wav');
 }
 
+// App files: network first (always the latest version), falling back to the cache when offline/slow.
 async function shell(req) {
   const cache = await caches.open(SHELL_CACHE);
-  const hit = await cache.match(req, { ignoreSearch: true });
-  const net = fetch(req).then((r) => {
+  try {
+    const r = await Promise.race([
+      fetch(req, { cache: 'no-cache' }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 3500)),
+    ]);
     if (r.ok && r.type === 'basic') cache.put(req, r.clone());
-    return r;
-  }).catch(() => null);
-  if (hit) return hit;
-  const r = await net;
-  if (r) return r;
-  if (req.mode === 'navigate') return (await cache.match('./index.html')) || new Response('Offline', { status: 503 });
-  return new Response(null, { status: 504 });
+    if (r.ok) return r;
+    throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    const hit = await cache.match(req, { ignoreSearch: true });
+    if (hit) return hit;
+    if (req.mode === 'navigate') return (await cache.match('./index.html')) || new Response('Offline', { status: 503 });
+    return fetch(req).catch(() => new Response(null, { status: 504 }));
+  }
 }
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin) {
+    // a Plex song that's downloaded or preloaded → play it from the device
+    if (url.pathname.startsWith('/library/parts/') && e.request.method === 'GET') {
+      const key = plexKeyFor(url);
+      if (key && plexKeys?.has(key)) e.respondWith(fromCachesByKey(key, e.request).then((r) => r || fetch(e.request)));
+      else if (!self.navigator.onLine && key) e.respondWith(fromCachesByKey(key, e.request).then((r) => r || new Response(null, { status: 503 })));
+    }
+    return;
+  }
   const p = url.pathname;
+  if (p.includes('/__pc/')) return e.respondWith(fromCachesByKey(url.href, e.request).then((r) => r || new Response(null, { status: 503 })));
   if (p.endsWith('/__nas')) return e.respondWith(nas(e.request, url));
   if (p.includes('/__art/')) return e.respondWith(art(decodeURIComponent(p.split('/__art/')[1])));
   if (p.includes('/__demo/')) return e.respondWith(demo(e.request, url));

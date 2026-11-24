@@ -11,7 +11,7 @@ import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
 import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -49,7 +49,7 @@ async function root() {
   const src = await loadSource();
   const demo = await db.kv.get('demo');
   const srcLabel = plex.connected ? `Plex · ${plex.cfg.server.name}` : plex.signedIn ? 'Plex · choose server' : src?.url ? new URL(src.url).host : demo ? 'Demo library' : 'Not connected';
-  const modeLabel = { smart: 'Smart', crossfade: `Crossfade ${settings.get('crossfadeSec')}s`, off: 'Gapless' }[settings.get('transition')];
+  const modeLabel = { smart: 'DJ Mix', crossfade: `Crossfade ${settings.get('crossfadeSec')}s`, off: 'Gapless' }[settings.get('transition')];
   return {
     title: 'Settings',
     html: html`${pageHeader('Settings')}
@@ -186,9 +186,10 @@ function playback() {
     title: 'Playback',
     html: html`${pageHeader('Playback', { back: true })}
     ${group('Transitions', html`
-      ${seg('transition', 'Between songs', [['smart', 'Smart'], ['crossfade', 'Crossfade'], ['off', 'Gapless']],
-        { smart: 'Reads each song’s intro & outro to pick the best mix — blends fade-outs, trims silence, keeps albums gapless, and beat-matches when tempos line up.', crossfade: 'Always crossfade for a fixed time.', off: 'No overlap — songs play back-to-back.' }[tm])}
-      ${slider('crossfadeSec', tm === 'smart' ? 'Max mix length' : 'Crossfade length', 1, 12, 0.5, 's')}
+      ${seg('transition', 'Between songs', [['smart', 'DJ Mix'], ['crossfade', 'Crossfade'], ['off', 'Gapless']],
+        { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings; and the next song slides under natural fade-outs. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
+      ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
+      ${tm === 'smart' ? toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)') : ''}
       ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
       ${toggle('gaplessAlbums', 'Gapless albums', 'Never crossfade between consecutive tracks of the same album (live albums, DJ mixes, concept albums)')}
       ${toggle('skipSilence', 'Trim silence', 'Skip dead air at the start and end of songs')}
@@ -327,7 +328,7 @@ function appearance() {
 async function storage() {
   let usage = 0, quota = 0;
   try { const e = await navigator.storage.estimate(); usage = e.usage || 0; quota = e.quota || 0; } catch (e) { /* */ }
-  const dl = [...library.tracks.values()].filter((t) => library.offline.has(t.url));
+  const dl = [...library.tracks.values()].filter((t) => library.isOffline(t));
   const dlSize = dl.reduce((s, t) => s + (t.size || 0), 0);
   const persisted = await navigator.storage?.persisted?.();
   return {

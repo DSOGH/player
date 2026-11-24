@@ -43,6 +43,12 @@ class Library extends Emitter {
     this.build();
   }
 
+  // Cache key for downloads/preloads (Cache API needs an http(s) URL; Plex addresses change, so use a stable one)
+  cacheKey(t) {
+    if (t.plex) return new URL(`./__pc/${t.plex.server}${t.plex.part}`, location.href).href;
+    return t.demo ? new URL(t.url, location.href).href : t.url;
+  }
+  isOffline(t) { return this.offline.has(this.cacheKey(t)); }
   async refreshOffline() {
     try {
       const c = await caches.open('offline-tracks');
@@ -104,6 +110,8 @@ class Library extends Emitter {
       for (const id of ar.albums) ar.appears.delete(id);
       if (!ar.artId) { const first = albums.get([...ar.appears][0]); ar.artId = first?.artId || null; }
     }
+    this.plexThumbs = new Map();
+    for (const t of this.tracks.values()) if (t.plexThumb && t.artId) this.plexThumbs.set(t.artId, t.plexThumb);
     const genres = new Map();
     for (const t of this.tracks.values()) {
       for (const g of String(t.genre || '').split(/[;,/]/).map((s) => s.trim()).filter(Boolean)) {

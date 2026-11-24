@@ -5,7 +5,7 @@ import * as db from './db.js';
 import { Emitter, hash, sleep } from './util.js';
 import { library } from './library.js';
 import { settings } from './settings.js';
-import { loadKnown } from './art.js';
+import { loadKnown, setArtResolver } from './art.js';
 
 const PRODUCT = 'Player';
 const VERSION = '1.1.0';
@@ -63,6 +63,11 @@ class Plex extends Emitter {
 
   async load() {
     this.cfg = (await db.kv.get('plex')) || null;
+    // covers load straight from the Plex server (no CORS needed for <img>)
+    setArtResolver((id, size) => {
+      const th = library.plexThumbs?.get(id);
+      return th && this.connected ? this.artSrc(th, size >= 400 ? 640 : size >= 250 ? 360 : 200) : null;
+    });
     library.on('liked', (id, on) => this.rate(library.track(id), on));
     library.on('played', (id) => this.scrobble(library.track(id)));
   }
@@ -70,8 +75,8 @@ class Plex extends Emitter {
     await db.kv.set('plex', this.cfg);
     navigator.serviceWorker?.controller?.postMessage({ type: 'config-changed' });
   }
-  get signedIn() { return !!this.cfg?.token; }
-  get connected() { return !!(this.cfg?.token && this.cfg?.base && this.cfg?.server); }
+  get signedIn() { return !!this.cfg?.token && !this.cfg?.expired; }
+  get connected() { return !!(this.cfg?.token && !this.cfg?.expired && this.cfg?.base && this.cfg?.server); }
   get user() { return this.cfg?.user || null; }
 
   // ---------- auth ----------
@@ -108,12 +113,17 @@ class Plex extends Emitter {
     const r = await fetch(`${TV()}/api/v2/user`, { headers: tvHeaders(token) });
     if (!r.ok) throw new PlexError('auth', 'Plex didn’t accept the sign-in. Try again.');
     const u = await r.json();
+    const keep = this.cfg?.server && this.cfg?.user?.id === undefined ? null : this.cfg;
     this.cfg = {
+      ...(keep?.server ? { server: keep.server, base: keep.base, sections: keep.sections, connKind: keep.connKind, lastSync: keep.lastSync } : {}),
       token,
       user: { id: u.id, name: u.friendlyName || u.title || u.username, username: u.username, email: u.email, thumb: u.thumb },
-      server: null, base: null, sections: [],
     };
+    if (!this.cfg.server) Object.assign(this.cfg, { server: null, base: null, sections: [] });
+    if (this.cfg.server && keep?.user?.id !== u.id) Object.assign(this.cfg, { server: null, base: null, sections: [] });
     await this.save();
+    // ask the browser to never clear our storage (keeps you signed in + downloads safe)
+    try { await navigator.storage?.persist?.(); } catch (e) { /* */ }
     this.emit('auth');
     return this.cfg.user;
   }
@@ -305,6 +315,7 @@ class Plex extends Emitter {
             bitrate: m.bitrate || 0,
             lyrics: '', lrc: '',
             artId,
+            plexThumb: thumb || '',
             file: (part.file || '').split(/[\\/]/).pop() || '',
             plexStreamInfo: st?.plexStreamInfo || false,
             plexLyrics: st?.plexLyrics,
@@ -335,6 +346,7 @@ class Plex extends Emitter {
     } catch (e) {
       p.phase = 'Error';
       p.error = e.message;
+      if (e.kind === 'auth') { this.cfg.expired = true; await this.save(); }
       this.emit('progress', p);
       this.emit('error', e);
     } finally {

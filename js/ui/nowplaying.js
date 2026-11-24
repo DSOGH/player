@@ -4,7 +4,7 @@ import { engine } from '../engine.js';
 import { library } from '../library.js';
 import { settings } from '../settings.js';
 import { analyze } from '../analysis.js';
-import { artColors } from '../art.js';
+import { artColors, artUrl } from '../art.js';
 import { art, badges, haptic, actionSheet, toast, formatLine } from './components.js';
 import { plex } from '../plex.js';
 
@@ -155,7 +155,7 @@ async function act(a, el) {
       const order = ['smart', 'crossfade', 'off'];
       const nx = order[(order.indexOf(settings.get('transition')) + 1) % order.length];
       settings.set('transition', nx);
-      toast({ smart: 'Smart transitions', crossfade: `Crossfade · ${settings.get('crossfadeSec')}s`, off: 'Gapless (no crossfade)' }[nx]);
+      toast({ smart: 'DJ Mix — beat-matched blends, filter sweeps & echo outs', crossfade: `Crossfade · ${settings.get('crossfadeSec')}s`, off: 'Gapless (no crossfade)' }[nx]);
       break;
     }
     case 'menu': npMenu(); break;
@@ -178,7 +178,7 @@ async function npMenu() {
       { icon: 'album', label: 'Go to Album', value: 'album' },
       { icon: 'artist', label: 'Go to Artist', value: 'artist' },
       { icon: 'add-playlist', label: 'Add to Playlist…', value: 'playlist' },
-      { icon: 'download', label: library.offline.has(t.url) ? 'Remove Download' : 'Download', value: 'download' },
+      { icon: 'download', label: library.isOffline(t) ? 'Remove Download' : 'Download', value: 'download' },
       { sep: true },
       { icon: 'timer', label: sleepLabel, value: 'sleep' },
       { icon: 'bpm', label: an?.bpm ? `BPM · ${Math.round(library.bpmOf(t))} — re-detect` : 'Detect BPM', value: 'bpm' },
@@ -302,7 +302,7 @@ async function onTrack(t) {
   np.querySelector('.np-context b').textContent = ctx?.name || t.album;
   np.querySelector('.np-context small').textContent = ctx?.type === 'album' ? 'Playing from album' : ctx?.type === 'playlist' ? 'Playing from playlist' : ctx?.type === 'artist' ? 'Playing from artist' : 'Playing from';
   const bg = np.querySelector('.np-bg-img');
-  bg.style.backgroundImage = t.artId ? `url('./__art/${t.artId}')` : 'none';
+  bg.style.backgroundImage = t.artId ? `url('${artUrl(t.artId, 300)}')` : 'none';
   const colors = await artColors(t.artId);
   const c = colors || ['#2a2a35', '#5a5a7a', '#101014'];
   np.style.setProperty('--np-c1', c[0]);
@@ -344,7 +344,7 @@ function renderMode() {
   const m = settings.get('transition');
   const b = $('#np .np-mode');
   if (!b) return;
-  b.innerHTML = html`${icon({ smart: 'smart', crossfade: 'crossfade', off: 'gapless' }[m])}<span>${{ smart: 'Smart', crossfade: 'Crossfade', off: 'Gapless' }[m]}</span>`;
+  b.innerHTML = html`${icon({ smart: 'smart', crossfade: 'crossfade', off: 'gapless' }[m])}<span>${{ smart: 'DJ Mix', crossfade: 'Crossfade', off: 'Gapless' }[m]}</span>`;
   b.dataset.m = m;
 }
 
@@ -371,7 +371,7 @@ function renderHint() {
   const p = engine.plan, nx = engine.upcoming;
   if (!settings.get('showNextTransition') || !p || !nx) { el.classList.remove('show'); return; }
   el.dataset.mix = p.mixStart;
-  el.innerHTML = html`${icon(p.type === 'gapless' || p.type === 'trim' ? 'gapless' : p.type === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>`;
+  el.innerHTML = html`${icon(p.style === 'gapless' ? 'gapless' : p.style === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>`;
   el.classList.add('show');
 }
 

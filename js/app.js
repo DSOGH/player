@@ -182,10 +182,11 @@ let downloading = false;
 async function toggleDownload(tracks) {
   tracks = tracks.filter((t) => !t.demo);
   if (!tracks.length) { toast('Demo songs don’t need downloading'); return; }
-  const all = tracks.every((t) => library.offline.has(t.url));
+  const all = tracks.every((t) => library.isOffline(t));
   const c = await caches.open('offline-tracks');
   if (all) {
-    for (const t of tracks) await c.delete(t.url);
+    for (const t of tracks) await c.delete(library.cacheKey(t));
+    navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' });
     await library.refreshOffline();
     toast(`Removed ${tracks.length} download${tracks.length > 1 ? 's' : ''}`);
     rerender();
@@ -194,17 +195,18 @@ async function toggleDownload(tracks) {
   if (downloading) { toast('A download is already running'); return; }
   downloading = true;
   try { await navigator.storage?.persist?.(); } catch (e) { /* */ }
-  const todo = tracks.filter((t) => !library.offline.has(t.url));
+  const todo = tracks.filter((t) => !library.isOffline(t));
   let done = 0, bytes = 0;
   toast(`Downloading ${todo.length} song${todo.length > 1 ? 's' : ''}…`, { ms: 4000 });
   for (const t of todo) {
     try {
-      const pre = await (await caches.open('prefetch')).match(t.url);
+      const pre = await (await caches.open('prefetch')).match(library.cacheKey(t));
       const r = pre || await fetch(trackSrc(t));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const blob = await r.blob();
-      await c.put(t.url, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Content-Length': String(blob.size) } }));
-      library.offline.add(t.url);
+      await c.put(library.cacheKey(t), new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Content-Length': String(blob.size) } }));
+      library.offline.add(library.cacheKey(t));
+      navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' });
       done++; bytes += blob.size;
       toast(`Downloading… ${done}/${todo.length}`, { ms: 4000 });
     } catch (e) {
@@ -240,7 +242,7 @@ async function addToPlaylist(tracks) {
 // ---------- menus ----------
 async function trackMenu(t, ctx = {}) {
   const liked = library.likes.has(t.id);
-  const off = library.offline.has(t.url);
+  const off = library.isOffline(t);
   const items = [
     { icon: 'play-next', label: 'Play Next', value: 'next' },
     { icon: 'add-queue', label: 'Add to Queue', value: 'queue' },
@@ -272,7 +274,7 @@ async function trackMenu(t, ctx = {}) {
   }
 }
 async function albumMenu(a) {
-  const off = a.tracks.every((t) => library.offline.has(t.url));
+  const off = a.tracks.every((t) => library.isOffline(t));
   const v = await actionSheet({
     header: html`<div class="sheet-track">${art(a.artId, 'sm')}<div><b>${a.title}</b><span>${a.artist}</span></div></div>`,
     items: [
@@ -554,6 +556,7 @@ function wireEngineEvents() {
     toast(offline ? `You’re offline — “${t?.title}” isn’t downloaded` : `Couldn’t play “${t?.title || 'song'}” — check your NAS connection`);
   });
   engine.on('sleep', () => toast('Sleep timer — paused'));
+  engine.on('fallback', () => toast('Your Plex server limits web audio — playing directly (EQ & DJ effects off for Plex)', { ms: 5000 }));
   // Plex: fill in hi-res info/loudness/lyrics and report "now playing"
   engine.on('track', (t) => { if (t?.plex) { plex.enrich(t); plex.timeline(t, engine.playing ? 'playing' : 'paused', 0, t.duration); } });
   engine.on('state', () => { const t = engine.track; if (t?.plex) { plex.timelineAt = 0; plex.timeline(t, engine.playing ? 'playing' : 'paused', engine.currentTime, engine.duration); } });
@@ -640,7 +643,11 @@ async function boot() {
   document.body.classList.add('ready');
   const src = await db.kv.get('source');
   if (src?.url && settings.get('scanOnLaunch')) setTimeout(() => scanner.run(), 1500);
-  if (plex.connected && settings.get('plexSyncOnLaunch')) setTimeout(() => plex.sync(), 2500);
+  if (plex.connected) {
+    const pt = [...library.tracks.values()].filter((t) => t.plex);
+    const stale = !pt.length || pt.some((t) => !t.plexThumb && t.artId);
+    if (stale || settings.get('plexSyncOnLaunch')) setTimeout(() => plex.sync(), stale ? 300 : 2500);
+  }
 }
 
 boot();

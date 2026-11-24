@@ -6,24 +6,34 @@ import { library } from './library.js';
 import { analyze, prefetchTrack, trackSrc } from './analysis.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
+import { artUrl } from './art.js';
 
 const dbToLin = (db) => Math.pow(10, db / 20);
+
+const BASS_CUT = -26;      // dB, low-shelf cut used for DJ "bass swaps"
+const HP_OFF = 12, LP_OFF = 22000;
 
 class Deck {
   constructor(name) {
     this.name = name;
+    this.track = null;
+    this.token = 0;
+    this.fadeVal = 1;  // used when the deck isn't routed through Web Audio
+    this.rgLin = 1;
+    this.fadeTimer = null;
+    this.rateTimer = null;
+    this.make(false);
+  }
+  // raw = plain element without CORS (works with any Plex server, but no Web Audio effects)
+  make(raw) {
     const el = new Audio();
-    el.crossOrigin = 'anonymous';
+    if (!raw) el.crossOrigin = 'anonymous';
     el.preload = 'auto';
     el.preservesPitch = true;
     el.setAttribute('playsinline', '');
     this.el = el;
-    this.track = null;
-    this.token = 0;
-    this.fadeVal = 1;  // simple mode
-    this.rgLin = 1;    // simple mode
-    this.fadeTimer = null;
-    this.rateTimer = null;
+    this.raw = raw;
+    this.node = null;
   }
   load(track, startAt = 0) {
     this.token++;
@@ -37,12 +47,12 @@ class Deck {
     this.el.load();
     this.wantStart = startAt;
     if (startAt > 0.05) {
-      const tok = this.token;
+      const tok = this.token, el = this.el;
       const fix = () => {
         if (tok !== this.token) return;
-        if (Math.abs(this.el.currentTime - startAt) > 0.25) { try { this.el.currentTime = startAt; } catch (e) { /* */ } }
+        if (Math.abs(el.currentTime - startAt) > 0.25) { try { el.currentTime = startAt; } catch (e) { /* */ } }
       };
-      this.el.addEventListener('loadedmetadata', fix, { once: true });
+      el.addEventListener('loadedmetadata', fix, { once: true });
     }
   }
   unload() {
@@ -123,21 +133,66 @@ class Engine extends Emitter {
       this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 2048;
       this.analyser.smoothingTimeConstant = 0.8;
-      for (const d of this.decks) {
-        d.node = ctx.createMediaElementSource(d.el);
-        d.rg = ctx.createGain();
-        d.fade = ctx.createGain();
-        d.node.connect(d.rg).connect(d.fade).connect(this.input);
-      }
+      // echo bus for "echo out" transitions: delay with filtered feedback
+      this.echoIn = ctx.createGain();
+      this.echoDelay = ctx.createDelay(3);
+      this.echoFb = ctx.createGain();
+      this.echoTone = ctx.createBiquadFilter();
+      this.echoTone.type = 'lowpass'; this.echoTone.frequency.value = 3200;
+      this.echoFb.gain.value = 0.5;
+      this.echoIn.connect(this.echoDelay);
+      this.echoDelay.connect(this.echoTone).connect(this.echoFb).connect(this.echoDelay);
+      this.echoTone.connect(this.input);
+      for (const d of this.decks) if (!d.raw) this.attachNodes(d);
       this.rewire();
       this.applyEq();
       this.applyMono();
       this.volNode.gain.value = this.volume * this.volume;
-      for (const d of this.decks) { d.el.volume = 1; if (d.track) this.applyDeckGain(d); }
+      for (const d of this.decks) { d.el.volume = d.node ? 1 : d.el.volume; if (d.track) this.applyDeckGain(d); }
       ctx.addEventListener?.('statechange', () => this.emit('state'));
     } catch (e) {
       console.warn('Web Audio unavailable, using simple engine', e);
       this.ctx = null;
+    }
+  }
+  attachNodes(d) {
+    const ctx = this.ctx;
+    if (!ctx || d.node || d.raw) return;
+    d.node = ctx.createMediaElementSource(d.el);
+    d.rg = ctx.createGain();
+    d.bass = ctx.createBiquadFilter(); d.bass.type = 'lowshelf'; d.bass.frequency.value = 180; d.bass.gain.value = 0;
+    d.hp = ctx.createBiquadFilter(); d.hp.type = 'highpass'; d.hp.frequency.value = HP_OFF; d.hp.Q.value = 0.7;
+    d.lp = ctx.createBiquadFilter(); d.lp.type = 'lowpass'; d.lp.frequency.value = LP_OFF; d.lp.Q.value = 0.7;
+    d.fade = ctx.createGain();
+    d.send = ctx.createGain(); d.send.gain.value = 0;
+    d.node.connect(d.rg).connect(d.bass).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
+    d.fade.connect(d.send).connect(this.echoIn);
+  }
+  detachNodes(d) {
+    for (const n of ['node', 'rg', 'bass', 'hp', 'lp', 'fade', 'send']) { try { d[n]?.disconnect(); } catch (e) { /* */ } d[n] = null; }
+  }
+  // Swap a deck's <audio> element when it needs to change between Web Audio (CORS) and raw mode.
+  prepareDeck(d, track) {
+    const raw = settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors);
+    if (d.raw === raw) return;
+    try { d.el.pause(); d.el.removeAttribute('src'); d.el.load(); } catch (e) { /* */ }
+    this.detachNodes(d);
+    d.make(raw);
+    this.wireDeck(d);
+    if (!raw && this.ctx) this.attachNodes(d);
+    d.el.volume = d.node ? 1 : clamp(d.rgLin * d.fadeVal * this.volume, 0, 1);
+  }
+  loadDeck(d, track, startAt = 0) {
+    this.prepareDeck(d, track);
+    this.resetFx(d);
+    d.load(track, startAt);
+  }
+  resetFx(d) {
+    if (!d.node || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    for (const [p, v] of [[d.bass.gain, 0], [d.hp.frequency, HP_OFF], [d.lp.frequency, LP_OFF], [d.send.gain, 0]]) {
+      p.cancelScheduledValues(0);
+      p.setValueAtTime(v, now);
     }
   }
   rewire() {
@@ -197,7 +252,7 @@ class Engine extends Emitter {
   }
   applyDeckGain(d, smooth = false) {
     const g = dbToLin(this.gainDbFor(d.track));
-    if (this.ctx) {
+    if (d.node) {
       if (smooth) d.rg.gain.setTargetAtTime(g, this.ctx.currentTime, 0.4);
       else d.rg.gain.value = g;
     } else {
@@ -211,7 +266,7 @@ class Engine extends Emitter {
   setVolume(v) {
     this.volume = clamp(v, 0, 1);
     if (this.ctx) this.volNode.gain.setTargetAtTime(this.volume * this.volume, this.ctx.currentTime, 0.03);
-    else this.decks.forEach((d) => this.applySimpleVolume(d));
+    this.decks.forEach((d) => { if (!d.node) this.applySimpleVolume(d); });
     db.kv.set('volume', this.volume);
     this.emit('volume', this.volume);
   }
@@ -231,7 +286,7 @@ class Engine extends Emitter {
   }
   fade(d, to, dur, { delay = 0, shape = settings.get('fadeCurve') } = {}) {
     clearInterval(d.fadeTimer);
-    if (this.ctx) {
+    if (d.node) {
       const g = d.fade.gain;
       const now = this.ctx.currentTime;
       if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now); else g.cancelScheduledValues(now);
@@ -254,7 +309,7 @@ class Engine extends Emitter {
   }
   setFade(d, v) {
     clearInterval(d.fadeTimer);
-    if (this.ctx) {
+    if (d.node) {
       const g = d.fade.gain;
       const now = this.ctx.currentTime;
       g.cancelScheduledValues(0);
@@ -278,31 +333,46 @@ class Engine extends Emitter {
   wireDeck(d) {
     const el = d.el;
     el.addEventListener('ended', () => {
-      if (d !== this.cur || this.transition) return;
+      if (el !== d.el || d !== this.cur || this.transition) return;
       this.onEnded();
     });
     el.addEventListener('error', () => {
-      if (d !== this.cur || !d.track) return;
+      if (el !== d.el || !d.track) return;
       const t = d.track;
+      // Plex server didn't allow cross-origin audio for Web Audio → switch to plain playback and retry
+      if (t.plex && !d.raw && !this.plexNoCors && el.error && el.error.code !== 1) {
+        console.warn('Plex audio blocked by CORS; falling back to direct playback');
+        this.plexNoCors = true;
+        const wasCur = d === this.cur;
+        const pos = d.wantStart || 0;
+        this.loadDeck(d, t, pos);
+        this.applyDeckGain(d);
+        if (wasCur) { this.setFade(d, 1); if (this.playing) d.el.play().catch(() => {}); }
+        else this.setFade(d, 0);
+        this.emit('fallback');
+        return;
+      }
+      if (d !== this.cur) return;
       this.errors++;
       this.emit('error', t, el.error);
       if (this.errors <= 4 && this.index + 1 < this.queue.length) setTimeout(() => this.playIndex(this.index + 1, { mode: 'cut' }), 1200);
       else { this.playing = false; this.emit('state'); }
     });
-    el.addEventListener('playing', () => { if (d === this.cur) { this.errors = 0; this.emit('buffering', false); } });
-    el.addEventListener('waiting', () => { if (d === this.cur) this.emit('buffering', true); });
+    el.addEventListener('playing', () => { if (el === d.el && d === this.cur) { this.errors = 0; this.emit('buffering', false); } });
+    el.addEventListener('waiting', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
     el.addEventListener('pause', () => {
       // paused by the OS (another app took audio focus, headphones unplugged...)
-      if (d === this.cur && this.playing && !this.transition && !this._pausing && !d.switching && !el.ended && d.track) {
+      if (el === d.el && d === this.cur && this.playing && !this.transition && !this._pausing && !d.switching && !el.ended && d.track) {
         this.playing = false;
         this.emit('state');
         this.updatePosition();
       }
     });
     el.addEventListener('play', () => {
-      if (d === this.cur && !this.playing) { this.playing = true; this.emit('state'); }
+      if (el === d.el && d === this.cur && !this.playing) { this.playing = true; this.emit('state'); }
     });
     el.addEventListener('durationchange', () => {
+      if (el !== d.el) return;
       if (d === this.cur && d.track && isFinite(el.duration) && Math.abs((d.track.duration || 0) - el.duration) > 1) {
         d.track.duration = el.duration;
         db.put('tracks', d.track);
@@ -310,7 +380,6 @@ class Engine extends Emitter {
       if (d === this.cur) this.emit('time');
     });
   }
-
   // ---------- queue ----------
   playTracks(tracks, start = 0, { context = null, shuffle = null } = {}) {
     if (!tracks.length) return;
@@ -501,7 +570,7 @@ class Engine extends Emitter {
       const dur = settings.get('skipFadeSec');
       this.ai = 1 - this.ai;
       const d = this.cur;
-      d.load(t, startAt);
+      this.loadDeck(d, t, startAt);
       this.applyDeckGain(d);
       this.setFade(d, 0);
       this.playing = true;
@@ -512,7 +581,7 @@ class Engine extends Emitter {
       setTimeout(() => { if (old.token === tok && old !== this.cur) old.unload(); }, dur * 1000 + 80);
     } else {
       this.other.unload();
-      old.load(t, startAt);
+      this.loadDeck(old, t, startAt);
       this.applyDeckGain(old);
       this.setFade(old, 1);
       if (autoplay) {
@@ -570,7 +639,7 @@ class Engine extends Emitter {
     this.upcoming = { index: i, track: t };
     this.computePlan();
     const d = this.other;
-    d.load(t, this.plan?.bStart || 0);
+    this.loadDeck(d, t, this.plan?.bStart || 0);
     this.applyDeckGain(d);
     this.setFade(d, 0);
     if (this.wantsAnalysis()) analyze(t).then(() => this.computePlan());
@@ -597,13 +666,22 @@ class Engine extends Emitter {
     return (dbb === da && B.track === A.track + 1) || (dbb === da + 1 && B.track === 1);
   }
 
+  // ---- transition planner ----
+  // Styles:
+  //  gapless   consecutive album tracks / Gapless mode
+  //  crossfade classic equal-power crossfade (Crossfade mode)
+  //  blend     DJ mix: beat-matched, phrase-aligned, tempo-synced, with a bass swap and high-pass on the outgoing track
+  //  under     outgoing song fades out on its own → bring the next one in underneath, bass held back
+  //  echo      outgoing song ends hard → echo/delay tail rings out as the next song drops in
+  //  filter    tempos don't match → low-pass the outgoing song away while the next one opens up from a high-pass
   makePlan(A, B, durA) {
     const s = settings.v;
     const aA = library.analysis.get(A.id), aB = library.analysis.get(B.id);
     const cont = this.isContinuation(A, B);
     const dur = durA || A.duration || 0;
-    const base = { aId: A.id, bId: B.id, rate: 1, bStart: 0, outDelay: 0, shape: s.fadeCurve };
-    const gapless = (label = 'Gapless') => ({ ...base, type: 'gapless', label, mixStart: Math.max(0, dur - 0.05), inDur: 0.012, outDur: 0.04, shape: 'linear' });
+    const fx = s.djEffects !== false;
+    const base = { aId: A.id, bId: B.id, rate: 1, bStart: 0, outDelay: 0, shape: s.fadeCurve, style: 'crossfade' };
+    const gapless = (label = 'Gapless') => ({ ...base, style: 'gapless', type: 'gapless', label, mixStart: Math.max(0, dur - 0.05), overlap: 0.05, inDur: 0.012, outDur: 0.04, shape: 'linear' });
 
     if (s.transition === 'off') {
       if (s.skipSilence && !cont && aA && aB && (dur - aA.tailOut > 0.4 || aB.leadIn > 0.4)) {
@@ -618,84 +696,143 @@ class Engine extends Emitter {
       if (aA?.tailOut) end = Math.min(dur, aA.tailOut);
       if (aB) bStart = aB.leadIn || 0;
     }
-    if (s.transition === 'crossfade' || !aA) {
-      const d = Math.min(s.crossfadeSec, Math.max(0.5, end * 0.3));
-      return { ...base, type: 'crossfade', label: `Crossfade · ${Math.round(d)}s`, mixStart: Math.max(0, end - d), inDur: d, outDur: d, bStart };
+    const D = clamp(s.crossfadeSec, 1, 20);
+    if (s.transition === 'crossfade') {
+      const d = Math.min(D, Math.max(0.5, end * 0.3));
+      return { ...base, type: 'crossfade', style: 'crossfade', label: `Crossfade · ${Math.round(d)}s`, mixStart: Math.max(0, end - d), overlap: d, inDur: d, outDur: d, bStart };
     }
 
-    // ---- smart ----
-    const maxO = Math.max(2, s.crossfadeSec * 1.5);
-    const outroLen = Math.max(0, end - (aA.fadeOutStart || end));
-    const introSoft = aB ? Math.max(0, (aB.fadeInEnd || 0) - (aB.leadIn || 0)) : 0;
-    let overlap, inDur, outDur, outDelay = 0, label;
-    if (outroLen >= 2.5) {
-      // A fades out on its own: bring B in under the fade
-      overlap = clamp(outroLen * 0.7, 2, maxO);
-      outDur = overlap;
-      inDur = introSoft > 1.5 ? Math.min(overlap, 1.2) : overlap * 0.85;
-      label = 'Smart mix · fade';
-    } else if (introSoft > 1.5) {
-      // hard ending, soft intro: start B's intro under A's last moments
-      overlap = clamp(introSoft * 0.6, 1, Math.min(5, maxO));
-      outDur = Math.min(1.2, overlap);
-      outDelay = overlap - outDur;
-      inDur = Math.min(0.6, overlap);
-      label = 'Smart mix · intro';
-    } else {
-      // hard ending into a hard start: tight, punchy cut
-      overlap = 0.35;
-      outDur = 0.35; inDur = 0.08;
-      label = 'Smart cut';
-    }
-    let mixStart = end - overlap;
-    let rate = 1, type = 'smart';
+    // ---- DJ mix ----
+    const durB = B.duration || 240;
+    const outroLen = aA ? Math.max(0, end - (aA.fadeOutStart || end)) : 0;
+    const bpmA = aA?.bpm && aA.bpmConf > 0.1 ? aA.bpm : 0;
+    let bpmB = aB?.bpm && aB.bpmConf > 0.1 ? aB.bpm : 0;
+    if (bpmA && bpmB) { if (bpmB / bpmA > 1.4) bpmB /= 2; else if (bpmA / bpmB > 1.4) bpmB *= 2; }
+    const ratio = bpmA && bpmB ? bpmA / bpmB : 0;
+    const tol = Math.max(0.02, s.tempoMatch ? s.tempoMatchMax / 100 : 0.02);
 
-    if (s.beatMatch && aB && aA.bpm && aB.bpm && aA.bpmConf > 0.12 && aB.bpmConf > 0.12 && overlap >= 1.5) {
-      const bA = aA.bpm;
-      let bB = aB.bpm;
-      if (bB / bA > 1.4) bB /= 2; else if (bA / bB > 1.4) bB *= 2;
-      const ratio = bA / bB;
-      const tol = Math.max(0.015, s.tempoMatch ? s.tempoMatchMax / 100 : 0.015);
-      if (Math.abs(ratio - 1) <= tol) {
-        const beat = 60 / bA;
-        let beats = Math.max(4, Math.round(overlap / beat / 4) * 4);
-        while (beats > 4 && beats * beat > Math.max(maxO * 1.4, 4)) beats -= 4;
-        overlap = beats * beat;
-        // land the mix start on A's beat grid (prefer bar boundaries)
-        const off = aA.beatOffset || 0;
-        const latest = end - overlap;
-        const bar = beat * 4;
-        let ms = off + Math.floor((latest - off) / bar) * bar;
-        if (latest - ms > beat * 2) ms = off + Math.floor((latest - off) / beat) * beat;
-        if (ms > 1) {
-          mixStart = ms;
-          bStart = aB.beatOffset || bStart;
-          rate = s.tempoMatch ? ratio : 1;
-          inDur = overlap * 0.75;
-          outDur = overlap;
-          outDelay = 0;
-          type = 'beatmatch';
-          label = `Beat-matched · ${Math.round(bA)} BPM`;
-        }
+    // 1) beat-matched blend
+    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= tol && end > 30) {
+      const beat = 60 / bpmA, bar = beat * 4;
+      let beats = clamp(Math.round(Math.max(D * 1.6, 8 * beat) / beat / 8) * 8, 8, 32);
+      while (beats > 8 && beats * beat > Math.min(dur * 0.35, durB * 0.4, 24)) beats -= 8;
+      const overlap = beats * beat;
+      // finish the blend as the outgoing song's outro begins (or at its end)
+      const mixEnd = outroLen > 4 ? Math.min(end, aA.fadeOutStart + outroLen * 0.5) : end;
+      const off = aA.beatOffset || 0;
+      let ms = off + Math.floor((mixEnd - overlap - off) / bar) * bar;
+      if (ms > 1) {
+        const rate = s.tempoMatch ? ratio : 1;
+        return {
+          ...base, type: 'beatmatch', style: 'blend', fx,
+          label: `DJ blend · ${Math.round(bpmA)} BPM${Math.abs(rate - 1) > 0.003 ? ' · tempo synced' : ''}`,
+          mixStart: ms, overlap, inDur: overlap * 0.5, outDur: overlap * 0.62, outDelay: overlap * 0.38,
+          bStart: aB.beatOffset || bStart, rate, beat,
+        };
       }
     }
-    return { ...base, type, label, mixStart: Math.max(0, mixStart), inDur, outDur, outDelay, bStart, rate };
+    // 2) outgoing song fades out by itself → slide the next one underneath
+    if (aA && outroLen >= 3) {
+      const overlap = clamp(outroLen * 0.85, 3, Math.max(D * 1.5, 5));
+      return { ...base, type: 'smart', style: 'under', fx, label: 'DJ mix · fade under', mixStart: Math.max(0, end - overlap), overlap, inDur: overlap * 0.8, outDur: overlap, bStart };
+    }
+    // 3) hard ending → echo out
+    if (aA && outroLen < 1.5 && bpmA && fx) {
+      const beat = 60 / bpmA;
+      const lead = clamp(beat * 2, 0.6, 2.2);
+      return {
+        ...base, type: 'smart', style: 'echo', fx, label: 'DJ mix · echo out',
+        mixStart: Math.max(0, end - lead), overlap: lead + 0.4, inDur: 0.35, outDur: 0.06, outDelay: lead,
+        bStart, echoTime: clamp(beat * 0.75, 0.18, 0.75), lead,
+      };
+    }
+    // 4) anything else (tempos clash, or no analysis yet) → filter sweep
+    const overlap = Math.min(Math.max(D, 4), Math.max(1.5, end * 0.3));
+    return { ...base, type: 'smart', style: 'filter', fx, label: 'DJ mix · filter sweep', mixStart: Math.max(0, end - overlap), overlap, inDur: overlap * 0.6, outDur: overlap * 0.7, outDelay: overlap * 0.3, bStart };
   }
-
+  // automation helpers (Web Audio clock)
+  hold(param, at) {
+    if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(at); else { param.cancelScheduledValues(at); param.setValueAtTime(param.value, at); }
+  }
   async runPlan() {
     this.planTimer = null;
     const p = this.plan, nx = this.upcoming;
     if (!p || !nx || this.transition || !this.playing) return;
     const A = this.cur, B = this.other;
-    if (B.track !== nx.track) { B.load(nx.track, p.bStart); this.applyDeckGain(B); }
+    if (B.track !== nx.track) { this.loadDeck(B, nx.track, p.bStart); this.applyDeckGain(B); }
     else if (Math.abs(B.el.currentTime - p.bStart) > 0.08) { try { B.el.currentTime = p.bStart; } catch (e) { /* */ } }
-    this.setFade(B, p.inDur < 0.02 ? 1 : 0);
+    const useFx = p.fx && A.node && B.node && this.ctx;
+    this.resetFx(B);
+    this.setFade(B, p.style === 'gapless' ? 1 : 0);
     B.el.playbackRate = p.rate || 1;
+    // B's low end starts held back (DJ style) so two kick drums never fight
+    if (useFx) {
+      const now = this.ctx.currentTime;
+      if (p.style === 'blend') B.bass.gain.setValueAtTime(BASS_CUT, now);
+      if (p.style === 'under') B.bass.gain.setValueAtTime(-18, now);
+      if (p.style === 'echo') B.bass.gain.setValueAtTime(-12, now);
+      if (p.style === 'filter') { B.hp.frequency.setValueAtTime(900, now); B.bass.gain.setValueAtTime(-10, now); }
+    }
     try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } }
-    if (p.inDur >= 0.02) this.fade(B, 1, p.inDur, { shape: p.shape });
-    this.fade(A, 0, p.outDur, { delay: p.outDelay, shape: p.shape });
+    const t0 = this.ctx ? this.ctx.currentTime + 0.01 : 0;
+    const D = p.overlap || p.outDelay + p.outDur;
+    const sh = p.shape;
+    switch (p.style) {
+      case 'gapless':
+        this.fade(A, 0, p.outDur, { shape: 'linear' });
+        break;
+      case 'crossfade':
+        this.fade(B, 1, p.inDur, { shape: sh });
+        this.fade(A, 0, p.outDur, { shape: sh });
+        break;
+      case 'blend': {
+        this.fade(B, 1, p.inDur, { shape: 'equalpower' });
+        this.fade(A, 0, p.outDur, { delay: p.outDelay, shape: 'scurve' });
+        if (useFx) {
+          const swap = t0 + D * 0.5, swapLen = Math.min(0.5, (p.beat || 0.5));
+          this.hold(B.bass.gain, t0); B.bass.gain.setValueAtTime(BASS_CUT, swap); B.bass.gain.linearRampToValueAtTime(0, swap + swapLen);
+          this.hold(A.bass.gain, t0); A.bass.gain.setValueAtTime(0, swap); A.bass.gain.linearRampToValueAtTime(BASS_CUT, swap + swapLen);
+          this.hold(A.hp.frequency, t0); A.hp.frequency.setValueAtTime(HP_OFF, t0 + D * 0.55); A.hp.frequency.exponentialRampToValueAtTime(380, t0 + D);
+        }
+        break;
+      }
+      case 'under':
+        this.fade(B, 1, p.inDur, { shape: 'equalpower' });
+        this.fade(A, 0, p.outDur, { shape: 'scurve' });
+        if (useFx) {
+          this.hold(B.bass.gain, t0); B.bass.gain.linearRampToValueAtTime(0, t0 + D * 0.65);
+          this.hold(A.hp.frequency, t0); A.hp.frequency.exponentialRampToValueAtTime(220, t0 + D);
+        }
+        break;
+      case 'echo':
+        if (useFx) {
+          this.echoDelay.delayTime.setValueAtTime(p.echoTime, t0);
+          this.echoFb.gain.setValueAtTime(0.52, t0);
+          this.hold(A.send.gain, t0); A.send.gain.linearRampToValueAtTime(0.85, t0 + p.lead);
+          this.fade(A, 0, 0.06, { delay: p.lead, shape: 'linear' });
+          // B drops in on the last echo; its bass slides back in
+          this.fade(B, 1, p.inDur, { delay: p.lead * 0.92, shape: 'equalpower' });
+          this.hold(B.bass.gain, t0); B.bass.gain.setValueAtTime(-12, t0 + p.lead); B.bass.gain.linearRampToValueAtTime(0, t0 + p.lead + 2.5);
+          this.echoFb.gain.setValueAtTime(0.52, t0 + p.lead + 1.5);
+          this.echoFb.gain.linearRampToValueAtTime(0, t0 + p.lead + 4);
+        } else {
+          this.fade(A, 0, p.lead, { shape: 'equalpower' });
+          this.fade(B, 1, 0.5, { delay: p.lead * 0.8, shape: 'equalpower' });
+        }
+        break;
+      case 'filter':
+      default:
+        this.fade(B, 1, p.inDur, { shape: 'equalpower' });
+        this.fade(A, 0, p.outDur, { delay: p.outDelay, shape: 'equalpower' });
+        if (useFx) {
+          this.hold(A.lp.frequency, t0); A.lp.frequency.exponentialRampToValueAtTime(320, t0 + D);
+          this.hold(B.hp.frequency, t0); B.hp.frequency.exponentialRampToValueAtTime(HP_OFF, t0 + D * 0.75);
+          this.hold(B.bass.gain, t0); B.bass.gain.linearRampToValueAtTime(0, t0 + D * 0.8);
+        }
+        break;
+    }
     this.notePlayed(A);
-    const total = (p.outDelay + p.outDur) * 1000;
+    const total = (p.style === 'echo' ? p.lead + 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
     this.transition = { from: A, to: B, plan: p };
     this.ai = 1 - this.ai;
     this.index = nx.index;
@@ -703,25 +840,29 @@ class Engine extends Emitter {
     this.plan = null;
     this.emit('plan', null);
     const tok = A.token;
-    this.transitionTimer = setTimeout(() => {
-      if (A.token === tok) this.finishTransition();
-    }, total + 100);
+    this.transitionTimer = setTimeout(() => { if (A.token === tok) this.finishTransition(); }, total + 120);
     if (Math.abs((p.rate || 1) - 1) > 0.001) {
-      const d = B;
       const tokB = B.token;
-      setTimeout(() => { if (d.token === tokB) this.rampRate(d, 1, 8); }, total);
+      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, 10); }, D * 1000);
     }
     this.afterTrackChange(p);
   }
-
   finishTransition() {
     if (!this.transition) return;
     clearTimeout(this.transitionTimer);
-    const { from } = this.transition;
+    const { from, to } = this.transition;
     this.transition = null;
-    if (from !== this.cur) from.unload();
+    if (from !== this.cur) { this.resetFx(from); from.unload(); }
+    // make sure the new song ends up with clean filters even if the mix was interrupted
+    if (to === this.cur && to.node && this.ctx) {
+      const now = this.ctx.currentTime;
+      for (const [prm, v] of [[to.bass.gain, 0], [to.hp.frequency, HP_OFF], [to.lp.frequency, LP_OFF]]) {
+        if (Math.abs(prm.value - v) > 0.5) { this.hold(prm, now); prm.setTargetAtTime(v, now, 0.15); }
+      }
+      this.hold(to.fade.gain, now); to.fade.gain.setTargetAtTime(1, now, 0.1);
+    }
+    if (this.echoFb) this.echoFb.gain.setTargetAtTime(0, this.ctx.currentTime + 0.5, 0.6);
   }
-
   // ---------- clock ----------
   tick() {
     const d = this.cur;
@@ -738,7 +879,7 @@ class Engine extends Emitter {
     if (!dur) return;
     const t = d.el.currentTime;
     const remaining = dur - t;
-    if (!this.upcoming && remaining < 40) this.prepareNext();
+    if (!this.upcoming && remaining < 90) this.prepareNext();
     if (this.plan && !this.planTimer) {
       const dt = (this.plan.mixStart - t) / (d.el.playbackRate || 1);
       if (dt <= 1.2) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
@@ -775,7 +916,7 @@ class Engine extends Emitter {
     if (!('mediaSession' in navigator)) return;
     const t = this.track;
     if (!t) return;
-    const art = t.artId ? new URL(`./__art/${t.artId}`, location.href).href : new URL('./icons/icon-512.png', location.href).href;
+    const art = new URL(t.artId ? artUrl(t.artId, 640) : './icons/icon-512.png', location.href).href;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: t.title, artist: t.artist, album: t.album,
       artwork: [{ src: art, sizes: '640x640', type: 'image/jpeg' }],
@@ -833,7 +974,7 @@ class Engine extends Emitter {
     this.origQueue = s.origQueue;
     this.context = s.context;
     const t = library.track(this.queue[this.index]);
-    this.cur.load(t, s.pos || 0);
+    this.loadDeck(this.cur, t, s.pos || 0);
     this.applyDeckGain(this.cur);
     this.emit('track', t);
     this.emit('queue');

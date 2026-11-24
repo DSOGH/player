@@ -90,10 +90,14 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 ## Features
 
 **Transitions** (tap the button under the controls to switch)
-* **Smart:** analyzes each song's intro and outro. Fade-outs get blended, dead air is trimmed, hard endings get a tight cut, and soft intros start under the previous song.
-* **Beat-matched mixing:** when two songs have similar tempos, the mix starts on the beat, lands the next song on its first beat, and nudges its tempo to match (pitch preserved) before gliding back.
+* **DJ Mix** (default) analyzes every song's tempo, beat grid, intro and outro, then picks a move for each transition:
+  * **DJ blend:** when tempos line up, a long, phrase-aligned, beat-matched blend. The incoming song is tempo-synced (pitch preserved), its bass is held back, then the basses **swap** halfway while the outgoing song is high-passed away.
+  * **Fade under:** when the song fades out on its own, the next one slides in underneath it.
+  * **Echo out:** when a song ends hard, its last beats ring out through a tempo-synced echo as the next song drops in.
+  * **Filter sweep:** when tempos clash, the outgoing song is low-passed away while the next one opens up from a high-pass.
+  * Silence is trimmed, and albums stay gapless.
 * **Gapless albums:** consecutive tracks of the same album never crossfade (live albums, DJ mixes).
-* **Crossfade** (1–12 s, with equal-power, S-curve or linear curves) or **Gapless** (off).
+* **Crossfade** (classic, like Spotify; 1–16 s with equal-power, S-curve or linear curves) or **Gapless** (off).
 * The player shows what's coming: *"Next: … · Beat-matched 124 BPM in 0:12"*.
 
 **BPM**
