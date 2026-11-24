@@ -138,7 +138,13 @@ export function libraryView(tab = 'albums') {
   const chips = html`<div class="chips">${TABS.map(([k, l]) => html`<a class="chip${k === tab ? ' on' : ''}" href="#/library/${k}">${l}</a>`)}</div>`;
   let body = '';
   let actions = '';
-  if (!library.size && tab !== 'playlists') body = empty('library', 'No music yet', 'Connect your NAS in Settings to fill your library.', '<a class="btn pill primary" href="#/settings/source">Connect NAS</a>');
+  if (!library.size && tab !== 'playlists') {
+    body = plex.connected
+      ? empty('library', plex.running ? 'Loading your music…' : 'No music yet', plex.running ? `Syncing with ${plex.cfg.server.name}.` : `Signed in to Plex (${plex.cfg.server.name}). Tap below to load your library.`,
+        `<button class="btn pill primary plex-btn" data-a="plex-sync">Load my music</button>`)
+      : empty('library', 'No music yet', 'Each device keeps its own library — sign in on this phone too.',
+        `<div class="empty-btns"><button class="btn pill primary plex-btn" data-a="plex-signin">${plexLogo()}Sign in with Plex</button><a class="btn pill" href="#/settings/source">Connect a NAS folder</a></div>`);
+  }
   else if (tab === 'albums') {
     const sort = settings.get('albumSort');
     actions = html`<button class="icon-btn" data-a="album-sort" aria-label="Sort">${icon('sort')}</button>`;

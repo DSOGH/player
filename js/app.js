@@ -650,6 +650,13 @@ function wireScanner() {
 
 // ---------- boot ----------
 async function boot() {
+  // home-screen app (no browser bars): lay out against the full screen
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  document.documentElement.classList.toggle('standalone', standalone);
+  if (standalone && !CSS.supports('height', '100lvh')) {
+    const fit = () => document.documentElement.style.setProperty('height', `${Math.max(innerHeight, document.documentElement.clientHeight)}px`);
+    fit(); addEventListener('resize', fit);
+  }
   document.body.insertAdjacentHTML('afterbegin', sprite());
   try { await ensureSW(); } catch (e) {
     $('#view').innerHTML = `<div class="empty"><h3>Can’t start</h3><p>${e.message}</p></div>`;

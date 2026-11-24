@@ -725,3 +725,13 @@ body.dual-v.dual-swap #tabs { bottom: auto; top: calc(var(--seg-h, 50%) - var(--
 .edition-switch a { flex: 1; height: 32px; display: grid; place-items: center; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text2); }
 .edition-switch a.on { background: var(--bg2); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.2); }
 [data-theme="dark"] .edition-switch a.on, [data-theme="oled"] .edition-switch a.on { background: #3a3a45; }
+
+/* v1.8: iOS home-screen web apps can stop fixed/bottom:0 elements short of the real screen bottom.
+   Anchor the whole app to an explicit full-screen box instead (lvh = the full screen in standalone). */
+#app { position: absolute; left: 0; top: 0; width: 100%; height: 100%; height: 100dvh; overflow: hidden; }
+html.standalone, html.standalone body { height: 100lvh; }
+html.standalone #app { height: 100lvh; }
+#mini, #tabs, #np { position: absolute; }
+#sheet { inset: auto; top: 0; left: 0; width: 100%; height: 100%; height: 100dvh; }
+html.standalone #sheet { height: 100lvh; }
+.empty-btns { display: flex; flex-direction: column; gap: 10px; align-items: center; }
