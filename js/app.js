@@ -5,7 +5,7 @@ import { settings } from './settings.js';
 import { library } from './library.js';
 import { engine } from './engine.js';
 import { scanner } from './scanner.js';
-import { loadKnown, artColors } from './art.js';
+import { loadKnown, artColors, warmCovers } from './art.js';
 import { installDemo, removeDemo } from './demo.js';
 import { sprite } from './ui/icons.js';
 import * as V from './ui/views.js';
@@ -48,6 +48,27 @@ async function ensureSW() {
     });
   });
   return reg;
+}
+
+// Get the newest version of the app without touching anything you've set up: sign-ins, library, playlists,
+// downloads, covers and BPM all live in on-device storage that this never clears, and the home-screen icon stays.
+async function forceRefresh() {
+  toast('Getting the latest version…', { ms: 6000 });
+  try { await engine.saveNow(); } catch (e) { /* */ }
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    await Promise.race([reg?.update(), new Promise((r) => setTimeout(r, 5000))]);
+    const w = reg?.installing || reg?.waiting;
+    if (w) {
+      await Promise.race([
+        new Promise((r) => navigator.serviceWorker.addEventListener('controllerchange', r, { once: true })),
+        new Promise((r) => setTimeout(r, 6000)),
+      ]);
+    }
+    // drop only the cached app files (never music, covers or your data)
+    for (const k of await caches.keys()) if (k.startsWith('shell-')) await caches.delete(k);
+  } catch (e) { /* offline: just reload what we have */ }
+  location.reload();
 }
 
 // ---------- theme ----------
@@ -119,8 +140,37 @@ async function render({ keepScroll = false } = {}) {
   if (changed && currentPath) scrollMem.set(currentPath, main().scrollTop);
   const prevScroll = main().scrollTop;
   currentPath = path;
+  const prevPath = lastShown;
   const res = await route(path);
   if (path !== currentPath) return; // navigated again meanwhile
+  lastShown = path;
+  // native-feeling page motion: push in from the right going deeper, slide back going up, cross-fade between tabs
+  const nav = changed && !keepScroll && prevPath ? navDirection(prevPath, path) : null;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (nav && document.startViewTransition && !reduce && !document.hidden) {
+    activeVT?.skipTransition?.();
+    document.documentElement.dataset.nav = nav;
+    activeVT = document.startViewTransition(() => paint(path, res, { keepScroll, changed, prevScroll }));
+    activeVT.finished.finally(() => { activeVT = null; delete document.documentElement.dataset.nav; });
+    try { await activeVT.updateCallbackDone; } catch (e) { /* */ }
+    return;
+  }
+  paint(path, res, { keepScroll, changed, prevScroll, fade: nav && !reduce });
+}
+let lastShown = null, activeVT = null;
+function navDirection(from, to) {
+  const a = from.split('/').filter(Boolean), b = to.split('/').filter(Boolean);
+  const tabA = TAB_OF[a[0]] || 'home', tabB = TAB_OF[b[0]] || 'home';
+  if (tabA !== tabB && b.length <= 2 && (b.length === 1 || b[0] === 'library')) return 'tab';
+  const depth = (x) => (x[0] === 'library' ? x.length - 1 : x.length);
+  if (to.startsWith(from + '/') || depth(b) > depth(a)) return 'fwd';
+  if (from.startsWith(to + '/') || depth(b) < depth(a)) return 'back';
+  return navStack.at(-2) === to ? 'back' : 'fwd';
+}
+const navStack = [];
+function paint(path, res, { keepScroll, changed, prevScroll, fade = false }) {
+  if (navStack.at(-2) === path) navStack.pop(); else if (navStack.at(-1) !== path) navStack.push(path);
+  if (navStack.length > 30) navStack.shift();
   const v = view();
   const search = path === 'search';
   v.innerHTML = (search ? searchHeader() : '') + String(res.html);
@@ -141,7 +191,7 @@ async function render({ keepScroll = false } = {}) {
   });
   if (keepScroll) main().scrollTop = prevScroll;
   else main().scrollTop = changed ? (scrollMem.get(path) || 0) : prevScroll;
-  if (changed && !keepScroll) v.animate?.([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'ease-out' });
+  if (fade) v.animate?.([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'ease-out' });
   onScroll();
 }
 const rerender = debounce(() => {
@@ -485,6 +535,8 @@ async function doAction(a, el, e) {
         settings: settings.v, playlists: [...library.playlists.values()].filter((p) => p.source !== 'nas'),
         likes: [...library.likes].map((id) => library.track(id)?.url).filter(Boolean),
         playlistUrls: Object.fromEntries([...library.playlists.values()].map((p) => [p.id, p.trackIds.map((id) => library.track(id)?.url).filter(Boolean)])),
+        // measured BPM / key / beat grids, so a new phone doesn't have to analyse everything again
+        analysis: [...library.analysis.values()].map((a) => { const u = library.track(a.id)?.url; if (!u) return null; const { waveform, ...rest } = a; return { ...rest, url: u, waveform: waveform ? Array.from(waveform) : undefined }; }).filter(Boolean),
       };
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const aEl = document.createElement('a');
@@ -503,6 +555,16 @@ async function doAction(a, el, e) {
           const byUrl = new Map([...library.tracks.values()].map((t) => [t.url, t.id]));
           if (data.settings) { for (const [k, v] of Object.entries(data.settings)) settings.set(k, v); }
           if (data.likes) { data.likes.forEach((u) => { const id = byUrl.get(u); if (id) library.likes.add(id); }); db.kv.set('likes', [...library.likes]); }
+          let nA = 0;
+          for (const a of data.analysis || []) {
+            const id = byUrl.get(a.url);
+            if (!id) continue;
+            const { url, ...rest } = a;
+            const cur = library.analysis.get(id);
+            if (cur && !rest.tapped && (cur.v || 0) >= (rest.v || 0)) continue;
+            library.setAnalysis({ ...rest, id }); nA++;
+          }
+          if (nA) toast(`Restored BPM & key for ${nA} songs`);
           for (const p of data.playlists || []) {
             const urls = data.playlistUrls?.[p.id];
             if (urls) p.trackIds = urls.map((u) => byUrl.get(u)).filter(Boolean);
@@ -525,6 +587,7 @@ async function doAction(a, el, e) {
       toast(reg?.installing || reg?.waiting ? 'Updating…' : 'You’re on the latest version');
       break;
     }
+    case 'force-refresh': await forceRefresh(); break;
     case 'eq-preset': if (await eqPresetSheet()) render({ keepScroll: true }); break;
     default: break;
   }
@@ -590,12 +653,28 @@ function wireGlobal() {
 }
 
 function wireEngineEvents() {
-  engine.on('error', (t, err) => {
+  let lastErr = 0, errCount = 0;
+  engine.on('error', (t) => {
+    const now = Date.now();
+    errCount = now - lastErr < 8000 ? errCount + 1 : 1;
+    lastErr = now;
+    if (errCount > 1) return; // one message per burst, not one per song
     const offline = !navigator.onLine;
-    toast(offline ? `You’re offline — “${t?.title}” isn’t downloaded` : `Couldn’t play “${t?.title || 'song'}” — check your NAS connection`);
+    const where = t?.plex ? 'your Plex server' : 'your NAS';
+    toast(offline ? `You’re offline — “${t?.title}” isn’t downloaded` : `Skipped “${t?.title || 'song'}” — couldn’t reach it on ${where}`);
+  });
+  // network changed (Wi-Fi ↔ cellular) or app came back from the background: re-find the Plex server
+  const recheck = () => { if (plex.connected) plex.reconnect(); };
+  addEventListener('online', recheck);
+  navigator.connection?.addEventListener?.('change', recheck);
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hiddenAt = Date.now();
+    else if (Date.now() - hiddenAt > 60000) recheck();
   });
   engine.on('sleep', () => toast('Sleep timer — paused'));
-  engine.on('fallback', () => toast('Your Plex server limits web audio — playing directly (EQ & DJ effects off for Plex)', { ms: 5000 }));
+  let fellBack = false;
+  engine.on('fallback', () => { if (!fellBack) { fellBack = true; toast('Playing Plex directly — EQ & DJ effects are limited on this server', { ms: 4000 }); } });
   // Plex: fill in hi-res info/loudness/lyrics and report "now playing"
   engine.on('track', (t) => { if (t?.plex) { plex.enrich(t); plex.timeline(t, engine.playing ? 'playing' : 'paused', 0, t.duration); } });
   engine.on('state', () => { const t = engine.track; if (t?.plex) { plex.timelineAt = 0; plex.timeline(t, engine.playing ? 'playing' : 'paused', engine.currentTime, engine.duration); } });
@@ -630,6 +709,7 @@ function wireScanner() {
     await library.reloadTracks();
     render({ keepScroll: true });
     if (p.added || p.removed) toast(`Plex synced · ${p.added} new${p.removed ? `, ${p.removed} removed` : ''}`);
+    warmAllCovers();
   });
   plex.on('error', (e) => {
     toast(e.message || 'Plex sync failed', { action: { label: 'Plex', run: () => { location.hash = '#/settings/plex'; } }, ms: 6000 });
@@ -646,6 +726,11 @@ function wireScanner() {
     toast(e.message || 'Scan failed', { action: { label: 'Settings', run: () => { location.hash = '#/settings/source'; } }, ms: 6000 });
     render({ keepScroll: true });
   });
+}
+
+function warmAllCovers() {
+  const ids = [...new Set([...library.albums.values()].map((a) => a.artId).filter(Boolean))];
+  warmCovers(ids);
 }
 
 // ---------- boot ----------
@@ -666,7 +751,7 @@ async function boot() {
   applyTheme();
   settings.on('change', (k) => {
     if (['theme', 'accent', 'gridCols', '*'].includes(k)) applyTheme();
-    if (['albumSort', 'groupCompilations', 'showBadges', 'gridCols', 'explicitPref', '*'].includes(k)) {
+    if (['albumSort', 'groupCompilations', 'showBadges', 'showBpm', 'gridCols', 'explicitPref', '*'].includes(k)) {
       if (k === 'groupCompilations' || k === 'explicitPref') library.build();
       if (!currentPath?.startsWith('settings')) rerender();
     }
@@ -689,6 +774,7 @@ async function boot() {
   document.body.classList.add('ready');
   const src = await db.kv.get('source');
   if (src?.url && settings.get('scanOnLaunch')) setTimeout(() => scanner.run(), 1500);
+  setTimeout(warmAllCovers, 3000);
   if (plex.connected) {
     const pt = [...library.tracks.values()].filter((t) => t.plex);
     const stale = !pt.length || pt.some((t) => !t.plexThumb && t.artId);

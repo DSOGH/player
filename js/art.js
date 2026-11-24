@@ -158,3 +158,23 @@ export async function artColors(id) {
   colorCache.set(id, c);
   return c;
 }
+
+// Download every cover in the background (small + large) so lists and Now Playing never wait for art.
+let warming = null;
+export function warmCovers(ids, sizes = [200, 640]) {
+  if (warming || !navigator.serviceWorker?.controller) return warming;
+  const urls = [];
+  for (const id of ids) for (const sz of sizes) { const u = artUrl(id, sz); if (u.startsWith('./__pa/')) urls.push(u); }
+  if (!urls.length) return null;
+  let i = 0;
+  const worker = async () => {
+    while (i < urls.length) {
+      const u = urls[i++];
+      try { const r = await fetch(u); await r.blob(); } catch (e) { /* */ }
+      // stay out of the way of scrolling / playback
+      if (i % 24 === 0) await new Promise((r) => (window.requestIdleCallback || setTimeout)(r, { timeout: 400 }));
+    }
+  };
+  warming = Promise.all([worker(), worker(), worker()]).finally(() => { warming = null; });
+  return warming;
+}

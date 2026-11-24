@@ -237,8 +237,9 @@ body:not(.is-playing) .eqbars i { animation-play-state: paused; }
   background: var(--glass); backdrop-filter: saturate(1.8) blur(26px); -webkit-backdrop-filter: saturate(1.8) blur(26px);
   box-shadow: 0 8px 30px rgba(0,0,0,.35), inset 0 0 0 0.5px rgba(255,255,255,.08); overflow: hidden;
   transform: translateY(140%); opacity: 0; transition: transform .45s var(--ease), opacity .3s; touch-action: pan-y; cursor: pointer;
+  pointer-events: none; /* hidden player must never sit on top of the tab bar */
 }
-body.has-track #mini { transform: none; opacity: 1; }
+body.has-track #mini { transform: none; opacity: 1; pointer-events: auto; }
 body.np-open #mini { opacity: 0; transform: translateY(20px); pointer-events: none; }
 .mini-art .art { box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 .mini-meta { flex: 1; min-width: 0; transition: transform .2s, opacity .2s; }
@@ -735,3 +736,36 @@ html.standalone #app { height: 100lvh; }
 #sheet { inset: auto; top: 0; left: 0; width: 100%; height: 100%; height: 100dvh; }
 html.standalone #sheet { height: 100lvh; }
 .empty-btns { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+
+/* ---------- v1.9: covers fade in once decoded, never pop ---------- */
+.art img { opacity: 0; transition: opacity .22s ease-out; }
+.art img.in { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .art img { transition: none; } }
+.row.track .bpmchip { flex: none; font: 600 11px/1 var(--font, system-ui); font-variant-numeric: tabular-nums; color: var(--text3); padding: 4px 6px; border-radius: 6px; background: var(--card); margin-left: 6px; display: inline-flex; gap: 4px; align-items: center; }
+.row.track .bpmchip i { font-style: normal; color: var(--accent); opacity: .85; }
+
+/* ---------- v1.9: page transitions (View Transitions) ---------- */
+#main { view-transition-name: page; }
+#tabs { view-transition-name: tabs; }
+#mini { view-transition-name: mini; }
+::view-transition-old(root), ::view-transition-new(root),
+::view-transition-group(tabs), ::view-transition-old(tabs), ::view-transition-new(tabs),
+::view-transition-group(mini), ::view-transition-old(mini), ::view-transition-new(mini) { animation: none; }
+::view-transition-group(page) { animation-duration: .34s; animation-timing-function: cubic-bezier(.22, .9, .25, 1); }
+html[data-nav="fwd"]::view-transition-old(page) { animation: vt-push-out .34s cubic-bezier(.22, .9, .25, 1) both; }
+html[data-nav="fwd"]::view-transition-new(page) { animation: vt-push-in .34s cubic-bezier(.22, .9, .25, 1) both; }
+html[data-nav="back"]::view-transition-old(page) { animation: vt-pop-out .3s cubic-bezier(.22, .9, .25, 1) both; z-index: 1; }
+html[data-nav="back"]::view-transition-new(page) { animation: vt-pop-in .3s cubic-bezier(.22, .9, .25, 1) both; }
+html[data-nav="tab"]::view-transition-old(page) { animation: vt-fade-out .16s ease-out both; }
+html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s ease-out both; }
+@keyframes vt-push-in { from { transform: translateX(32%); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes vt-push-out { to { transform: translateX(-14%); opacity: 0; } }
+@keyframes vt-pop-in { from { transform: translateX(-14%); opacity: .2; } to { transform: none; opacity: 1; } }
+@keyframes vt-pop-out { to { transform: translateX(32%); opacity: 0; } }
+@keyframes vt-fade-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes vt-fade-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
+
+/* smoother everyday motion */
+.row, .card, .quick, .set-row { transition: transform .16s var(--ease, ease), background-color .16s; }
+.row:active { transform: scale(.985); }

@@ -66,7 +66,11 @@ class Plex extends Emitter {
     // covers load straight from the Plex server (no CORS needed for <img>)
     setArtResolver((id, size) => {
       const th = library.plexThumbs?.get(id);
-      return th && this.connected ? this.artSrc(th, size >= 900 ? 1024 : size >= 500 ? 640 : size >= 250 ? 360 : 200) : null;
+      if (!th || !this.cfg?.server) return null;
+      const px = size >= 900 ? 1024 : size >= 500 ? 640 : size >= 250 ? 360 : 200;
+      // through the service worker: stored on the phone after the first load, instant afterwards
+      if (navigator.serviceWorker?.controller) return `./__pa/${px}/${encodeURIComponent(th)}`;
+      return this.connected ? this.artSrc(th, px) : null;
     });
     library.on('liked', (id, on) => this.rate(library.track(id), on));
     library.on('played', (id) => this.scrobble(library.track(id)));
@@ -225,6 +229,23 @@ class Plex extends Emitter {
   }
   partUrl(t) {
     return `${this.cfg.base}${t.plex.part}?download=0&${this.q()}`;
+  }
+  // Server-side conversion to MP3 — the fallback for files the phone can't decode itself
+  transcodeUrl(t) {
+    return `${this.cfg.base}/music/:/transcode/universal/start.mp3?${this.q({
+      path: `/library/metadata/${t.plex.key}`, mediaIndex: 0, partIndex: 0, protocol: 'http',
+      directPlay: 0, directStream: 0, hasMDE: 1, musicBitrate: 320, audioBitrate: 320,
+      session: `${clientId()}-${t.plex.key}`,
+    })}`;
+  }
+  // Re-check the server address (e.g. after leaving home Wi-Fi). Returns true if the address changed.
+  async reconnect() {
+    if (!this.connected) return false;
+    if (this._reconnecting) return this._reconnecting;
+    const before = this.cfg.base;
+    this._reconnecting = this.ensureConnection().then(() => this.cfg.base !== before).catch(() => false)
+      .finally(() => { this._reconnecting = null; });
+    return this._reconnecting;
   }
   artSrc(thumb, size = 640) {
     return `${this.cfg.base}/photo/:/transcode?${this.q({ width: size, height: size, minSize: 1, upscale: 1, url: thumb })}`;
@@ -407,7 +428,8 @@ class Plex extends Emitter {
     return p;
   }
   async lyrics(t) {
-    await this.enrich(t);
+    if (!this.connected) return null;
+    try { await this.enrich(t); } catch (e) { return null; }
     if (!t.plexLyrics?.key) return null;
     try {
       const r = await fetch(`${this.cfg.base}${t.plexLyrics.key}?${this.q()}`, { headers: { Accept: 'text/plain' } });

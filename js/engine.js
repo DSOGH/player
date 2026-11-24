@@ -9,6 +9,7 @@ import * as db from './db.js';
 import { artUrl, lockScreenArtwork } from './art.js';
 import { findCue, findHandoff, titleEntry, keyCompat } from './dj.js';
 import { getLyrics } from './lyrics.js';
+import { plex } from './plex.js';
 
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 // 0.1s of silence, used to unlock audio elements inside a tap (iOS only lets elements started by a tap play later on their own)
@@ -28,29 +29,39 @@ class Deck {
     this.rgLin = 1;
     this.fadeTimer = null;
     this.rateTimer = null;
-    this.make(false);
+    // Two elements per deck, both created (and unlocked by the first tap) up front: iOS won't let
+    // an element created later start playing on its own, which made fallbacks silently fail.
+    this.els = { false: this.mk(false), true: this.mk(true) };
+    this.el = this.els.false;
+    this.raw = false;
+    this.node = null;
   }
-  // raw = plain element without CORS (works with any Plex server, but no Web Audio effects)
-  make(raw) {
+  mk(raw) {
     const el = new Audio();
     if (!raw) el.crossOrigin = 'anonymous';
     el.preload = 'auto';
     el.preservesPitch = true;
     el.setAttribute('playsinline', '');
-    this.el = el;
-    this.raw = raw;
-    this.node = null;
-    this.unlocked = false;
+    el.setAttribute('webkit-playsinline', '');
+    return el;
   }
-  load(track, startAt = 0) {
+  // raw = plain element without CORS (works with any Plex server, but no Web Audio effects)
+  make(raw) {
+    this.el = this.els[raw];
+    this.raw = raw;
+  }
+  get fx() { return !this.raw && !!this.node; }
+  get unlocked() { return !!(this.els.false._unlocked && this.els.true._unlocked); }
+  load(track, startAt = 0, src = null) {
     this.token++;
+    if (!src) this.attempt = 0;
     this.switching = true;
     setTimeout(() => { this.switching = false; }, 60);
     this.track = track;
     clearInterval(this.rateTimer);
     this.el.playbackRate = 1;
     this.el.defaultPlaybackRate = 1;
-    this.el.src = trackSrc(track) + (startAt > 0.05 ? `#t=${startAt.toFixed(3)}` : '');
+    this.el.src = (src || trackSrc(track)) + (startAt > 0.05 ? `#t=${startAt.toFixed(3)}` : '');
     this.el.load();
     this.wantStart = startAt;
     if (startAt > 0.05) {
@@ -99,6 +110,7 @@ class Engine extends Emitter {
     this.tickTimer = setInterval(() => this.tick(), 200);
     settings.on('change', (k) => this.onSetting(k));
     library.on('analysis', (id) => this.onAnalysis(id));
+    plex.on?.('connection', () => { this._corsOk = undefined; });
     this.saveState = this.debouncedSave();
     this.skipToken = 0;
   }
@@ -151,7 +163,7 @@ class Engine extends Emitter {
       this.echoIn.connect(this.echoDelay);
       this.echoDelay.connect(this.echoTone).connect(this.echoFb).connect(this.echoDelay);
       this.echoTone.connect(this.input);
-      for (const d of this.decks) if (!d.raw) this.attachNodes(d);
+      for (const d of this.decks) this.attachNodes(d);
       // real-time vocal isolation for word-play transitions
       this.voxReady = false;
       if (ctx.audioWorklet) {
@@ -165,7 +177,7 @@ class Engine extends Emitter {
       this.applyEq();
       this.applyMono();
       this.volNode.gain.value = this.volume * this.volume;
-      for (const d of this.decks) { d.el.volume = d.node ? 1 : d.el.volume; if (d.track) this.applyDeckGain(d); }
+      for (const d of this.decks) { d.el.volume = d.fx ? 1 : d.el.volume; if (d.track) this.applyDeckGain(d); }
       ctx.addEventListener?.('statechange', () => this.emit('state'));
     } catch (e) {
       console.warn('Web Audio unavailable, using simple engine', e);
@@ -174,8 +186,8 @@ class Engine extends Emitter {
   }
   attachNodes(d) {
     const ctx = this.ctx;
-    if (!ctx || d.node || d.raw) return;
-    d.node = ctx.createMediaElementSource(d.el);
+    if (!ctx || d.node) return;
+    d.node = ctx.createMediaElementSource(d.els.false);
     d.rg = ctx.createGain();
     d.bass = ctx.createBiquadFilter(); d.bass.type = 'lowshelf'; d.bass.frequency.value = 180; d.bass.gain.value = 0;
     d.hp = ctx.createBiquadFilter(); d.hp.type = 'highpass'; d.hp.frequency.value = HP_OFF; d.hp.Q.value = 0.7;
@@ -218,15 +230,13 @@ class Engine extends Emitter {
     for (const n of ['node', 'rg', 'lat', 'bass', 'hp', 'lp', 'fade', 'send', 'vox', 'voxGain', 'instGain', 'voxSend']) { try { d[n]?.disconnect(); } catch (e) { /* */ } d[n] = null; }
   }
   // Swap a deck's <audio> element when it needs to change between Web Audio (CORS) and raw mode.
-  prepareDeck(d, track) {
-    const raw = settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors);
+  prepareDeck(d, track, forceRaw = false) {
+    const raw = forceRaw || settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors);
     if (d.raw === raw) return;
     try { d.el.pause(); d.el.removeAttribute('src'); d.el.load(); } catch (e) { /* */ }
-    this.detachNodes(d);
     d.make(raw);
-    this.wireDeck(d);
     if (!raw && this.ctx) this.attachNodes(d);
-    d.el.volume = d.node ? 1 : clamp(d.rgLin * d.fadeVal * this.volume, 0, 1);
+    d.el.volume = d.fx ? 1 : clamp(d.rgLin * d.fadeVal * this.volume, 0, 1);
   }
   loadDeck(d, track, startAt = 0) {
     this.prepareDeck(d, track);
@@ -300,7 +310,7 @@ class Engine extends Emitter {
   }
   applyDeckGain(d, smooth = false) {
     const g = dbToLin(this.gainDbFor(d.track));
-    if (d.node) {
+    if (d.fx) {
       if (smooth) d.rg.gain.setTargetAtTime(g, this.ctx.currentTime, 0.4);
       else d.rg.gain.value = g;
     } else {
@@ -314,7 +324,7 @@ class Engine extends Emitter {
   setVolume(v) {
     this.volume = clamp(v, 0, 1);
     if (this.ctx) this.volNode.gain.setTargetAtTime(this.volume * this.volume, this.ctx.currentTime, 0.03);
-    this.decks.forEach((d) => { if (!d.node) this.applySimpleVolume(d); });
+    this.decks.forEach((d) => { if (!d.fx) this.applySimpleVolume(d); });
     db.kv.set('volume', this.volume);
     this.emit('volume', this.volume);
   }
@@ -334,7 +344,7 @@ class Engine extends Emitter {
   }
   fade(d, to, dur, { delay = 0, shape = settings.get('fadeCurve') } = {}) {
     clearInterval(d.fadeTimer);
-    if (d.node) {
+    if (d.fx) {
       const g = d.fade.gain;
       const now = this.ctx.currentTime;
       if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now); else g.cancelScheduledValues(now);
@@ -357,7 +367,7 @@ class Engine extends Emitter {
   }
   setFade(d, v) {
     clearInterval(d.fadeTimer);
-    if (d.node) {
+    if (d.fx) {
       const g = d.fade.gain;
       const now = this.ctx.currentTime;
       g.cancelScheduledValues(0);
@@ -383,33 +393,82 @@ class Engine extends Emitter {
   }
 
   // ---------- deck events ----------
+  // A song failed to load: work through every way of getting it to play before giving up.
+  //  1. re-find the Plex server (network changed: home Wi-Fi ↔ cellular)
+  //  2. plain playback without Web Audio (server blocks cross-origin audio)
+  //  3. ask Plex to convert it to MP3 (format the phone can't decode)
+  //  4. skip, with one message
+  async corsOk(url) {
+    if (this._corsOk !== undefined) return this._corsOk;
+    try {
+      const r = await fetch(url, { headers: { Range: 'bytes=0-1' }, mode: 'cors', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      try { r.body?.cancel(); } catch (e) { /* */ }
+      this._corsOk = true;
+    } catch (e) {
+      if (e.name === 'TimeoutError' || navigator.onLine === false) return true; // unknown — don't give up effects
+      this._corsOk = false;
+    }
+    return this._corsOk;
+  }
+  async recover(d, err) {
+    if (!d.track || d.recovering) return;
+    d.recovering = true;
+    try { await this._recover(d, err); } finally { d.recovering = false; }
+  }
+  async _recover(d, err) {
+    const t = d.track;
+    const pos = Math.max(d.wantStart || 0, d.el.currentTime || 0);
+    const wasCur = d === this.cur;
+    const retry = (stage, src, raw = d.raw) => {
+      if (raw !== d.raw) this.prepareDeck(d, t, raw);
+      this.resetFx(d);
+      d.load(t, pos, src);
+      d.attempt = stage;
+      this.applyDeckGain(d);
+      if (wasCur) { this.setFade(d, 1); if (this.playing) d.el.play().catch(() => {}); } else this.setFade(d, 0);
+    };
+    const at = d.attempt || 0;
+    if (t.plex && plex.connected) {
+      if (at < 1) {
+        if (wasCur) this.emit('buffering', true);
+        const changed = await plex.reconnect();
+        if (d.track !== t) return;
+        if (changed) { retry(1, plex.partUrl(t)); return; }
+      }
+      // only drop Web Audio if the server really refuses cross-origin audio (a broken file is a different problem)
+      if (at < 2 && !d.raw && err?.code !== 1 && !(await this.corsOk(plex.partUrl(t)))) {
+        if (d.track !== t) return;
+        console.warn('Plex audio blocked for Web Audio; using direct playback');
+        this.plexNoCors = true;
+        retry(2, plex.partUrl(t), true);
+        this.emit('fallback');
+        return;
+      }
+      if (at < 3) { retry(3, plex.transcodeUrl(t)); return; }
+    } else if (at < 1 && !t.demo && navigator.onLine !== false) {
+      retry(1, trackSrc(t)); return;
+    }
+    if (!wasCur) {
+      // the preloaded next song can't be played: don't mix into it; it gets one more try (and a message) when its turn comes
+      if (this.upcoming?.track === t && !this.transition) { this.failedNext = t.id; this.cancelNext(); }
+      return;
+    }
+    this.errors++;
+    this.emit('error', t, err);
+    if (this.errors <= 4 && this.index + 1 < this.queue.length) setTimeout(() => { if (this.cur.track === t) this.playIndex(this.index + 1, { mode: 'cut' }); }, 600);
+    else { this.playing = false; this.emit('state'); }
+  }
   wireDeck(d) {
-    const el = d.el;
+    for (const el of Object.values(d.els)) this.wireEl(d, el);
+  }
+  wireEl(d, el) {
     el.addEventListener('ended', () => {
       if (el !== d.el || d !== this.cur || this.transition) return;
       this.onEnded();
     });
     el.addEventListener('error', () => {
-      if (el !== d.el || !d.track) return;
-      const t = d.track;
-      // Plex server didn't allow cross-origin audio for Web Audio → switch to plain playback and retry
-      if (t.plex && !d.raw && !this.plexNoCors && el.error && el.error.code !== 1) {
-        console.warn('Plex audio blocked by CORS; falling back to direct playback');
-        this.plexNoCors = true;
-        const wasCur = d === this.cur;
-        const pos = d.wantStart || 0;
-        this.loadDeck(d, t, pos);
-        this.applyDeckGain(d);
-        if (wasCur) { this.setFade(d, 1); if (this.playing) d.el.play().catch(() => {}); }
-        else this.setFade(d, 0);
-        this.emit('fallback');
-        return;
-      }
-      if (d !== this.cur) return;
-      this.errors++;
-      this.emit('error', t, el.error);
-      if (this.errors <= 4 && this.index + 1 < this.queue.length) setTimeout(() => this.playIndex(this.index + 1, { mode: 'cut' }), 1200);
-      else { this.playing = false; this.emit('state'); }
+      if (el !== d.el || !d.track || el.getAttribute('src') === SILENT) return;
+      this.recover(d, el.error);
     });
     el.addEventListener('playing', () => {
       if (el !== d.el || d !== this.cur) return;
@@ -565,15 +624,18 @@ class Engine extends Emitter {
   unlockDecks() {
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* */ }
     for (const d of this.decks) {
-      if (d.unlocked) continue;
-      d.unlocked = true;
-      if (d.track) continue; // the playing deck unlocks itself
-      const el = d.el;
-      try {
-        el.src = SILENT;
-        const p = el.play();
-        p?.then(() => { if (!d.track && el.src === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } }).catch((e) => { if (e.name === 'NotAllowedError') d.unlocked = false; });
-      } catch (e) { d.unlocked = false; }
+      for (const el of Object.values(d.els)) {
+        if (el._unlocked) continue;
+        el._unlocked = true;
+        if (el === d.el && d.track) continue; // the playing element unlocks itself
+        if (el.getAttribute('src') && el.getAttribute('src') !== SILENT) continue;
+        try {
+          el.src = SILENT;
+          const p = el.play();
+          p?.then(() => { if (el.getAttribute('src') === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } })
+            .catch((e) => { if (e.name === 'NotAllowedError') el._unlocked = false; });
+        } catch (e) { el._unlocked = false; }
+      }
     }
   }
   async play() {
@@ -588,7 +650,7 @@ class Engine extends Emitter {
     const d = this.cur;
     if (settings.get('pauseFade') && this.ctx) { this.setFade(d, 0); this.fade(d, 1, 0.25, { shape: 'equalpower' }); }
     else this.setFade(d, 1);
-    try { await d.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.playing = false; this.emit('error', d.track, e); } }
+    try { await d.el.play(); } catch (e) { if (e.name === 'NotAllowedError') { this.playing = false; this.emit('state'); } /* load failures are handled by recover() */ }
     if (this.transition) { try { await this.transition.from.el.play(); } catch (e) { /* */ } }
     this.emit('state');
     this.updatePosition();
@@ -654,7 +716,7 @@ class Engine extends Emitter {
     // iPhone: Now Playing (lock screen / Dynamic Island / CarPlay) follows the audio element, so a skip
     // keeps the same element — quick fade out, switch songs, fade in — and iOS never sees a "pause".
     let fadeIn = false;
-    if (mode === 'quick' && IOS && old.track && !old.el.paused && old.node) {
+    if (mode === 'quick' && IOS && old.track && !old.el.paused && old.fx) {
       const tok = ++this.skipToken;
       this.fade(old, 0, 0.14, { shape: 'linear' });
       await new Promise((r) => setTimeout(r, 150));
@@ -669,7 +731,7 @@ class Engine extends Emitter {
       this.applyDeckGain(d);
       this.setFade(d, 0);
       this.playing = true;
-      d.el.play().catch((e) => { if (e.name !== 'AbortError') this.emit('error', t, e); });
+      d.el.play().catch(() => { /* load failures are handled by recover() */ });
       this.fade(d, 1, dur * 0.8);
       this.fade(old, 0, dur);
       const tok = old.token;
@@ -687,7 +749,6 @@ class Engine extends Emitter {
         this.playing = true;
         old.el.play().catch((e) => {
           if (e.name === 'NotAllowedError') { this.playing = false; this.emit('state'); }
-          else if (e.name !== 'AbortError') this.emit('error', t, e);
         });
       } else this.playing = false;
     }
@@ -735,7 +796,7 @@ class Engine extends Emitter {
     const i = this.nextIndex(true);
     if (i < 0) return;
     const t = library.track(this.queue[i]);
-    if (!t) return;
+    if (!t || t.id === this.failedNext) return;
     this.upcoming = { index: i, track: t };
     this.computePlan();
     const d = this.other;
@@ -847,7 +908,7 @@ class Engine extends Emitter {
         const canUnder = bDrop >= under + 0.15;
         if (mixStart > 3) {
           const cue = { t: ho.aLine.t, text: ho.aLine.text, phrase: ho.phrase, bText: ho.bLine.text };
-          if (this.voxReady && fx && this.cur.node) {
+          if (this.voxReady && fx && this.cur.fx) {
             return {
               ...base, type: 'wordplay', style: 'acapella', handoff: true, fx, cue,
               label: `Word play · “${ho.phrase}” → same words`,
@@ -871,7 +932,7 @@ class Engine extends Emitter {
         const beatA = bpmA ? 60 / bpmA : 0.5;
         // the real thing: isolate the vocal on the cue line, build the next song's instrumental
         // underneath, then drop the next song in full on its own title line
-        if (this.voxReady && fx && this.cur.node && cue.t > 3) {
+        if (this.voxReady && fx && this.cur.fx && cue.t > 3) {
           const pre = clamp(beatA, 0.35, 0.75);
           // title at the end of its line → cut on the line boundary (precise); otherwise the in-line estimate
           const phraseEnd = Math.min(cue.ratio > 0.6 ? cue.lineEnd : (cue.phraseEnd ?? cue.end), end - 0.3);
@@ -955,7 +1016,7 @@ class Engine extends Emitter {
     const A = this.cur, B = this.other;
     if (B.track !== nx.track) { this.loadDeck(B, nx.track, p.bStart); this.applyDeckGain(B); }
     else if (Math.abs(B.el.currentTime - p.bStart) > 0.08) { try { B.el.currentTime = p.bStart; } catch (e) { /* */ } }
-    const useFx = p.fx && A.node && B.node && this.ctx;
+    const useFx = p.fx && A.fx && B.fx && this.ctx;
     if (p.style === 'acapella' && useFx && A.vox) return this.runAcapella(A, B, p, nx);
     if (p.style === 'acapella') { p.style = 'echo'; p.lead = p.iso; p.bStart = p.bDrop; } // no worklet: classic echo word play
     this.resetFx(B);
@@ -1166,13 +1227,13 @@ class Engine extends Emitter {
     const { from, to } = this.transition;
     this.transition = null;
     if (from !== this.cur) { this.resetFx(from); from.unload(); this.reassertNowPlaying(); }
-    if (to?.node && this.ctx) {
+    if (to?.fx && this.ctx) {
       this.voxActive(to, false);
       const now = this.ctx.currentTime;
       for (const prm of [to.instGain.gain, to.voxGain?.gain, to.voxSend?.gain].filter(Boolean)) { this.hold(prm, now); prm.setTargetAtTime(0, now, 0.05); }
     }
     // make sure the new song ends up with clean filters even if the mix was interrupted
-    if (to === this.cur && to.node && this.ctx) {
+    if (to === this.cur && to.fx && this.ctx) {
       const now = this.ctx.currentTime;
       for (const [prm, v] of [[to.bass.gain, 0], [to.hp.frequency, HP_OFF], [to.lp.frequency, LP_OFF]]) {
         if (Math.abs(prm.value - v) > 0.5) { this.hold(prm, now); prm.setTargetAtTime(v, now, 0.15); }
@@ -1301,16 +1362,17 @@ class Engine extends Emitter {
   }
 
   // ---------- persistence ----------
+  saveNow() {
+    return db.kv.set('state', {
+      queue: this.queue, index: this.index, pos: this.currentTime, shuffle: this.shuffle, repeat: this.repeat,
+      origQueue: this.origQueue, context: this.context,
+    });
+  }
   debouncedSave() {
     let t;
     return () => {
       clearTimeout(t);
-      t = setTimeout(() => {
-        db.kv.set('state', {
-          queue: this.queue, index: this.index, pos: this.currentTime, shuffle: this.shuffle, repeat: this.repeat,
-          origQueue: this.origQueue, context: this.context,
-        });
-      }, 400);
+      t = setTimeout(() => this.saveNow(), 400);
     };
   }
   async restore() {

@@ -7,7 +7,8 @@ import { settings } from './settings.js';
 
 const mem = new Map();
 const inflight = new Map();
-const MISS_TTL = 7 * 86400000;
+const MISS_TTL = 86400000; // retry songs without lyrics daily (LRCLIB grows)
+const KEY = 'lyr2:';
 
 export function parseLrc(text) {
   const lines = [];
@@ -19,8 +20,29 @@ export function parseLrc(text) {
   }
   return lines.sort((a, b) => a.t - b.t);
 }
+// Plex can hand back its lyrics as XML (<Line startOffset><Span text/></Line>) instead of LRC text
+function fromPlexXml(text) {
+  try {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const lines = [...doc.querySelectorAll('Line')].map((l) => ({
+      t: l.hasAttribute('startOffset') ? +l.getAttribute('startOffset') / 1000 : NaN,
+      text: [...l.querySelectorAll('Span')].map((sp) => sp.getAttribute('text') || '').join('').trim(),
+    }));
+    if (!lines.length) return null;
+    const synced = lines.every((l) => isFinite(l.t));
+    return { synced, lines: synced ? lines.sort((a, b) => a.t - b.t) : lines.map((l) => ({ t: 0, text: l.text })), source: 'Plex' };
+  } catch (e) { return null; }
+}
 function fromText(text, source) {
-  if (!text) return null;
+  if (!text || !String(text).trim()) return null;
+  if (/^\s*<\?xml|^\s*<MediaContainer/i.test(text)) return fromPlexXml(text);
+  // drop LRC metadata lines ([ar:..], [ti:..], [offset:..]) but honour the offset
+  const off = /\[offset:\s*([+-]?\d+)\]/i.exec(text);
+  if (off) {
+    const res = fromText(text.replace(/\[offset:[^\]]*\]/ig, ''), source);
+    if (res?.synced) res.lines.forEach((l) => { l.t = Math.max(0, l.t + +off[1] / 1000); });
+    return res;
+  }
   const lines = parseLrc(text);
   if (lines.length) return { synced: true, lines, source };
   return { synced: false, lines: text.split(/\r?\n/).map((l) => ({ t: 0, text: l.trim() })), source };
@@ -67,35 +89,38 @@ async function lrclib(t) {
 
 export function cachedLyrics(t) { return mem.get(t.id) || null; }
 
-export async function getLyrics(t, { online = settings.get('onlineLyrics') } = {}) {
+export function forgetLyrics(t) { if (t) { mem.delete(t.id); db.kv.set(KEY + t.id, null); } }
+
+export async function getLyrics(t, { online = settings.get('onlineLyrics'), fresh = false } = {}) {
   if (!t) return null;
-  if (mem.has(t.id)) return mem.get(t.id);
+  if (!fresh && mem.has(t.id)) return mem.get(t.id);
   if (inflight.has(t.id)) return inflight.get(t.id);
   const p = (async () => {
-    let out = null;
+    let netErr = false;
+    let out = null, plain = null;
+    const take = (res) => { if (!res) return; if (res.synced) { if (!out) out = res; } else if (!plain) plain = res; };
     if (t.lrc) {
-      try { const r = await fetch(nasUrl(t.lrc)); if (r.ok) out = fromText(await r.text(), 'Lyrics file'); } catch (e) { /* */ }
-      if (out && !out.synced) out = null;
+      try { const r = await fetch(nasUrl(t.lrc)); if (r.ok) take(fromText(await r.text(), 'Lyrics file')); } catch (e) { netErr = true; }
     }
-    if (!out && t.plex) out = fromText(await plex.lyrics(t), 'Plex');
-    if (!out && t.lyrics) {
-      const emb = fromText(t.lyrics, 'Embedded');
-      if (emb?.synced) out = emb; else out = out || null;
-      if (!out && !online) out = emb;
+    if (!out && t.plex && plex.signedIn) {
+      try { take(fromText(await plex.lyrics(t), 'Plex')); } catch (e) { netErr = true; }
     }
+    if (!out && t.lyrics) take(fromText(t.lyrics, 'Embedded'));
+    // only plain (unsynced) words so far → look online for a time-synced version
     if (!out && online && !t.demo) {
-      const key = 'lyr:' + t.id;
-      const c = await db.kv.get(key);
-      if (c && (c.found || Date.now() - c.at < MISS_TTL)) out = c.found ? c.data : null;
+      const key = KEY + t.id;
+      const c = fresh ? null : await db.kv.get(key);
+      if (c && (c.found || Date.now() - c.at < MISS_TTL)) take(c.found ? c.data : null);
       else {
         const res = await lrclib(t);
-        if (res !== undefined) await db.kv.set(key, { found: !!res, data: res, at: Date.now() });
-        out = res || null;
+        if (res === undefined) netErr = true;
+        else await db.kv.set(key, { found: !!res, data: res, at: Date.now() });
+        take(res);
       }
     }
-    if (!out && t.lyrics) out = fromText(t.lyrics, 'Embedded');
-    if (out) mem.set(t.id, out);
-    else mem.set(t.id, null);
+    out = out || plain;
+    // a network hiccup isn't "no lyrics": try again next time instead of remembering the miss
+    if (out || !netErr) mem.set(t.id, out);
     return out;
   })();
   inflight.set(t.id, p);

@@ -203,7 +203,7 @@ export function playlistArt(p, cls = '') {
     if (ids.length >= 4) break;
   }
   if (ids.length < 4) return art(ids[0], cls);
-  return html`<div class="art mosaic ${cls}">${ids.map((id) => html`<img src="${artUrl(id, 300)}" alt="" loading="lazy">`)}</div>`;
+  return html`<div class="art mosaic ${cls}">${ids.map((id) => html`<img src="${artUrl(id, 300)}" alt="" loading="lazy" decoding="async" onload="this.classList.add('in')">`)}</div>`;
 }
 
 // ---------- album ----------

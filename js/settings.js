@@ -51,6 +51,7 @@ export const DEFAULTS = {
   gridCols: 2,
   showBadges: true,
   showBpm: true,
+  showBpm: true,
   showNextTransition: true,
   haptics: true,
   dualScreen: 'auto',         // 'auto' (split at hinge) | 'span' (across hinge) | 'off'

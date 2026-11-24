@@ -5,7 +5,7 @@ import { library } from '../library.js';
 import { settings } from '../settings.js';
 import { analyze } from '../analysis.js';
 import { artColors, artUrl } from '../art.js';
-import { art, badges, haptic, actionSheet, toast, formatLine } from './components.js';
+import { art, badges, haptic, actionSheet, toast, formatLine, preloadArt } from './components.js';
 import { getLyrics } from '../lyrics.js';
 import { renderBooth, tickBooth } from './djbooth.js';
 
@@ -91,6 +91,7 @@ export function initNowPlaying(h) {
   engine.on('state', renderState);
   engine.on('time', renderTime);
   engine.on('queue', () => { if (mode === 'queue') renderQueue(); });
+  engine.on('plan', () => { preloadArt(engine.upcoming?.track?.artId, [200, 360, 640]); });
   engine.on('plan', () => { renderHint(); renderWaveMarks(); if (mode === 'booth') renderBooth($('#np .np-booth')); if (mode === 'lyrics' && lyrics) markCue(); });
   engine.on('queue', () => { if (mode === 'booth') renderBooth($('#np .np-booth')); });
   engine.on('analysis', (id) => {
@@ -163,6 +164,7 @@ async function act(a, el) {
     case 'like': if (t) { const on = library.toggleLike(t.id); haptic(on ? 15 : 6); } break;
     case 'queue': setMode('queue'); break;
     case 'lyrics': setMode('lyrics'); break;
+    case 'lyrics-retry': { const { forgetLyrics } = await import('../lyrics.js'); forgetLyrics(engine.track); renderLyrics(true); break; }
     case 'booth': setMode('booth'); break;
     case 'dj-style': {
       const order = ['beats', 'auto', 'wordplay'];
@@ -446,7 +448,11 @@ function renderTime() {
       const line = box.querySelector(`.ly[data-i="${idx}"]`);
       if (line) {
         line.classList.add('on');
-        box.scrollTo({ top: line.offsetTop - box.clientHeight * 0.35, behavior: 'smooth' });
+        // keep the sung line ~1/3 down; leave the user alone for a few seconds after they scroll
+        if (Date.now() - lyricTouch > 3500) {
+          const top = box.scrollTop + line.getBoundingClientRect().top - box.getBoundingClientRect().top - box.clientHeight * 0.33;
+          box.scrollTo({ top, behavior: Math.abs(top - box.scrollTop) > box.clientHeight * 1.5 ? 'auto' : 'smooth' });
+        }
       }
     }
   }
@@ -482,16 +488,21 @@ function renderQueue() {
 }
 
 // ---------- lyrics ----------
-async function renderLyrics() {
+let lyricTouch = 0;
+async function renderLyrics(fresh = false) {
   const box = $('#np .np-lyrics');
   const t = engine.track;
   if (!t) return;
+  if (!box.dataset.wired) {
+    box.dataset.wired = '1';
+    for (const ev of ['touchstart', 'wheel']) box.addEventListener(ev, () => { lyricTouch = Date.now(); }, { passive: true });
+  }
   box.innerHTML = '<div class="ly-loading"><div class="spinner"></div></div>';
-  lyrics = await getLyrics(t);
+  lyrics = await getLyrics(t, fresh ? { fresh: true } : undefined);
   lastLyricIdx = -1;
   if (engine.track !== t) return;
   if (!lyrics) {
-    box.innerHTML = html`<div class="ly-none">${icon('lyrics')}<p>No lyrics found for this song.</p><small>${settings.get('onlineLyrics') ? 'Searched your files, Plex and LRCLIB by title & artist.' : 'Turn on Online lyrics in Settings → Playback to search by title & artist.'}</small></div>`;
+    box.innerHTML = html`<div class="ly-none">${icon('lyrics')}<p>No lyrics found for this song.</p><small>${settings.get('onlineLyrics') ? 'Searched your files, Plex and LRCLIB by title & artist.' : 'Turn on Online lyrics in Settings → Playback to search by title & artist.'}</small><button class="pill-sm" data-np="lyrics-retry">Search again</button></div>`;
     return;
   }
   setTimeout(markCue, 0);

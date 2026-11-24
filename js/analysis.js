@@ -18,9 +18,11 @@ export function trackSrc(t) {
   if (t.plex) return plex.connected ? plex.partUrl(t) : library.cacheKey(t);
   return nasUrl(t.url, t.size);
 }
+// Results are kept forever: an app update never throws away BPM/key/beat grids that were already measured.
+const MIN_USABLE = 4;
 export function isAnalyzed(t) {
   const a = library.analysis.get(t.id);
-  return a && a.v === ANALYSIS_VERSION;
+  return !!a && a.v >= MIN_USABLE;
 }
 
 function networkOk() {
@@ -73,6 +75,13 @@ export function analyze(t, { force = false } = {}) {
       const res = await analyzeBuffer(ab);
       if (!res) return null;
       const rec = { id: t.id, v: ANALYSIS_VERSION, ...res, at: Date.now() };
+      // a BPM you tapped in yourself always wins over detection
+      const old = library.analysis.get(t.id);
+      if (old?.tapped && old.bpm) {
+        const r = old.bpm / (rec.bpm || old.bpm);
+        Object.assign(rec, { bpm: old.bpm, bpmConf: 1, tapped: true });
+        if (Math.abs(r - 1) > 0.03) rec.beatOffset = old.beatOffset ?? rec.beatOffset;
+      }
       library.setAnalysis(rec);
       return rec;
     } catch (e) {

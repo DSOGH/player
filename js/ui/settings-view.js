@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.8.0';
+export const APP_VERSION = '1.9.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -63,6 +63,7 @@ async function root() {
       ${link('#/settings/storage', 'storage', 'Downloads & Storage')}
       ${link('#/settings/about', 'info', 'About & Help')}`)}
     ${group('', html`${button('rescan', 'refresh', scanner.running ? 'Scanning…' : 'Scan for New Music', { sub: await lastScanText() })}`)}
+    ${group('', html`${button('force-refresh', 'refresh', 'Refresh App', { sub: `Load the newest version (v${APP_VERSION} now) — you stay signed in, nothing is lost` })}`)}
     <div class="bottom-pad"></div>`,
   };
 }
@@ -317,6 +318,7 @@ function appearance() {
     ${group('Library', html`
       ${seg('gridCols', 'Album grid', [[2, 'Large'], [3, 'Small']])}
       ${toggle('showBadges', 'Show quality badges', 'Lossless / Hi-Res Lossless')}
+      ${toggle('showBpm', 'Show BPM & key on songs', 'Measured once and saved on this phone')}
       ${toggle('showBpm', 'Show BPM in player')}
       ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
     `)}
@@ -364,7 +366,7 @@ async function storage() {
       ${button('clear-analysis', 'trash', 'Clear song analysis', { sub: 'BPM, silences and loudness will be measured again' })}
     `)}
     ${group('Backup', html`
-      ${button('export', 'download', 'Export settings, playlists & likes')}
+      ${button('export', 'download', 'Export settings, playlists, likes & BPM')}
       ${button('import', 'refresh', 'Import backup…')}
       ${button('reset-settings', 'refresh', 'Reset all settings', { danger: true })}
     `)}
@@ -386,7 +388,7 @@ function about() {
       <a class="set-row link" href="https://github.com/DSOGH/player#connect-your-nas" target="_blank" rel="noopener"><span class="set-ic">${icon('server')}</span><div class="set-text"><span>NAS setup guide</span></div>${icon('right', 'chev')}</a>
       <a class="set-row link" href="https://github.com/DSOGH/player#install-on-your-phone" target="_blank" rel="noopener"><span class="set-ic">${icon('plus')}</span><div class="set-text"><span>Add to Home Screen</span></div>${icon('right', 'chev')}</a>
       <a class="set-row link" href="https://github.com/DSOGH/player" target="_blank" rel="noopener"><span class="set-ic">${icon('info')}</span><div class="set-text"><span>Source code</span></div>${icon('right', 'chev')}</a>
-      ${button('check-update', 'refresh', 'Check for updates')}
+      ${button('force-refresh', 'refresh', 'Refresh App', { sub: 'Loads the newest version — stays signed in' })}
     `)}
     ${group('Tips', html`<div class="help">
       <p>• Swipe the mini player left/right to skip. Swipe the player down to close it.</p>

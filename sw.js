@@ -5,7 +5,7 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.8.0';
+const VERSION = 'v1.9.0';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -200,6 +200,31 @@ async function art(id) {
   } catch (e) { return new Response(null, { status: 404 }); }
 }
 
+// Plex covers: kept on the device after the first view (keyed without the server address/token, so they
+// survive network changes and load instantly — even offline).
+const ART_CACHE = 'plexart-v1';
+async function plexArt(req, url) {
+  const cache = await caches.open(ART_CACHE);
+  const key = url.origin + url.pathname;
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const [, size, thumb] = url.pathname.match(/__pa\/(\d+)\/(.+)$/) || [];
+  const p = await getPlex();
+  if (!thumb || !p.base || !p.server) return new Response(null, { status: 404 });
+  const q = new URLSearchParams({ width: size, height: size, minSize: 1, upscale: 1, url: decodeURIComponent(thumb), 'X-Plex-Token': p.server.token });
+  const src = `${p.base}/photo/:/transcode?${q}`;
+  let r;
+  try { r = await fetch(src, { mode: 'cors', credentials: 'omit' }); } catch (e) { r = null; }
+  if (r && r.ok) {
+    const blob = await r.blob();
+    const res = new Response(blob, { headers: { 'Content-Type': blob.type || 'image/jpeg', 'Cache-Control': 'max-age=31536000, immutable' } });
+    cache.put(key, res.clone()).catch(() => {});
+    return res;
+  }
+  // server without CORS: let the browser load it directly (not stored)
+  try { return await fetch(src, { mode: 'no-cors', credentials: 'omit' }); } catch (e) { return new Response(null, { status: 404 }); }
+}
+
 const demoCache = new Map();
 async function demo(req, url) {
   const key = url.pathname + url.search;
@@ -248,6 +273,7 @@ self.addEventListener('fetch', (e) => {
   const p = url.pathname;
   if (p.includes('/__pc/')) return e.respondWith(fromCachesByKey(url.href, e.request).then((r) => r || new Response(null, { status: 503 })));
   if (p.endsWith('/__nas')) return e.respondWith(nas(e.request, url));
+  if (p.includes('/__pa/')) return e.respondWith(plexArt(e.request, url));
   if (p.includes('/__art/')) return e.respondWith(art(decodeURIComponent(p.split('/__art/')[1])));
   if (p.includes('/__demo/')) return e.respondWith(demo(e.request, url));
   if (e.request.method === 'GET') e.respondWith(shell(e.request));

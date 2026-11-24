@@ -21,10 +21,26 @@ export function haptic(ms = 8) {
 }
 
 // ---------- art ----------
+const seenArt = new Set();
+window.__seenArt = seenArt;
+export function preloadArt(id, sizes = [200, 640]) {
+  if (!id) return;
+  for (const sz of sizes) {
+    const src = artUrl(id, sz);
+    if (seenArt.has(src)) continue;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => seenArt.add(src);
+    img.src = src;
+  }
+}
 export function art(id, cls = '', alt = '') {
   if (!id) return html`<div class="art ${cls} art-empty">${icon('note')}</div>`;
   const big = /hero|np-art|card|top-art|avatar/.test(cls);
-  return html`<div class="art ${cls}"><img src="${artUrl(id, big ? 640 : 200)}" alt="${alt}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('art-empty');this.remove()"></div>`;
+  const src = artUrl(id, big ? 640 : 200);
+  // covers already shown this session appear immediately; new ones fade in once decoded (no pop-in)
+  const seen = seenArt.has(src);
+  return html`<div class="art ${cls}"><img src="${src}" alt="${alt}" ${seen ? '' : 'loading="lazy"'} decoding="${seen ? 'sync' : 'async'}" class="${seen ? 'in' : ''}" referrerpolicy="no-referrer" onload="this.classList.add('in');window.__seenArt?.add(this.getAttribute('src'))" onerror="this.parentNode.classList.add('art-empty');this.remove()"></div>`;
 }
 
 export function badges(t, { compact = false } = {}) {
@@ -47,6 +63,13 @@ export function formatLine(t) {
 }
 
 // ---------- rows & cards ----------
+export function bpmChip(t) {
+  if (!settings.get('showBpm')) return '';
+  const bpm = library.bpmOf(t);
+  if (!bpm) return '';
+  const k = library.analysis.get(t.id)?.camelot;
+  return html`<span class="bpmchip">${Math.round(bpm)}${k ? html`<i>${k}</i>` : ''}</span>`;
+}
 export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum = false, extra = '' } = {}) {
   const playing = engine.track?.id === t.id;
   const liked = library.likes.has(t.id);
@@ -58,6 +81,7 @@ export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum
       <div class="t1">${t.title}${t.edition === 'explicit' ? html`<span class="ebadge" title="Explicit">E</span>` : ''}</div>
       <div class="t2">${liked ? html`<span class="mini-heart">${icon('heart-fill')}</span>` : ''}${off ? html`<span class="mini-dl">${icon('downloaded')}</span>` : ''}${showAlbum ? `${t.artist} · ${t.album}` : t.artist}</div>
     </div>
+    ${bpmChip(t)}
     ${raw(extra)}
     <button class="icon-btn more" data-a="track-menu" data-tid="${t.id}" aria-label="More">${icon('more')}</button>
   </div>`;
