@@ -8,8 +8,10 @@ import { analyze, isAnalyzed } from '../analysis.js';
 import { saveSource, loadSource, testSource } from '../sources.js';
 import * as db from '../db.js';
 import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
+import { plex } from '../plex.js';
+import { plexPage, plexLogo } from './plex-view.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -39,20 +41,20 @@ function fmtNum(v) { return typeof v === 'number' ? (Number.isInteger(v) ? v : v
 
 // ---------- pages ----------
 export async function settingsView(page = '') {
-  const fn = { '': root, source, playback, sound, library: libraryPage, appearance, storage, about }[page] || root;
+  const fn = { '': root, sources, plex: plexPage, source, playback, sound, library: libraryPage, appearance, storage, about }[page] || root;
   return fn();
 }
 
 async function root() {
   const src = await loadSource();
   const demo = await db.kv.get('demo');
-  const srcLabel = src?.url ? new URL(src.url).host : demo ? 'Demo library' : 'Not connected';
+  const srcLabel = plex.connected ? `Plex · ${plex.cfg.server.name}` : plex.signedIn ? 'Plex · choose server' : src?.url ? new URL(src.url).host : demo ? 'Demo library' : 'Not connected';
   const modeLabel = { smart: 'Smart', crossfade: `Crossfade ${settings.get('crossfadeSec')}s`, off: 'Gapless' }[settings.get('transition')];
   return {
     title: 'Settings',
     html: html`${pageHeader('Settings')}
     ${group('', html`
-      ${link('#/settings/source', 'server', 'Music Source', srcLabel)}
+      ${link('#/settings/sources', 'server', 'Music Sources', srcLabel)}
       ${link('#/settings/playback', 'mix', 'Playback & Transitions', modeLabel)}
       ${link('#/settings/sound', 'eq', 'Sound & EQ', settings.get('eqOn') ? EQ_NAMES[settings.get('eqPreset')] : 'EQ off')}
       ${link('#/settings/library', 'library', 'Library', `${library.size} songs`)}
@@ -70,12 +72,32 @@ async function lastScanText() {
   return 'Last scan ' + (m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`);
 }
 
+async function sources() {
+  const src = await loadSource();
+  const demo = await db.kv.get('demo');
+  const nPlex = [...library.tracks.values()].filter((t) => t.plex).length;
+  const nNas = [...library.tracks.values()].filter((t) => !t.plex && !t.demo).length;
+  return {
+    title: 'Music Sources',
+    html: html`${pageHeader('Music Sources', { back: true })}
+    ${group('', html`
+      <a class="set-row link" href="#/settings/plex"><span class="set-ic plex-ic">${plexLogo()}</span>
+        <div class="set-text"><span>Plex</span><small>${plex.connected ? `${plex.cfg.server.name} · ${nPlex} songs` : plex.signedIn ? `Signed in as ${plex.user?.name} · choose a server` : 'Sign in to use your Plex music library'}</small></div>${icon('right', 'chev')}</a>
+      <a class="set-row link" href="#/settings/source"><span class="set-ic">${icon('server')}</span>
+        <div class="set-text"><span>NAS folder</span><small>${src?.url ? `${new URL(src.url).host} · ${nNas} songs` : 'WebDAV or HTTP folder — no Plex needed'}</small></div>${icon('right', 'chev')}</a>
+    `, 'You can use both at once — everything shows up in one library.')}
+    ${group('Demo', html`${toggle('__demo', 'Demo library', 'Generated songs to try transitions & BPM')}`)}
+    <div class="bottom-pad"></div>`,
+    after(root) { const d = $('[data-set="__demo"]', root); if (d) d.checked = !!demo; },
+  };
+}
+
 async function source() {
   const s = (await loadSource()) || { type: 'webdav', url: '', username: '' };
   const demo = await db.kv.get('demo');
   return {
-    title: 'Music Source',
-    html: html`${pageHeader('Music Source', { back: true })}
+    title: 'NAS Folder',
+    html: html`${pageHeader('NAS Folder', { back: true })}
     <form class="src-form" data-src-form>
       ${group('Connect to your NAS', html`
         <div class="set-row col">
@@ -98,7 +120,6 @@ async function source() {
         <button type="submit" class="btn pill primary">Save & Scan</button>
       </div>
     </form>
-    ${group('Demo', html`${toggle('__demo', 'Demo library', 'Generated songs with real tempos, fades and silences to try transitions & BPM')}`)}
     ${group('Setup help', html`
       <div class="help">
         <p><b>WebDAV</b> works with Synology (WebDAV Server package), QNAP, TrueNAS, Unraid, Nextcloud and rclone. <b>HTTP folder</b> works with nginx/Caddy/Apache directory listings.</p>
@@ -107,7 +128,6 @@ async function source() {
       </div>`)}
     <div class="bottom-pad"></div>`,
     after(root) {
-      $('[data-set="__demo"]', root).checked = !!demo;
       let type = s.type || 'webdav';
       $('[data-src-type]', root).addEventListener('click', (e) => {
         const b = e.target.closest('button'); if (!b) return;
@@ -279,6 +299,8 @@ function appearance() {
         <div class="swatches">${swatches.map((c) => html`<button class="swatch${acc === c ? ' on' : ''}${c === 'dynamic' ? ' dyn' : ''}" data-accent="${c}" style="${c !== 'dynamic' ? `background:${c}` : ''}" aria-label="${c}">${c === 'dynamic' ? icon('smart') : ''}</button>`)}</div></div>
       ${seg('npBackground', 'Player background', [['animated', 'Animated'], ['static', 'Artwork'], ['plain', 'Plain']])}
       ${toggle('artShrinkOnPause', 'Shrink artwork when paused')}
+      ${toggle('reactiveArt', 'Reactive artwork', 'Artwork pulses gently with the beat')}
+      ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}
     `)}
     ${group('Library', html`
       ${seg('gridCols', 'Album grid', [[2, 'Large'], [3, 'Small']])}

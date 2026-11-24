@@ -3,6 +3,7 @@
 import { library } from './library.js';
 import { settings } from './settings.js';
 import { nasUrl } from './util.js';
+import { plex } from './plex.js';
 
 const SR = 11025;
 const WIN = 256;               // ~23 ms envelope windows
@@ -12,7 +13,9 @@ const inflight = new Map();
 const PREFETCH_KEEP = 6;
 
 export function trackSrc(t) {
-  return t.demo ? t.url : nasUrl(t.url, t.size);
+  if (t.demo) return t.url;
+  if (t.plex) return nasUrl(plex.connected ? plex.partUrl(t) : t.url, t.size, t.url);
+  return nasUrl(t.url, t.size);
 }
 export function isAnalyzed(t) {
   const a = library.analysis.get(t.id);

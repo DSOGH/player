@@ -69,7 +69,7 @@ class Engine extends Emitter {
     this.context = null; // { type, id, name }
     this.ctx = null;
     this.plan = null;
-    this.next = null;     // { index, track }
+    this.upcoming = null;     // { index, track }
     this.planTimer = null;
     this.transition = null;
     this.errors = 0;
@@ -546,7 +546,7 @@ class Engine extends Emitter {
     const d = this.cur;
     this.notePlayed(d);
     if (this.sleepEndOfTrack) { this.sleepEndOfTrack = false; this.playing = false; this.emit('state'); this.emit('sleep'); return; }
-    const i = this.next?.index ?? this.nextIndex(true);
+    const i = this.upcoming?.index ?? this.nextIndex(true);
     if (i < 0) { this.playing = false; this.emit('state'); this.emit('ended'); return; }
     this.playIndex(i, { mode: 'cut' });
   }
@@ -555,19 +555,19 @@ class Engine extends Emitter {
   cancelNext() {
     clearTimeout(this.planTimer); this.planTimer = null;
     this.plan = null;
-    if (this.next && !this.transition) this.other.unload();
-    this.next = null;
+    if (this.upcoming && !this.transition) this.other.unload();
+    this.upcoming = null;
     this.emit('plan', null);
   }
   invalidateNext() { if (!this.transition) this.cancelNext(); }
 
   prepareNext() {
-    if (this.next || this.transition || this.sleepEndOfTrack) return;
+    if (this.upcoming || this.transition || this.sleepEndOfTrack) return;
     const i = this.nextIndex(true);
     if (i < 0) return;
     const t = library.track(this.queue[i]);
     if (!t) return;
-    this.next = { index: i, track: t };
+    this.upcoming = { index: i, track: t };
     this.computePlan();
     const d = this.other;
     d.load(t, this.plan?.bStart || 0);
@@ -578,8 +578,8 @@ class Engine extends Emitter {
   }
 
   computePlan() {
-    if (!this.next || this.transition) return;
-    const A = this.cur.track, B = this.next.track;
+    if (!this.upcoming || this.transition) return;
+    const A = this.cur.track, B = this.upcoming.track;
     if (!A || !B) return;
     const p = this.makePlan(A, B, this.durationOf(this.cur));
     const old = this.plan;
@@ -684,7 +684,7 @@ class Engine extends Emitter {
 
   async runPlan() {
     this.planTimer = null;
-    const p = this.plan, nx = this.next;
+    const p = this.plan, nx = this.upcoming;
     if (!p || !nx || this.transition || !this.playing) return;
     const A = this.cur, B = this.other;
     if (B.track !== nx.track) { B.load(nx.track, p.bStart); this.applyDeckGain(B); }
@@ -699,7 +699,7 @@ class Engine extends Emitter {
     this.transition = { from: A, to: B, plan: p };
     this.ai = 1 - this.ai;
     this.index = nx.index;
-    this.next = null;
+    this.upcoming = null;
     this.plan = null;
     this.emit('plan', null);
     const tok = A.token;
@@ -738,7 +738,7 @@ class Engine extends Emitter {
     if (!dur) return;
     const t = d.el.currentTime;
     const remaining = dur - t;
-    if (!this.next && remaining < 40) this.prepareNext();
+    if (!this.upcoming && remaining < 40) this.prepareNext();
     if (this.plan && !this.planTimer) {
       const dt = (this.plan.mixStart - t) / (d.el.playbackRate || 1);
       if (dt <= 1.2) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
@@ -747,8 +747,8 @@ class Engine extends Emitter {
   }
 
   onAnalysis(id) {
-    if (this.track?.id === id) { this.applyDeckGain(this.cur, true); if (this.next) this.computePlan(); }
-    if (this.next?.track.id === id) { this.applyDeckGain(this.other); this.computePlan(); }
+    if (this.track?.id === id) { this.applyDeckGain(this.cur, true); if (this.upcoming) this.computePlan(); }
+    if (this.upcoming?.track.id === id) { this.applyDeckGain(this.other); this.computePlan(); }
     this.emit('analysis', id);
   }
   onSetting(k) {
@@ -757,7 +757,7 @@ class Engine extends Emitter {
     if (k === 'mono') this.applyMono();
     if (['leveling', 'levelPreamp', 'autoLevel', 'limiter', '*'].includes(k)) this.decks.forEach((d) => d.track && this.applyDeckGain(d, true));
     if (['transition', 'crossfadeSec', 'fadeCurve', 'gaplessAlbums', 'skipSilence', 'beatMatch', 'tempoMatch', 'tempoMatchMax', '*'].includes(k)) {
-      if (this.next) this.computePlan();
+      if (this.upcoming) this.computePlan();
       clearTimeout(this.planTimer); this.planTimer = null;
       if (this.track && this.wantsAnalysis()) analyze(this.track);
     }

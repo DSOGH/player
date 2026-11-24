@@ -99,8 +99,8 @@ export async function pool(items, n, fn) {
   await Promise.all(workers);
 }
 
-export function nasUrl(u, size) {
-  return `./__nas?u=${encodeURIComponent(u)}${size ? `&s=${size}` : ''}`;
+export function nasUrl(u, size, key) {
+  return `./__nas?u=${encodeURIComponent(u)}${size ? `&s=${size}` : ''}${key ? `&k=${encodeURIComponent(key)}` : ''}`;
 }
 
 export function greeting() {

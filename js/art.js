@@ -96,8 +96,22 @@ const colorCache = new Map();
 export async function artColors(id) {
   if (!id) return null;
   if (colorCache.has(id)) return colorCache.get(id);
-  const rec = await db.get('art', id);
-  const c = rec?.colors || null;
+  let rec = await db.get('art', id);
+  let c = rec?.colors || null;
+  if (!c && rec) {
+    // artwork fetched lazily (e.g. from Plex): measure its colors once
+    try {
+      const img = new Image();
+      img.src = artUrl(id);
+      await img.decode();
+      const sm = canvas(24, 24);
+      const ctx = sm.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, 24, 24);
+      c = palette(ctx, 24, 24);
+      rec = await db.get('art', id);
+      if (rec) { rec.colors = c; await db.put('art', rec); }
+    } catch (e) { c = null; }
+  }
   colorCache.set(id, c);
   return c;
 }

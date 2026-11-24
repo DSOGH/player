@@ -4,6 +4,8 @@ import { library } from '../library.js';
 import { settings } from '../settings.js';
 import { engine } from '../engine.js';
 import { scanner } from '../scanner.js';
+import { plex } from '../plex.js';
+import { plexLogo } from './plex-view.js';
 import {
   art, trackRow, albumCard, artistCard, mixCard, shelf, regList, empty, pageHeader, badges, formatLine,
 } from './components.js';
@@ -43,6 +45,13 @@ function playButtons(listKey, { extra = '' } = {}) {
 }
 
 function scanBanner() {
+  if (plex.running && plex.progress) {
+    const q = plex.progress;
+    return html`<div class="scan-banner" data-scan-banner data-kind="plex">
+      <div class="spinner"></div>
+      <div><b>${q.phase}</b><span>${q.total ? `${q.done} of ${q.total} songs from ${plex.cfg?.server?.name || 'Plex'}` : `Syncing with ${plex.cfg?.server?.name || 'Plex'}…`}</span></div>
+    </div>`;
+  }
   const p = scanner.progress;
   if (!scanner.running || !p) return '';
   const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
@@ -55,15 +64,21 @@ function scanBanner() {
 // ---------- home ----------
 export function home() {
   if (!library.size) {
+    const busy = plex.running || scanner.running;
     return {
-      title: 'Home',
-      html: html`${pageHeader(greeting())}${scanBanner()}
-      <div class="onboard">
-        <div class="onboard-art">${icon('server')}</div>
-        <h2>Your music, straight from your NAS</h2>
-        <p>Connect your NAS over WebDAV or an HTTP folder. Tags, artwork and lyrics are read right from your files — no server software needed.</p>
-        <a class="btn pill primary big" href="#/settings/source">${icon('server')}Connect NAS</a>
-        <button class="btn pill big" data-a="demo">${icon('play')}Try the demo library</button>
+      title: 'Welcome',
+      html: html`<div class="welcome">
+        <div class="welcome-bg"><i></i><i></i><i></i></div>
+        <div class="welcome-inner">
+          <img class="welcome-icon" src="./icons/icon-192.png" alt="">
+          <h1>Player</h1>
+          <p>All your music. Beautiful transitions.<br>Lossless, from your own server.</p>
+          ${busy ? scanBanner() : plex.signedIn && !plex.connected ? html`
+            <a class="btn pill primary big plex-btn" href="#/settings/plex">${plexLogo()}Choose your Plex server</a>` : html`
+            <button class="btn pill primary big plex-btn" data-a="plex-signin">${plexLogo()}Sign in with Plex</button>
+            <a class="btn pill big glass" href="#/settings/source">${icon('server')}Connect a NAS folder</a>
+            <button class="btn pill big link-btn" data-a="demo">Try the demo library</button>`}
+        </div>
       </div>`,
     };
   }
@@ -95,7 +110,7 @@ export function home() {
 }
 
 // ---------- library ----------
-const TABS = [['playlists', 'Playlists'], ['albums', 'Albums'], ['artists', 'Artists'], ['songs', 'Songs'], ['genres', 'Genres'], ['downloaded', 'Downloaded']];
+const TABS = [['playlists', 'Playlists'], ['albums', 'Albums'], ['artists', 'Artists'], ['songs', 'Songs'], ['genres', 'Genres'], ['history', 'History'], ['downloaded', 'Downloaded']];
 export function libraryView(tab = 'albums') {
   const chips = html`<div class="chips">${TABS.map(([k, l]) => html`<a class="chip${k === tab ? ' on' : ''}" href="#/library/${k}">${l}</a>`)}</div>`;
   let body = '';
@@ -127,8 +142,13 @@ export function libraryView(tab = 'albums') {
     body = html`<div class="rows">
       <button class="row" data-a="new-playlist"><div class="art sm add-art">${icon('plus')}</div><div class="meta"><div class="t1 accent">New Playlist…</div></div></button>
       <a class="row" href="#/liked"><div class="art sm liked-art">${icon('heart-fill')}</div><div class="meta"><div class="t1">Liked Songs</div><div class="t2">${library.likes.size} songs</div></div>${icon('right', 'chev')}</a>
-      ${pls.map((p) => html`<a class="row" href="#/playlist/${p.id}">${playlistArt(p, 'sm')}<div class="meta"><div class="t1">${p.name}</div><div class="t2">${p.source === 'nas' ? 'From NAS · ' : ''}${p.trackIds.length} songs</div></div>${icon('right', 'chev')}</a>`)}
+      ${pls.map((p) => html`<a class="row" href="#/playlist/${p.id}">${playlistArt(p, 'sm')}<div class="meta"><div class="t1">${p.name}</div><div class="t2">${p.source === 'nas' ? 'From NAS · ' : p.source === 'plex' ? 'From Plex · ' : ''}${p.trackIds.length} songs</div></div>${icon('right', 'chev')}</a>`)}
     </div>`;
+  } else if (tab === 'history') {
+    const list = library.recentlyPlayed(200);
+    const key = regList(list, { type: 'history', name: 'Recently Played' });
+    body = list.length ? html`<div class="lib-count">Recently played</div>${lazyRows(list, key, { showAlbum: true })}`
+      : empty('timer', 'Nothing played yet', 'Songs you listen to show up here.');
   } else if (tab === 'downloaded') {
     const list = [...library.tracks.values()].filter((t) => library.offline.has(t.url));
     const key = regList(list, { type: 'downloaded', name: 'Downloaded' });
@@ -177,7 +197,7 @@ export function albumView(id) {
   return {
     title: a.title,
     html: html`${pageHeader('', { back: true, actions: html`<button class="icon-btn" data-a="album-menu" data-id="${a.id}">${icon('more')}</button>` })}
-    <div class="hero album-hero">
+    <div class="hero album-hero" data-tint="${a.artId || ''}">
       ${art(a.artId, 'hero-art', a.title)}
       <h1 class="hero-title">${a.title}</h1>
       <a class="hero-sub accent" href="#/artist/${a.artistId}">${a.artist}</a>
@@ -240,7 +260,7 @@ export function playlistView(id) {
   return {
     title: p.name,
     html: trackListPage({
-      title: p.name, sub: p.source === 'nas' ? 'Playlist from your NAS' : 'Playlist', artHtml: playlistArt(p, 'hero-art'),
+      title: p.name, sub: p.source === 'nas' ? 'Playlist from your NAS' : p.source === 'plex' ? `Plex ${p.smart ? 'smart ' : ''}playlist` : 'Playlist', artHtml: playlistArt(p, 'hero-art'),
       tracks, context: { type: 'playlist', id: p.id, name: p.name },
       actions: html`<button class="icon-btn" data-a="playlist-menu" data-id="${p.id}">${icon('more')}</button>`,
       emptyMsg: empty('playlist', 'Empty playlist', 'Use “Add to Playlist” from any song’s ••• menu.'),

@@ -6,6 +6,7 @@ import { settings } from '../settings.js';
 import { analyze } from '../analysis.js';
 import { artColors } from '../art.js';
 import { art, badges, haptic, actionSheet, toast, formatLine } from './components.js';
+import { plex } from '../plex.js';
 
 let mode = 'art'; // art | queue | lyrics
 let open = false;
@@ -74,6 +75,7 @@ export function initNowPlaying(h) {
   wireScrubber();
   wireSwipe();
   wireMiniSwipe();
+  startPulse();
   wireQueueDrag();
   const vol = np.querySelector('.vol');
   vol.value = engine.volume;
@@ -316,7 +318,7 @@ async function onTrack(t) {
   renderTime();
   renderHint();
   lyrics = null;
-  np.querySelector('.np-lyr').classList.toggle('has', !!(t.lyrics || t.lrc));
+  np.querySelector('.np-lyr').classList.toggle('has', !!(t.lyrics || t.lrc || t.plexLyrics));
   if (mode === 'lyrics') renderLyrics();
   if (mode === 'queue') renderQueue();
   document.querySelectorAll('.row.track.playing').forEach((r) => r.classList.remove('playing'));
@@ -359,13 +361,14 @@ function renderChips() {
   const el = $('#np .np-chips');
   if (!t || !el) return;
   const bpm = library.bpmOf(t);
+  $('#np .np-lyr')?.classList.toggle('has', !!(t.lyrics || t.lrc || t.plexLyrics));
   el.innerHTML = html`${badges(t, { compact: true })}${settings.get('showBpm') && bpm ? html`<span class="badge bpm">${icon('bpm')}${Math.round(bpm)} BPM</span>` : ''}`;
 }
 
 function renderHint() {
   const el = $('#np .np-next-hint');
   if (!el) return;
-  const p = engine.plan, nx = engine.next;
+  const p = engine.plan, nx = engine.upcoming;
   if (!settings.get('showNextTransition') || !p || !nx) { el.classList.remove('show'); return; }
   el.dataset.mix = p.mixStart;
   el.innerHTML = html`${icon(p.type === 'gapless' || p.type === 'trim' ? 'gapless' : p.type === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>`;
@@ -458,6 +461,13 @@ async function loadLyrics(t) {
       if (r.ok) { const lines = parseLrc(await r.text()); if (lines.length) out = { synced: true, lines }; }
     } catch (e) { /* */ }
   }
+  if (!out && t.plex) {
+    const txt = await plex.lyrics(t);
+    if (txt) {
+      const lines = parseLrc(txt);
+      out = lines.length ? { synced: true, lines } : { synced: false, lines: txt.split(/\r?\n/).map((text) => ({ t: 0, text })) };
+    }
+  }
   if (!out && t.lyrics) {
     const lines = parseLrc(t.lyrics);
     out = lines.length ? { synced: true, lines } : { synced: false, lines: t.lyrics.split(/\r?\n/).map((text) => ({ t: 0, text })) };
@@ -516,28 +526,89 @@ function wireScrubber() {
 
 function wireSwipe() {
   const np = $('#np');
-  let y0 = null, dy = 0, t0 = 0;
+  let x0 = null, y0 = 0, dx = 0, dy = 0, t0 = 0, axis = null, onArt = false;
+  const artEl = () => np.querySelector('.np-art');
   np.addEventListener('pointerdown', (e) => {
-    if (document.body.classList.contains('dual') || !open) return;
+    const dual = document.body.classList.contains('dual');
+    if (!open && !dual) return;
     const zone = e.target.closest('[data-drag]');
     if (!zone || e.target.closest('button, a, .np-panel, input, .scrub')) return;
-    y0 = e.clientY; dy = 0; t0 = performance.now();
-    np.classList.add('dragging');
+    onArt = !!e.target.closest('.np-art-wrap') && mode === 'art';
+    if (dual && !onArt) return;
+    x0 = e.clientX; y0 = e.clientY; dx = 0; dy = 0; axis = null; t0 = performance.now();
   });
   np.addEventListener('pointermove', (e) => {
-    if (y0 === null) return;
-    dy = Math.max(0, e.clientY - y0);
-    np.style.transform = `translateY(${dy}px)`;
+    if (x0 === null) return;
+    dx = e.clientX - x0; dy = e.clientY - y0;
+    if (!axis && Math.hypot(dx, dy) > 10) {
+      axis = Math.abs(dx) > Math.abs(dy) && onArt && settings.get('artSwipe') ? 'x' : 'y';
+      if (axis === 'y' && document.body.classList.contains('dual')) { x0 = null; return; }
+      np.classList.add(axis === 'x' ? 'swiping' : 'dragging');
+    }
+    if (axis === 'y') np.style.transform = `translateY(${Math.max(0, dy)}px)`;
+    if (axis === 'x') {
+      const a = artEl();
+      a.style.transform = `translateX(${dx}px) rotate(${dx / 40}deg)`;
+      a.style.opacity = String(1 - Math.min(0.6, Math.abs(dx) / 500));
+    }
   });
   const end = () => {
-    if (y0 === null) return;
-    np.classList.remove('dragging');
-    const v = dy / (performance.now() - t0);
-    y0 = null;
-    if (dy > 140 || v > 0.6) closeNP(); else np.style.transform = '';
+    if (x0 === null) return;
+    x0 = null;
+    const v = (axis === 'x' ? Math.abs(dx) : dy) / (performance.now() - t0);
+    np.classList.remove('dragging', 'swiping');
+    if (axis === 'y') {
+      if (dy > 140 || v > 0.6) closeNP(); else np.style.transform = '';
+    } else if (axis === 'x') {
+      const a = artEl();
+      if (Math.abs(dx) > 90 || v > 0.5) {
+        const dir = dx < 0 ? -1 : 1;
+        haptic(12);
+        dir < 0 ? engine.next() : engine.prev();
+        const from = a.style.transform || 'none';
+        a.style.transform = ''; a.style.opacity = '';
+        try {
+          a.animate([{ transform: from, opacity: 0.6 }, { transform: `translateX(${dir * 420}px) rotate(${dir * 8}deg)`, opacity: 0 },
+            { transform: `translateX(${-dir * 160}px) scale(.92)`, opacity: 0, offset: 0.4 }, { transform: 'none', opacity: 1 }],
+          { duration: 480, easing: 'ease-out' });
+        } catch (e) { /* no WAAPI */ }
+      } else {
+        const from = a.style.transform || 'none';
+        a.style.transform = ''; a.style.opacity = '';
+        try { a.animate([{ transform: from }, { transform: 'none' }], { duration: 250, easing: 'cubic-bezier(.2,.9,.3,1.3)' }); } catch (e) { /* */ }
+      }
+    }
+    axis = null;
   };
   np.addEventListener('pointerup', end);
   np.addEventListener('pointercancel', end);
+}
+
+// Artwork that breathes with the kick drum (Enhanced audio engine only)
+function startPulse() {
+  const np = $('#np');
+  let avg = 0, level = 0, buf = null;
+  const loop = () => {
+    requestAnimationFrame(loop);
+    const visible = open || document.body.classList.contains('dual');
+    const an = engine.analyser;
+    if (!visible || !an || !engine.playing || !settings.get('reactiveArt') || mode !== 'art' || document.hidden) {
+      if (level > 0.001) { level *= 0.85; np.style.setProperty('--pulse', level.toFixed(3)); }
+      return;
+    }
+    if (!buf || buf.length !== an.frequencyBinCount) buf = new Uint8Array(an.frequencyBinCount);
+    an.getByteFrequencyData(buf);
+    const hz = engine.ctx.sampleRate / an.fftSize;
+    const lo = Math.max(1, Math.floor(35 / hz)), hi = Math.ceil(140 / hz);
+    let s = 0;
+    for (let i = lo; i <= hi; i++) s += buf[i];
+    const bass = s / (hi - lo + 1) / 255;
+    avg = avg * 0.95 + bass * 0.05;
+    const hit = Math.max(0, bass - avg * 1.08) * 4.5;
+    level = Math.max(level * 0.88, Math.min(1, hit));
+    np.style.setProperty('--pulse', level.toFixed(3));
+  };
+  requestAnimationFrame(loop);
 }
 
 function wireMiniSwipe() {

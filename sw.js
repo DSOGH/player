@@ -5,14 +5,14 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.1.0';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/util.js', './js/db.js', './js/settings.js', './js/sources.js', './js/tags.js',
   './js/scanner.js', './js/library.js', './js/art.js', './js/analysis.js', './js/engine.js', './js/demo.js',
-  './js/demo-synth.js', './js/ui/views.js', './js/ui/nowplaying.js', './js/ui/settings-view.js', './js/ui/components.js',
-  './js/ui/icons.js', './js/ui/dual.js',
+  './js/demo-synth.js', './js/plex.js', './js/ui/views.js', './js/ui/nowplaying.js', './js/ui/settings-view.js', './js/ui/components.js',
+  './js/ui/icons.js', './js/ui/dual.js', './js/ui/plex-view.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
 ];
 
@@ -54,13 +54,25 @@ async function idbGet(store, key) {
   });
 }
 
-let cfg = null;
+let cfg = null, plexCfg = null;
 async function getCfg() {
   if (!cfg) cfg = (await idbGet('kv', 'source')) || {};
   return cfg;
 }
+async function getPlex() {
+  if (!plexCfg) plexCfg = (await idbGet('kv', 'plex')) || {};
+  return plexCfg;
+}
+async function idbPut(store, val) {
+  const d = await idb();
+  return new Promise((res, rej) => {
+    const q = d.transaction(store, 'readwrite').objectStore(store).put(val);
+    q.onsuccess = () => res();
+    q.onerror = () => rej(q.error);
+  });
+}
 self.addEventListener('message', (e) => {
-  if (e.data?.type === 'config-changed') cfg = null;
+  if (e.data?.type === 'config-changed') { cfg = null; plexCfg = null; }
   if (e.data?.type === 'skip-waiting') self.skipWaiting();
 });
 
@@ -95,17 +107,19 @@ async function blobResponse(blob, req, type) {
 async function nas(req, url) {
   const target = url.searchParams.get('u');
   const size = parseInt(url.searchParams.get('s') || '0', 10);
+  const cacheKey = url.searchParams.get('k') || target;
   if (!target) return new Response('missing u', { status: 400 });
   const method = req.method;
   if (method === 'GET') {
     for (const name of ['offline-tracks', 'prefetch']) {
       try {
         const c = await caches.open(name);
-        const hit = await c.match(target);
+        const hit = await c.match(cacheKey);
         if (hit) return blobResponse(await hit.blob(), req, guessType(target, hit.headers.get('content-type')));
       } catch (e) { /* ignore */ }
     }
   }
+  if (target.startsWith('plex://')) return new Response('offline', { status: 503 });
   const c = await getCfg();
   const headers = new Headers();
   for (const h of ['range', 'depth', 'content-type', 'accept']) {
@@ -146,6 +160,16 @@ async function art(id) {
   try {
     const rec = await idbGet('art', id);
     if (!rec) return new Response(null, { status: 404 });
+    if (!rec.blob && rec.src) {
+      // Plex artwork: fetch a 640px version once, then keep it on the device
+      const p = await getPlex();
+      if (!p.base || !p.server) return new Response(null, { status: 404 });
+      const q = new URLSearchParams({ width: 640, height: 640, minSize: 1, upscale: 1, url: rec.src, 'X-Plex-Token': p.server.token });
+      const r = await fetch(`${p.base}/photo/:/transcode?${q}`, { mode: 'cors', credentials: 'omit' });
+      if (!r.ok) return new Response(null, { status: 404 });
+      rec.blob = await r.blob();
+      idbPut('art', rec).catch(() => {});
+    }
     return new Response(rec.blob, { headers: { 'Content-Type': rec.blob.type || 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } });
   } catch (e) { return new Response(null, { status: 404 }); }
 }

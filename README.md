@@ -1,6 +1,6 @@
 # Player
 
-A music player for your phone, in the style of Apple Music and Spotify, that streams **directly from your NAS**. You don't need Plex or a media server. The app reads tags, artwork and lyrics from your files and does everything else on the phone: smart transitions, BPM detection, volume leveling and EQ.
+A music player for your phone, in the style of Apple Music and Spotify. **Sign in with Plex** to play the same library Plexamp uses, or stream **straight from a NAS folder** without any server software. Everything else happens on the phone: smart and beat-matched transitions, BPM detection, volume leveling, EQ and synced lyrics.
 
 **Open it:** https://dsogh.github.io/player/
 
@@ -16,7 +16,23 @@ To look around before connecting your NAS, tap **Try the demo library**. It gene
 
 ---
 
-## Connect your NAS
+## Sign in with Plex (easiest)
+
+1. Open the app and tap **Sign in with Plex**. A Plex window opens. Approve the device, or enter the 4-letter code at **plex.tv/link** on any device.
+2. The app finds your Plex Media Server and connects over Plex's own secure address. It uses your home network when you're home, and remote access or Plex Relay when you're away.
+3. Your music library syncs. If you have more than one server or music library, choose them in **Settings → Music Sources → Plex**.
+
+What syncs with Plex:
+* **Original files are streamed:** FLAC and hi-res stay lossless, and the player shows **Hi-Res Lossless** for 24-bit/96 kHz tracks.
+* **Plex's loudness analysis** is used for volume leveling, the same values Plexamp uses.
+* **Lyrics** come from Plex.
+* **Loves (♥)** sync both ways.
+* **Plex playlists**, including smart playlists, appear in your Library.
+* **Plays** count in your Plex history, and the song shows as **Now Playing** in Plex. You can turn this off.
+
+If the app can't connect, make sure **Remote Access** is enabled on the server and **Secure connections** is set to *Preferred* (Plex → Settings → Network).
+
+## Connect your NAS directly (no Plex)
 
 The app runs on GitHub Pages (HTTPS), so the browser needs two things from your NAS:
 
@@ -91,6 +107,9 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 * Soft pause and fade-on-skip.
 
 **Library and player**
+* Sign in with Plex, a NAS folder, or both at once: everything shows up in one library.
+* Swipe the artwork left or right to skip. With the *Enhanced* audio engine, the artwork pulses gently with the beat.
+* Album pages are tinted with the colors of their artwork. A History tab lists what you've played.
 * Home (quick picks, mixes, Jump Back In, Recently Added, On Repeat), Albums, Artists, Songs, Genres, Playlists, Liked Songs and Downloaded.
 * Full-screen player with an animated artwork background, a draggable queue, synced lyrics, sleep timer, track info, and Lossless / Hi-Res Lossless badges.
 * **Downloads** for offline playback.
@@ -113,6 +132,7 @@ It's plain HTML, CSS and JavaScript modules, with no build step.
 python3 -m http.server 8080   # then open http://localhost:8080
 ```
 
+* `js/plex.js`: Plex sign-in (PIN), server discovery and connection racing, library/playlist sync, lyrics, play reporting
 * `js/tags.js`: tag/artwork parser using HTTP Range requests
 * `js/scanner.js`, `js/sources.js`: WebDAV / HTTP directory walking
 * `js/engine.js`: two-deck Web Audio engine (transitions, leveling, EQ)

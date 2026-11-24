@@ -84,7 +84,7 @@ class Scanner extends Emitter {
       if (this.abort) return;
 
       // 2. diff
-      const existing = new Map((await db.all('tracks')).map((t) => [t.id, t]));
+      const existing = new Map((await db.all('tracks')).filter((t) => !t.plex).map((t) => [t.id, t]));
       const keep = new Set();
       const todo = [];
       for (const f of files) {
@@ -98,7 +98,7 @@ class Scanner extends Emitter {
         }
         todo.push({ f, id, old, lrc });
       }
-      const removed = [...existing.keys()].filter((id) => !keep.has(id) && !existing.get(id).demo);
+      const removed = [...existing.keys()].filter((id) => !keep.has(id) && !existing.get(id).demo && !existing.get(id).plex);
       await db.delMany('tracks', removed);
       p.removed = removed.length;
       p.total = todo.length;

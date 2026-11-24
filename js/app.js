@@ -5,7 +5,7 @@ import { settings } from './settings.js';
 import { library } from './library.js';
 import { engine } from './engine.js';
 import { scanner } from './scanner.js';
-import { loadKnown } from './art.js';
+import { loadKnown, artColors } from './art.js';
 import { installDemo, removeDemo } from './demo.js';
 import { sprite } from './ui/icons.js';
 import * as V from './ui/views.js';
@@ -13,6 +13,9 @@ import { settingsView, bindSettings, eqPresetSheet, analyzeAll, APP_VERSION } fr
 import { initNowPlaying, openNP, closeNP, isOpen } from './ui/nowplaying.js';
 import { initDual } from './ui/dual.js';
 import { getList, actionSheet, prompt, toast, confirmSheet, haptic, art } from './ui/components.js';
+import { plex } from './plex.js';
+import { plexSignIn, plexSignOut, loadServers } from './ui/plex-view.js';
+import { trackSrc } from './analysis.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -126,6 +129,9 @@ async function render({ keepScroll = false } = {}) {
   if (path.startsWith('settings')) bindSettings(v, { page: () => render({ keepScroll: true }), demo: toggleDemo });
   V.hydrateLazy(v);
   if (search) wireSearch(v);
+  const tint = v.querySelector('[data-tint]');
+  v.style.removeProperty('--tint');
+  if (tint?.dataset.tint) artColors(tint.dataset.tint).then((c) => { if (c && currentPath === path) v.style.setProperty('--tint', c[1]); });
   const tab = TAB_OF[path.split('/')[0]] || 'home';
   $$('#tabs a').forEach((t) => {
     const on = t.dataset.tab === tab;
@@ -194,7 +200,7 @@ async function toggleDownload(tracks) {
   for (const t of todo) {
     try {
       const pre = await (await caches.open('prefetch')).match(t.url);
-      const r = pre || await fetch(nasUrl(t.url, t.size));
+      const r = pre || await fetch(trackSrc(t));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const blob = await r.blob();
       await c.put(t.url, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Content-Length': String(blob.size) } }));
@@ -213,7 +219,7 @@ async function toggleDownload(tracks) {
 
 // ---------- playlists ----------
 async function addToPlaylist(tracks) {
-  const pls = [...library.playlists.values()].filter((p) => p.source !== 'nas').sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const pls = [...library.playlists.values()].filter((p) => !p.source).sort((a, b) => (b.updated || 0) - (a.updated || 0));
   const v = await actionSheet({
     title: 'Add to Playlist',
     items: [{ icon: 'plus', label: 'New Playlist…', value: '__new' }, ...pls.map((p) => ({ icon: 'playlist', label: p.name, value: p.id, sub: `${p.trackIds.length} songs` }))],
@@ -246,7 +252,7 @@ async function trackMenu(t, ctx = {}) {
     { icon: 'artist', label: 'Go to Artist', value: 'artist' },
     { icon: 'mix', label: 'Start Radio', value: 'radio', sub: 'Similar genre, artist & tempo' },
   ];
-  if (ctx.playlist) items.push({ icon: 'trash', label: 'Remove from Playlist', value: 'rmpl', danger: true });
+  if (ctx.playlist && !library.playlists.get(ctx.playlist)?.source) items.push({ icon: 'trash', label: 'Remove from Playlist', value: 'rmpl', danger: true });
   const v = await actionSheet({ header: html`<div class="sheet-track">${art(t.artId, 'sm')}<div><b>${t.title}</b><span>${t.artist} · ${t.album}</span></div></div>`, items });
   switch (v) {
     case 'next': engine.playNext([t]); toast('Playing next'); break;
@@ -299,13 +305,18 @@ async function playlistMenu(p) {
       { icon: 'play-next', label: 'Play Next', value: 'next' },
       { icon: 'add-queue', label: 'Add to Queue', value: 'queue' },
       { icon: 'download', label: 'Download / Remove Download', value: 'download' },
-      { icon: 'edit', label: 'Rename', value: 'rename' },
-      { icon: 'trash', label: 'Delete Playlist', value: 'delete', danger: true },
+      ...(p.source ? [{ icon: 'add-playlist', label: 'Copy to New Playlist', value: 'copy' }] : [
+        { icon: 'edit', label: 'Rename', value: 'rename' },
+        { icon: 'trash', label: 'Delete Playlist', value: 'delete', danger: true }]),
     ],
   });
   if (v === 'next') engine.playNext(tracks);
   if (v === 'queue') engine.addToQueue(tracks);
   if (v === 'download') toggleDownload(tracks);
+  if (v === 'copy') {
+    const np = await library.createPlaylist(`${p.name} (copy)`, [...p.trackIds]);
+    location.hash = `#/playlist/${np.id}`;
+  }
   if (v === 'rename') {
     const name = await prompt({ title: 'Rename Playlist', value: p.name });
     if (name) { p.name = name; await library.savePlaylist(p); render({ keepScroll: true }); }
@@ -375,6 +386,10 @@ async function doAction(a, el, e) {
       break;
     }
     case 'demo': await toggleDemo(true); break;
+    case 'plex-signin': plexSignIn(); break;
+    case 'plex-signout': await plexSignOut(() => render({ keepScroll: false })); break;
+    case 'plex-servers': loadServers(view()); break;
+    case 'plex-sync': if (!plex.running) { plex.sync(); toast('Syncing with Plex…'); render({ keepScroll: true }); } break;
     case 'back': if (history.length > 1) history.back(); else location.hash = '#/home'; break;
     case 'search-q': searchQ = d.q; render({ keepScroll: false }); break;
     case 'clear-q': searchQ = ''; render({ keepScroll: false }); break;
@@ -539,6 +554,10 @@ function wireEngineEvents() {
     toast(offline ? `You’re offline — “${t?.title}” isn’t downloaded` : `Couldn’t play “${t?.title || 'song'}” — check your NAS connection`);
   });
   engine.on('sleep', () => toast('Sleep timer — paused'));
+  // Plex: fill in hi-res info/loudness/lyrics and report "now playing"
+  engine.on('track', (t) => { if (t?.plex) { plex.enrich(t); plex.timeline(t, engine.playing ? 'playing' : 'paused', 0, t.duration); } });
+  engine.on('state', () => { const t = engine.track; if (t?.plex) { plex.timelineAt = 0; plex.timeline(t, engine.playing ? 'playing' : 'paused', engine.currentTime, engine.duration); } });
+  engine.on('time', () => { const t = engine.track; if (t?.plex && engine.playing) plex.timeline(t, 'playing', engine.currentTime, engine.duration); });
   engine.on('track', () => {
     $$('.row.track.playing').forEach((r) => r.classList.remove('playing'));
   });
@@ -555,6 +574,26 @@ function wireScanner() {
     }
   });
   scanner.on('batch', reload);
+  plex.on('batch', reload);
+  plex.on('progress', (p) => {
+    let b = $('[data-scan-banner]');
+    if (!b && (currentPath === 'home' || currentPath?.startsWith('library'))) { rerender(); return; }
+    if (b && p.total) {
+      b.querySelector('b').textContent = p.phase;
+      b.querySelector('span').textContent = `${p.done} of ${p.total} songs from ${plex.cfg?.server?.name || 'Plex'}`;
+    }
+  });
+  plex.on('done', async (p) => {
+    await loadKnown();
+    await library.reloadTracks();
+    render({ keepScroll: true });
+    if (p.added || p.removed) toast(`Plex synced · ${p.added} new${p.removed ? `, ${p.removed} removed` : ''}`);
+  });
+  plex.on('error', (e) => {
+    toast(e.message || 'Plex sync failed', { action: { label: 'Plex', run: () => { location.hash = '#/settings/plex'; } }, ms: 6000 });
+    render({ keepScroll: true });
+  });
+  plex.on('auth', () => { if (currentPath?.startsWith('settings') || currentPath === 'home') render({ keepScroll: true }); });
   scanner.on('done', async (p) => {
     await loadKnown();
     await library.reloadTracks();
@@ -585,6 +624,7 @@ async function boot() {
   });
   await loadKnown();
   await library.load();
+  await plex.load();
   initNowPlaying({ addToPlaylist, toggleDownload, onAccent: applyAccent });
   initDual((mode) => {
     if (mode !== 'single') { closeNP(true); }
@@ -600,6 +640,7 @@ async function boot() {
   document.body.classList.add('ready');
   const src = await db.kv.get('source');
   if (src?.url && settings.get('scanOnLaunch')) setTimeout(() => scanner.run(), 1500);
+  if (plex.connected && settings.get('plexSyncOnLaunch')) setTimeout(() => plex.sync(), 2500);
 }
 
 boot();

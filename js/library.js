@@ -213,6 +213,7 @@ class Library extends Emitter {
     if (this.likes.has(id)) this.likes.delete(id); else this.likes.add(id);
     db.kv.set('likes', [...this.likes]);
     this.emit('likes');
+    this.emit('liked', id, this.likes.has(id));
     return this.likes.has(id);
   }
   recordPlay(id) {
@@ -220,6 +221,7 @@ class Library extends Emitter {
     s.p++; s.l = Date.now();
     this.stats[id] = s;
     db.kv.set('stats', this.stats);
+    this.emit('played', id);
   }
   recentAlbums(n = 12) {
     const seen = new Map();
@@ -235,6 +237,10 @@ class Library extends Emitter {
       .map(([id]) => this.tracks.get(id)).filter(Boolean);
   }
   recentlyAdded(n = 20) { return this.sortedAlbums('added').slice(0, n); }
+  recentlyPlayed(n = 100) {
+    return Object.entries(this.stats).sort((a, b) => b[1].l - a[1].l).slice(0, n)
+      .map(([id]) => this.tracks.get(id)).filter(Boolean);
+  }
 
   // ---- playlists ----
   async savePlaylist(p) {

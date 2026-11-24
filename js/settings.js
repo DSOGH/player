@@ -51,6 +51,12 @@ export const DEFAULTS = {
   artShrinkOnPause: true,
   // Data
   prefetch: 'any',            // 'any' | 'wifi' | 'off'
+  // Plex
+  plexReport: true,           // scrobble plays + show "now playing" in Plex
+  plexSyncOnLaunch: true,
+  // Extras
+  reactiveArt: true,          // artwork glows with the bass
+  artSwipe: true,             // swipe the artwork to skip
 };
 
 export const EQ_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
