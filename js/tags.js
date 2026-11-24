@@ -118,6 +118,11 @@ function setKV(meta, key, val) {
     case 'R128_TRACK_GAIN': { const v = parseInt(val, 10); if (isFinite(v)) meta.rgTrack ??= v / 256 + 5; break; }
     case 'R128_ALBUM_GAIN': { const v = parseInt(val, 10); if (isFinite(v)) meta.rgAlbum ??= v / 256 + 5; break; }
     case 'LYRICS': case 'UNSYNCEDLYRICS': meta.lyrics ||= val; break;
+    case 'ITUNESADVISORY': case 'ADVISORY': case 'CONTENTRATING': case 'RATING':
+      if (/^(1|4|explicit)$/i.test(val)) meta.advisory = 'explicit';
+      else if (/^(2|clean|edited)$/i.test(val)) meta.advisory = 'clean';
+      break;
+    case 'EXPLICIT': meta.advisory = /^(1|true|yes)$/i.test(val) ? 'explicit' : /^(0|false|no)$/i.test(val) ? meta.advisory : meta.advisory; break;
     default: break;
   }
 }
@@ -473,6 +478,7 @@ function parseIlst(b, s, e, meta) {
     else if (t === 'disk' && v.length >= 6) { meta.disc ||= u16(v, 2); meta.discTotal ||= u16(v, 4); }
     else if (t === 'tmpo' && v.length >= 2) { const x = u16(v, 0); if (x) meta.bpm ||= x; }
     else if (t === 'cpil') meta.compilation = v[0] === 1;
+    else if (t === 'rtng') meta.advisory = v[0] === 1 || v[0] === 4 ? 'explicit' : v[0] === 2 ? 'clean' : meta.advisory;
     else if (t === 'gnre' && v.length >= 2) meta.genre ||= ID3_GENRES[u16(v, 0) - 1];
     else if (t === 'covr') addPicture(meta, 3, kind === 14 ? 'image/png' : 'image/jpeg', v);
     else if (t === '----' && name) setKV(meta, name, utf8(v));

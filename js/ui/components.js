@@ -55,7 +55,7 @@ export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum
     ${num ? html`<div class="num">${playing ? html`<span class="eqbars"><i></i><i></i><i></i></span>` : t.track || ''}</div>` : ''}
     ${showArt && !num ? art(t.artId, 'sm') : ''}
     <div class="meta">
-      <div class="t1">${t.title}</div>
+      <div class="t1">${t.title}${t.edition === 'explicit' ? html`<span class="ebadge" title="Explicit">E</span>` : ''}</div>
       <div class="t2">${liked ? html`<span class="mini-heart">${icon('heart-fill')}</span>` : ''}${off ? html`<span class="mini-dl">${icon('downloaded')}</span>` : ''}${showAlbum ? `${t.artist} · ${t.album}` : t.artist}</div>
     </div>
     ${raw(extra)}
@@ -67,7 +67,7 @@ export function albumCard(a, { sub = 'artist' } = {}) {
   const s = sub === 'year' ? (a.year || '') : sub === 'none' ? '' : a.artist;
   return html`<a class="card" href="#/album/${a.id}">
     ${art(a.artId, 'card-art', a.title)}
-    <div class="c1">${a.title}</div>
+    <div class="c1">${a.title}${a.edition === 'explicit' ? html`<span class="ebadge">E</span>` : a.edition === 'clean' && a.editions ? html`<span class="ebadge clean">C</span>` : ''}</div>
     ${s ? html`<div class="c2">${s}</div>` : ''}
   </a>`;
 }

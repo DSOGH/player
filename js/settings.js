@@ -41,6 +41,7 @@ export const DEFAULTS = {
   artNames: 'cover,folder,front,album,albumart,artwork',
   ignoreFolders: '@eaDir,#recycle,.Trash,.AppleDouble,#snapshot',
   groupCompilations: true,
+  explicitPref: 'explicit',   // 'explicit' | 'clean' | 'both' — which edition to show when an album has both
   albumSort: 'added',         // 'title' | 'artist' | 'year' | 'added'
   scanOnLaunch: true,
   // Appearance
@@ -64,6 +65,9 @@ export const DEFAULTS = {
   // Extras
   reactiveArt: true,          // artwork glows with the bass
   artSwipe: true,             // swipe the artwork to skip
+  visualizer: 'bars',         // 'bars' | 'off'
+  waveform: true,             // waveform scrubber with DJ markers
+  dualSwap: false,            // put the player on the left/top when unfolded
 };
 
 export const EQ_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];

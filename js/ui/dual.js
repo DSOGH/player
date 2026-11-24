@@ -94,6 +94,7 @@ export function detect() {
   body.classList.toggle('dual-v', mode === 'v');
   body.classList.toggle('dual-wide', mode === 'wide');
   body.classList.toggle('dual-duo', /Duo/.test(device));
+  body.classList.toggle('dual-swap', mode !== 'single' && !!settings.get('dualSwap'));
   if (leftW) root.style.setProperty('--seg-w', leftW + 'px'); else root.style.removeProperty('--seg-w');
   if (topH) root.style.setProperty('--seg-h', topH + 'px'); else root.style.removeProperty('--seg-h');
   root.style.setProperty('--hinge', hinge + 'px');
@@ -113,6 +114,6 @@ export function initDual(onChange) {
   for (const q of ['(horizontal-viewport-segments: 2)', '(vertical-viewport-segments: 2)', '(spanning: single-fold-vertical)', '(spanning: single-fold-horizontal)']) {
     try { matchMedia(q).addEventListener('change', run); } catch (e) { /* */ }
   }
-  for (const k of ['dualScreen', 'dualShift', 'dualHinge']) settings.on(`change:${k}`, run);
+  for (const k of ['dualScreen', 'dualShift', 'dualHinge', 'dualSwap']) settings.on(`change:${k}`, run);
   detect();
 }

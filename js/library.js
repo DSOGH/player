@@ -4,6 +4,26 @@ import { Emitter, hash, norm, sortKey, shuffleArr } from './util.js';
 import { settings } from './settings.js';
 
 const dirOf = (u) => u.replace(/[^/]*$/, '');
+
+// ---- clean / explicit editions (works even when the server doesn't label them) ----
+const ED_WORDS = 'explicit|clean|edited|dirty|censored|uncensored|clean version|explicit version|edited version|radio edit|clean edit|explicit edit';
+const ED_TAG = new RegExp(`\\s*[\\[(](?:${ED_WORDS})[\\])]`, 'ig');
+const ED_SUFFIX = /\s+-\s+(?:clean|explicit|edited)(?:\s+version)?\s*$/i;
+export const stripEdition = (s) => String(s || '').replace(ED_TAG, '').replace(ED_SUFFIX, '').trim() || String(s || '');
+function markerEdition(s) {
+  const m = String(s || '').match(new RegExp(`[\\[(](${ED_WORDS})[\\])]|\\s-\\s(clean|explicit|edited)(?:\\s+version)?\\s*$`, 'i'));
+  if (!m) return '';
+  const w = (m[1] || m[2]).toLowerCase();
+  return /explicit|dirty|uncensored/.test(w) ? 'explicit' : 'clean';
+}
+const CENSORED = /\b[a-z]+\*+[a-z]*\b|\b\*+[a-z]+/i; // F**k, s**t, *** — a clean edit
+export function trackEdition(t) {
+  if (t.advisory) return t.advisory;
+  const m = markerEdition(t.title) || markerEdition(t.album) || markerEdition(decodeURIComponent((t.url || '').split('/').slice(-2, -1)[0] || '')) || markerEdition(t.file);
+  if (m) return m;
+  if (CENSORED.test(t.title)) return 'clean';
+  return '';
+}
 const splitArtists = (s) => String(s || '').split(/\s+(?:feat\.?|ft\.?|featuring|with)\s+|;\s*/i).map((x) => x.trim()).filter(Boolean);
 
 class Library extends Emitter {
@@ -22,10 +42,12 @@ class Library extends Emitter {
   }
 
   async load() {
-    const [tracks, pls, an, likes, stats, rs] = await Promise.all([
+    const [tracks, pls, an, likes, stats, rs, listen, mixes] = await Promise.all([
       db.all('tracks'), db.all('playlists'), db.all('analysis'),
-      db.kv.get('likes'), db.kv.get('stats'), db.kv.get('recentSearches'),
+      db.kv.get('likes'), db.kv.get('stats'), db.kv.get('recentSearches'), db.kv.get('listen'), db.kv.get('mixes'),
     ]);
+    this.listen = listen || {};
+    this.mixesDone = mixes || {};
     this.tracks = new Map(tracks.map((t) => [t.id, t]));
     this.playlists = new Map(pls.map((p) => [p.id, p]));
     this.analysis = new Map(an.map((a) => [a.id, a]));
@@ -62,7 +84,10 @@ class Library extends Emitter {
     const albums = new Map();
     for (const t of this.tracks.values()) {
       const aa = t.albumArtist || (t.compilation && groupComp ? 'Various Artists' : '');
-      const key = norm(t.album) + '|' + (aa ? norm(aa) : (t.demo ? norm(t.artist) : dirOf(t.url)));
+      // editions (clean/explicit) and different releases stay separate albums: Plex album id, or the
+      // album folder (disc folders like "CD1"/"Disc 2" count as the same album)
+      const folder = t.plex ? 'px' + (t.plex.album || '') : t.demo ? '' : dirOf(t.url).replace(/\/(?:cd|disc|disk)[\s_-]*\d+\/$/i, '/');
+      const key = norm(t.album) + '|' + (aa ? norm(aa) : (t.demo ? norm(t.artist) : '')) + '|' + folder;
       const id = 'al' + hash(key);
       t.albumId = id;
       let a = albums.get(id);
@@ -110,6 +135,7 @@ class Library extends Emitter {
       for (const id of ar.albums) ar.appears.delete(id);
       if (!ar.artId) { const first = albums.get([...ar.appears][0]); ar.artId = first?.artId || null; }
     }
+    this.groupEditions(albums);
     this.plexThumbs = new Map();
     for (const t of this.tracks.values()) if (t.plexThumb && t.artId) this.plexThumbs.set(t.artId, t.plexThumb);
     const genres = new Map();
@@ -128,6 +154,43 @@ class Library extends Emitter {
     this.emit('change');
   }
 
+  // Pair up clean/explicit editions of the same album and decide which one to show.
+  groupEditions(albums) {
+    const groups = new Map();
+    for (const a of albums.values()) {
+      a.rawTitle = a.rawTitle || a.title;
+      const counts = { explicit: 0, clean: 0 };
+      for (const t of a.tracks) { const e = trackEdition(t); t.edition = e; if (e) counts[e]++; }
+      a.edition = markerEdition(a.rawTitle) || (counts.explicit > counts.clean ? 'explicit' : counts.clean > counts.explicit ? 'clean' : '');
+      if (a.edition) for (const t of a.tracks) if (!t.edition) t.edition = a.edition;
+      a.title = stripEdition(a.rawTitle);
+      const k = norm(a.title) + '|' + norm(a.artist);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(a);
+    }
+    const pref = settings.get('explicitPref');
+    this.hiddenAlbums = new Set();
+    this.hiddenTracks = new Set();
+    for (const g of groups.values()) {
+      if (g.length < 2) { g[0].editions = null; continue; }
+      // infer the unlabeled one from the labeled one; else the one with censored titles is clean
+      const known = g.filter((a) => a.edition);
+      if (known.length === 1 && g.length === 2) g.find((a) => !a.edition).edition = known[0].edition === 'clean' ? 'explicit' : 'clean';
+      if (!known.length && g.length === 2) {
+        const stars = g.map((a) => a.tracks.filter((t) => /\*/.test(t.title)).length);
+        if (stars[0] !== stars[1]) { g[stars[0] > stars[1] ? 0 : 1].edition = 'clean'; g[stars[0] > stars[1] ? 1 : 0].edition = 'explicit'; }
+      }
+      for (const a of g) {
+        a.editions = g.map((x) => ({ id: x.id, edition: x.edition || 'version' }));
+        for (const t of a.tracks) if (!t.edition && a.edition) t.edition = a.edition;
+      }
+      if (pref === 'both') continue;
+      const keep = g.find((a) => a.edition === pref) || g.find((a) => a.edition && a.edition !== (pref === 'clean' ? 'explicit' : 'clean')) || g[0];
+      for (const a of g) if (a !== keep && a.edition !== keep.edition) { this.hiddenAlbums.add(a.id); a.tracks.forEach((t) => this.hiddenTracks.add(t.id)); }
+    }
+  }
+  visible(t) { return !this.hiddenTracks?.has(t.id); }
+
   // ---- accessors ----
   track(id) { return this.tracks.get(id); }
   album(id) { return this.albums.get(id); }
@@ -142,7 +205,7 @@ class Library extends Emitter {
   }
 
   sortedAlbums(sort = settings.get('albumSort')) {
-    const list = [...this.albums.values()];
+    const list = [...this.albums.values()].filter((a) => !this.hiddenAlbums?.has(a.id));
     const by = {
       title: (a, b) => sortKey(a.title).localeCompare(sortKey(b.title)),
       artist: (a, b) => sortKey(a.artist).localeCompare(sortKey(b.artist)) || (a.year - b.year),
@@ -156,14 +219,14 @@ class Library extends Emitter {
       .sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)));
   }
   sortedTracks() {
-    return [...this.tracks.values()].sort((a, b) => sortKey(a.title).localeCompare(sortKey(b.title)));
+    return [...this.tracks.values()].filter((t) => this.visible(t)).sort((a, b) => sortKey(a.title).localeCompare(sortKey(b.title)));
   }
   artistAlbums(ar) {
-    return [...ar.albums].map((id) => this.albums.get(id)).filter(Boolean).sort((a, b) => b.year - a.year);
+    return [...ar.albums].filter((id) => !this.hiddenAlbums?.has(id)).map((id) => this.albums.get(id)).filter(Boolean).sort((a, b) => b.year - a.year);
   }
   artistTopTracks(ar, n = 10) {
     const seen = new Set();
-    return [...ar.tracks].filter((t) => !seen.has(t.id) && seen.add(t.id))
+    return [...ar.tracks].filter((t) => this.visible(t) && !seen.has(t.id) && seen.add(t.id))
       .sort((a, b) => (this.stats[b.id]?.p || 0) - (this.stats[a.id]?.p || 0) || (this.likes.has(b.id) - this.likes.has(a.id)))
       .slice(0, n);
   }
@@ -191,10 +254,12 @@ class Library extends Emitter {
     };
     const tracks = [], albums = [], artists = [];
     for (const t of this.tracks.values()) {
+      if (!this.visible(t)) continue;
       const s = score([[t.title, 3], [t.artist, 1.5], [t.album, 1]]);
       if (s) tracks.push([s + (this.stats[t.id]?.p || 0) * 0.1, t]);
     }
     for (const a of this.albums.values()) {
+      if (this.hiddenAlbums?.has(a.id)) continue;
       const s = score([[a.title, 3], [a.artist, 1.5]]);
       if (s) albums.push([s, a]);
     }
@@ -224,6 +289,37 @@ class Library extends Emitter {
     this.emit('liked', id, this.likes.has(id));
     return this.likes.has(id);
   }
+  // listening stats: seconds per day + DJ mixes
+  addListening(sec) {
+    const day = new Date().toISOString().slice(0, 10);
+    const L = this.listen || (this.listen = {});
+    L[day] = (L[day] || 0) + sec;
+    if (!this._lsave || Date.now() - this._lsave > 15000) { this._lsave = Date.now(); db.kv.set('listen', L); }
+  }
+  addMix(style) {
+    const M = this.mixesDone || (this.mixesDone = {});
+    const day = new Date().toISOString().slice(0, 10);
+    M[day] = (M[day] || 0) + 1;
+    M['style:' + style] = (M['style:' + style] || 0) + 1;
+    db.kv.set('mixes', M);
+  }
+  weekStats() {
+    const days = [...Array(7)].map((_, i) => new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+    const sec = days.reduce((s, d) => s + (this.listen?.[d] || 0), 0);
+    const mixes = days.reduce((s, d) => s + (this.mixesDone?.[d] || 0), 0);
+    const weekAgo = Date.now() - 7 * 86400000;
+    const artists = new Map();
+    let plays = 0;
+    for (const [id, st] of Object.entries(this.stats)) {
+      if (st.l < weekAgo) continue;
+      const t = this.tracks.get(id);
+      if (!t) continue;
+      plays++;
+      artists.set(t.artistId, (artists.get(t.artistId) || 0) + 1);
+    }
+    const top = [...artists.entries()].sort((a, b) => b[1] - a[1])[0];
+    return { minutes: Math.round(sec / 60), mixes, plays, topArtist: top ? this.artists.get(top[0]) : null, byDay: days.map((d) => Math.round((this.listen?.[d] || 0) / 60)).reverse() };
+  }
   recordPlay(id) {
     const s = this.stats[id] || { p: 0, l: 0 };
     s.p++; s.l = Date.now();
@@ -238,7 +334,7 @@ class Library extends Emitter {
       if (!t) continue;
       seen.set(t.albumId, Math.max(seen.get(t.albumId) || 0, s.l));
     }
-    return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => this.albums.get(id)).filter(Boolean);
+    return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => this.albums.get(id)).filter((a) => a && !this.hiddenAlbums?.has(a.id)).slice(0, n);
   }
   mostPlayed(n = 25) {
     return Object.entries(this.stats).sort((a, b) => b[1].p - a[1].p).slice(0, n)
@@ -300,7 +396,7 @@ class Library extends Emitter {
     return out;
   }
   mixTracks(mix, n = 60) {
-    const all = [...this.tracks.values()];
+    const all = [...this.tracks.values()].filter((t) => this.visible(t));
     let pool = all;
     if (mix.kind === 'bpm') {
       const b = this.mixes().find((m) => m.id === mix.id) || mix;
@@ -338,7 +434,7 @@ class Library extends Emitter {
     const b = this.bpmOf(seed);
     const scored = [];
     for (const t of this.tracks.values()) {
-      if (exclude.has(t.id) || t.id === seed.id) continue;
+      if (exclude.has(t.id) || t.id === seed.id || !this.visible(t)) continue;
       let s = Math.random() * 2;
       if (t.genre && seed.genre && norm(t.genre) === norm(seed.genre)) s += 4;
       if (t.artistId === seed.artistId) s += 2.5;

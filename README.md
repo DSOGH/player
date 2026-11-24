@@ -94,7 +94,7 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 
 **Transitions** (tap the button under the controls to switch)
 * **DJ Mix** (default) analyzes every song's tempo, beat grid, **musical key**, energy, intro and outro, then picks a move for each transition. Choose a **DJ style**: *Auto*, *Beat match* or *Word play*.
-  * **Word play:** when a song sings the next song's title (found in synced lyrics), that line echoes out and the next song drops in right on its own title line.
+  * **Word play** (live vocal isolation): the app finds the **same words in both songs** using synced lyrics, or a line where one song sings the other's title. Just before the cue, the beat drops out and only the **isolated vocal** is left, separated in real time inside the audio engine. Underneath, the next song's **instrumental** builds with its vocals removed. On the shared words, the next song drops in full singing those same words, so it sounds like one continuous vocal across two songs.
   * **DJ blend:** a long (16–32 beat), phrase-aligned, beat-matched overlay. Both songs **meet at a middle tempo** (each can move up to 12%, pitch preserved), a live **beat lock** keeps the kicks within a few milliseconds, the incoming bass is held back, and the basses **swap** halfway while the outgoing song is high-passed away.
   * **Fade under:** when the song fades out on its own, the next one slides in underneath it.
   * **Echo out:** when a song ends hard, its last beats ring out through a tempo-synced echo as the next song drops in.
@@ -112,6 +112,10 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 * **BPM flow shuffle** orders shuffled songs so tempos change smoothly.
 * Auto-generated **Chill / Groove / Energy** mixes by tempo.
 
+**DJ Booth** (the waveform button in the player)
+* Shows exactly what the DJ will do next and when: the mix type, a countdown, tempos and how they'll meet, the keys, the lyric it will cut on, and a step-by-step plan, plus a preview of the next few transitions.
+* The **waveform scrubber** marks where the mix will happen and where the lyric cue is. The lyrics view tags the cue line as **DJ cue**.
+
 **Sound**
 * Volume leveling: ReplayGain (Smart / Track / Album) plus on-device loudness for untagged files.
 * 10-band EQ with presets, a limiter, mono output and pre-amp.
@@ -121,6 +125,8 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 * Sign in with Plex, a NAS folder, or both at once: everything shows up in one library.
 * Swipe the artwork left or right to skip. With the *Enhanced* audio engine, the artwork pulses gently with the beat.
 * Album pages are tinted with the colors of their artwork. A History tab lists what you've played.
+* **Clean / explicit editions:** these are detected from tags, from "(Clean)"/"[Explicit]" in album, folder or file names, and from censored titles like "F**k", even when Plex doesn't label them. Both editions show as one album with an **Explicit / Clean** switch, and a setting picks which one appears in your library, search, mixes and radio. Explicit songs get an **E** badge.
+* A live spectrum **visualizer**, a "Your week" listening card on Home, and a **Swap sides** setting for the unfolded layout.
 * Home (quick picks, mixes, Jump Back In, Recently Added, On Repeat), Albums, Artists, Songs, Genres, Playlists, Liked Songs and Downloaded.
 * Full-screen player with an animated artwork background, a draggable queue, synced lyrics, sleep timer, track info, and Lossless / Hi-Res Lossless badges.
 * **Downloads** for offline playback.

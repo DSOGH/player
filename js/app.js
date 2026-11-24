@@ -659,8 +659,8 @@ async function boot() {
   applyTheme();
   settings.on('change', (k) => {
     if (['theme', 'accent', 'gridCols', '*'].includes(k)) applyTheme();
-    if (['albumSort', 'groupCompilations', 'showBadges', 'gridCols', '*'].includes(k)) {
-      if (k === 'groupCompilations') library.build();
+    if (['albumSort', 'groupCompilations', 'showBadges', 'gridCols', 'explicitPref', '*'].includes(k)) {
+      if (k === 'groupCompilations' || k === 'explicitPref') library.build();
       if (!currentPath?.startsWith('settings')) rerender();
     }
   });

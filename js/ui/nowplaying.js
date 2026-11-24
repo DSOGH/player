@@ -7,6 +7,7 @@ import { analyze } from '../analysis.js';
 import { artColors, artUrl } from '../art.js';
 import { art, badges, haptic, actionSheet, toast, formatLine } from './components.js';
 import { getLyrics } from '../lyrics.js';
+import { renderBooth, tickBooth } from './djbooth.js';
 
 let mode = 'art'; // art | queue | lyrics
 let open = false;
@@ -26,7 +27,7 @@ export function initNowPlaying(h) {
     <button class="icon-btn mini-next" data-np="next" aria-label="Next">${icon('next')}</button>`;
   const np = $('#np');
   np.innerHTML = html`
-    <div class="np-bg"><div class="np-bg-img"></div><div class="np-bg-tint"></div></div>
+    <div class="np-bg"><div class="np-bg-anim"><div class="np-bg-img"></div></div><div class="np-bg-tint"></div><canvas class="np-viz"></canvas></div>
     <div class="np-inner">
       <div class="np-top" data-drag>
         <button class="icon-btn np-collapse" data-np="close" aria-label="Close">${icon('down')}</button>
@@ -34,9 +35,10 @@ export function initNowPlaying(h) {
         <button class="icon-btn" data-np="menu" aria-label="More">${icon('more')}</button>
       </div>
       <div class="np-stage" data-drag>
-        <div class="np-art-wrap"><div class="np-art"></div></div>
+        <div class="np-art-wrap"><div class="np-glow"></div><div class="np-art"></div></div>
         <div class="np-panel np-queue"></div>
         <div class="np-panel np-lyrics"></div>
+        <div class="np-panel np-booth"></div>
       </div>
       <div class="np-info">
         <div class="np-mini-art"></div>
@@ -44,7 +46,9 @@ export function initNowPlaying(h) {
         <button class="icon-btn np-like" data-np="like" aria-label="Like">${icon('heart')}</button>
       </div>
       <div class="np-scrub">
-        <div class="scrub" data-scrub><div class="scrub-track"><div class="scrub-buf"></div><div class="scrub-fill"></div></div><div class="scrub-knob"></div></div>
+        <div class="scrub" data-scrub><div class="scrub-track"><div class="scrub-buf"></div><div class="scrub-fill"></div></div>
+          <div class="wave-wrap"><canvas class="wave"></canvas><canvas class="wave played"></canvas><i class="wave-mix"></i><i class="wave-cue"></i></div>
+          <div class="scrub-knob"></div></div>
         <div class="np-times"><span class="t-cur">0:00</span><span class="np-chips"></span><span class="t-rem">-0:00</span></div>
       </div>
       <div class="np-controls">
@@ -57,6 +61,7 @@ export function initNowPlaying(h) {
       <div class="np-volume">${icon('speaker-low')}<input type="range" min="0" max="1" step="0.01" class="vol" aria-label="Volume">${icon('speaker')}</div>
       <div class="np-bottom">
         <button class="icon-btn np-lyr" data-np="lyrics" aria-label="Lyrics">${icon('lyrics')}</button>
+        <button class="icon-btn np-booth-btn" data-np="booth" aria-label="DJ Booth">${icon('bpm')}</button>
         <button class="np-mode" data-np="mode" aria-label="Transition mode"></button>
         <button class="icon-btn np-q" data-np="queue" aria-label="Queue">${icon('queue')}</button>
       </div>
@@ -86,8 +91,13 @@ export function initNowPlaying(h) {
   engine.on('state', renderState);
   engine.on('time', renderTime);
   engine.on('queue', () => { if (mode === 'queue') renderQueue(); });
-  engine.on('plan', renderHint);
-  engine.on('analysis', (id) => { if (id === engine.track?.id) renderChips(); });
+  engine.on('plan', () => { renderHint(); renderWaveMarks(); if (mode === 'booth') renderBooth($('#np .np-booth')); if (mode === 'lyrics' && lyrics) markCue(); });
+  engine.on('queue', () => { if (mode === 'booth') renderBooth($('#np .np-booth')); });
+  engine.on('analysis', (id) => {
+    if (id === engine.track?.id) { renderChips(); drawWave(); }
+    if (mode === 'booth') renderBooth($('#np .np-booth'));
+  });
+  settings.on('change:waveform', drawWave);
   engine.on('buffering', (b) => np.classList.toggle('buffering', b));
   library.on('likes', renderLike);
   settings.on('change', (k) => {
@@ -134,8 +144,10 @@ function setMode(m) {
   $('#np').dataset.mode = mode;
   $('#np .np-q').classList.toggle('on', mode === 'queue');
   $('#np .np-lyr').classList.toggle('on', mode === 'lyrics');
+  $('#np .np-booth-btn').classList.toggle('on', mode === 'booth');
   if (mode === 'queue') renderQueue();
   if (mode === 'lyrics') renderLyrics();
+  if (mode === 'booth') renderBooth($('#np .np-booth'));
 }
 
 async function act(a, el) {
@@ -151,6 +163,25 @@ async function act(a, el) {
     case 'like': if (t) { const on = library.toggleLike(t.id); haptic(on ? 15 : 6); } break;
     case 'queue': setMode('queue'); break;
     case 'lyrics': setMode('lyrics'); break;
+    case 'booth': setMode('booth'); break;
+    case 'dj-style': {
+      const order = ['auto', 'beats', 'wordplay'];
+      const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % 3];
+      settings.set('djStyle', nx);
+      toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play' }[nx]);
+      if (engine.upcoming) engine.computePlan();
+      renderBooth($('#np .np-booth'));
+      break;
+    }
+    case 'dj-prep': {
+      const up = engine.upNext().slice(0, 6);
+      toast(`Analyzing the next ${up.length} songs…`);
+      const { getLyrics: gl } = await import('../lyrics.js');
+      for (const x of up) { await analyze(x); await gl(x); if (mode === 'booth') renderBooth($('#np .np-booth')); }
+      if (engine.upcoming) engine.computePlan();
+      toast('Upcoming mixes planned');
+      break;
+    }
     case 'mode': {
       const order = ['smart', 'crossfade', 'off'];
       const nx = order[(order.indexOf(settings.get('transition')) + 1) % order.length];
@@ -318,8 +349,10 @@ async function onTrack(t) {
   });
   renderLike();
   renderChips();
+  drawWave();
   renderTime();
   renderHint();
+  if (mode === 'booth') renderBooth($('#np .np-booth'));
   lyrics = null;
   np.querySelector('.np-lyr').classList.toggle('has', !!(t.lyrics || t.lrc || t.plexLyrics));
   getLyrics(t).then((l) => { if (engine.track === t) np.querySelector('.np-lyr').classList.toggle('has', !!l); });
@@ -396,6 +429,8 @@ function renderTime() {
     for (let i = 0; i < el.buffered.length; i++) if (el.buffered.start(i) <= t + 1) end = Math.max(end, el.buffered.end(i));
     np.querySelector('.scrub').style.setProperty('--b', clamp(end / d, 0, 1));
   }
+  if (np.classList.contains('has-wave')) np.querySelector('.wave.played').style.clipPath = `inset(0 ${((1 - (dragging ? +np.querySelector('.scrub').style.getPropertyValue('--p') : pct)) * 100).toFixed(2)}% 0 0)`;
+  if (mode === 'booth') tickBooth(np.querySelector('.np-booth'));
   const hint = np.querySelector('.np-next-hint.show em');
   if (hint) {
     const left = (+np.querySelector('.np-next-hint').dataset.mix || 0) - t;
@@ -459,10 +494,60 @@ async function renderLyrics() {
     box.innerHTML = html`<div class="ly-none">${icon('lyrics')}<p>No lyrics found for this song.</p><small>${settings.get('onlineLyrics') ? 'Searched your files, Plex and LRCLIB by title & artist.' : 'Turn on Online lyrics in Settings → Playback to search by title & artist.'}</small></div>`;
     return;
   }
+  setTimeout(markCue, 0);
   box.innerHTML = html`<div class="ly-wrap${lyrics.synced ? ' synced' : ''}">${lyrics.lines.map((l, i) => l.text
     ? html`<p class="ly" data-i="${i}" ${lyrics.synced ? raw(`data-np="seek:${l.t}"`) : ''}>${l.text}</p>`
     : html`<p class="ly gap" data-i="${i}">•••</p>`)}<p class="ly-src">Lyrics · ${lyrics.source}</p></div>`;
   renderTime();
+}
+
+// DJ cue in the lyrics: the line the DJ will cut on (word play)
+function markCue() {
+  const box = $('#np .np-lyrics');
+  box.querySelectorAll('.ly.cue').forEach((x) => x.classList.remove('cue'));
+  const cue = engine.plan?.cue;
+  if (!cue || !lyrics?.synced) return;
+  const i = lyrics.lines.findIndex((l) => Math.abs(l.t - cue.t) < 0.05);
+  box.querySelector(`.ly[data-i="${i}"]`)?.classList.add('cue');
+}
+
+// ---------- waveform scrubber ----------
+function drawWave() {
+  const np = $('#np');
+  const t = engine.track;
+  const an = t && library.analysis.get(t.id);
+  const on = !!(settings.get('waveform') && an?.wave?.length);
+  np.classList.toggle('has-wave', on);
+  if (!on) return;
+  for (const c of np.querySelectorAll('.wave')) {
+    const dpr = Math.min(3, devicePixelRatio || 1);
+    const w = c.clientWidth || c.parentNode.clientWidth, h = c.clientHeight || 30;
+    if (!w) { requestAnimationFrame(drawWave); return; }
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const x = c.getContext('2d');
+    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    x.fillStyle = c.classList.contains('played') ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.3)';
+    const bars = Math.floor(w / 3);
+    for (let i = 0; i < bars; i++) {
+      const v = an.wave[Math.floor((i / bars) * an.wave.length)] / 100;
+      const bh = Math.max(2, v * h);
+      x.fillRect(i * 3, (h - bh) / 2, 2, bh);
+    }
+  }
+  renderWaveMarks();
+  renderTime();
+}
+function renderWaveMarks() {
+  const np = $('#np');
+  const p = engine.plan, d = engine.duration || 0;
+  const mix = np.querySelector('.wave-mix'), cue = np.querySelector('.wave-cue');
+  if (!mix) return;
+  if (!p || !d || !engine.upcoming || p.style === 'gapless') { mix.style.display = 'none'; cue.style.display = 'none'; return; }
+  mix.style.display = 'block';
+  mix.style.left = `${(p.mixStart / d) * 100}%`;
+  mix.style.width = `${Math.max(0.6, (((p.overlap || 0.3) * (p.aRate || 1)) / d) * 100)}%`;
+  cue.style.display = p.cue ? 'block' : 'none';
+  if (p.cue) cue.style.left = `${(p.cue.t / d) * 100}%`;
 }
 
 // ---------- gestures ----------
@@ -556,30 +641,73 @@ function wireSwipe() {
   np.addEventListener('pointercancel', end);
 }
 
-// Artwork that breathes with the kick drum (Enhanced audio engine only)
+// Artwork that breathes with the kick drum + optional spectrum visualizer.
+// Only transforms/opacity change per frame (GPU-composited), capped at 30 fps, and it sleeps when hidden.
 function startPulse() {
   const np = $('#np');
-  let avg = 0, level = 0, buf = null;
-  const loop = () => {
+  const viz = np.querySelector('.np-viz');
+  const vctx = viz.getContext('2d');
+  let avg = 0, level = 0, buf = null, lastT = 0, lastLevel = -1;
+  const loop = (now) => {
     requestAnimationFrame(loop);
-    const visible = open || document.body.classList.contains('dual');
+    if (now - lastT < 33) return;
+    lastT = now;
+    const visible = (open || document.body.classList.contains('dual')) && !document.hidden;
     const an = engine.analyser;
-    if (!visible || !an || !engine.playing || !settings.get('reactiveArt') || mode !== 'art' || document.hidden) {
-      if (level > 0.001) { level *= 0.85; np.style.setProperty('--pulse', level.toFixed(3)); }
+    const art = np.querySelector('.np-art .art');
+    const glow = np.querySelector('.np-glow');
+    const vizOn = settings.get('visualizer') !== 'off';
+    if (!visible || !an || !engine.playing) {
+      if (level > 0.002) { level *= 0.8; apply(art, glow); }
+      if (viz.dataset.on === '1') { vctx.clearRect(0, 0, viz.width, viz.height); viz.dataset.on = '0'; }
       return;
     }
     if (!buf || buf.length !== an.frequencyBinCount) buf = new Uint8Array(an.frequencyBinCount);
     an.getByteFrequencyData(buf);
-    const hz = engine.ctx.sampleRate / an.fftSize;
-    const lo = Math.max(1, Math.floor(35 / hz)), hi = Math.ceil(140 / hz);
-    let s = 0;
-    for (let i = lo; i <= hi; i++) s += buf[i];
-    const bass = s / (hi - lo + 1) / 255;
-    avg = avg * 0.95 + bass * 0.05;
-    const hit = Math.max(0, bass - avg * 1.08) * 4.5;
-    level = Math.max(level * 0.88, Math.min(1, hit));
-    np.style.setProperty('--pulse', level.toFixed(3));
+    if (settings.get('reactiveArt') && mode === 'art') {
+      const hz = engine.ctx.sampleRate / an.fftSize;
+      const lo = Math.max(1, Math.floor(35 / hz)), hi = Math.ceil(140 / hz);
+      let s = 0;
+      for (let i = lo; i <= hi; i++) s += buf[i];
+      const bass = s / (hi - lo + 1) / 255;
+      avg = avg * 0.92 + bass * 0.08;
+      const hit = Math.max(0, bass - avg * 1.08) * 4.5;
+      level = Math.max(level * 0.8, Math.min(1, hit));
+      apply(art, glow);
+    }
+    if (vizOn) drawViz(buf);
+    else if (viz.dataset.on === '1') { vctx.clearRect(0, 0, viz.width, viz.height); viz.dataset.on = '0'; }
   };
+  function apply(art, glow) {
+    if (Math.abs(level - lastLevel) < 0.01) return;
+    lastLevel = level;
+    if (art) art.style.transform = `scale(${(1 + level * 0.03).toFixed(4)})`;
+    if (glow) glow.style.opacity = (level * 0.9).toFixed(3);
+  }
+  function drawViz(b) {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    const w = viz.clientWidth, h = viz.clientHeight;
+    if (!w || !h) return;
+    if (viz.width !== Math.round(w * dpr)) { viz.width = Math.round(w * dpr); viz.height = Math.round(h * dpr); }
+    viz.dataset.on = '1';
+    vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    vctx.clearRect(0, 0, w, h);
+    const bars = 48, gap = 3;
+    const bw = (w - gap * (bars - 1)) / bars;
+    const hz = engine.ctx.sampleRate / engine.analyser.fftSize;
+    vctx.fillStyle = 'rgba(255,255,255,0.16)';
+    for (let i = 0; i < bars; i++) {
+      // log-spaced bands 40 Hz – 14 kHz
+      const f0 = 40 * Math.pow(350, i / bars), f1 = 40 * Math.pow(350, (i + 1) / bars);
+      let m = 0;
+      for (let k = Math.floor(f0 / hz); k <= Math.ceil(f1 / hz); k++) m = Math.max(m, b[k] || 0);
+      const bh = Math.max(2, (m / 255) ** 2.2 * h);
+      const x = i * (bw + gap);
+      vctx.beginPath();
+      vctx.roundRect ? vctx.roundRect(x, h - bh, bw, bh, Math.min(3, bw / 2)) : vctx.rect(x, h - bh, bw, bh);
+      vctx.fill();
+    }
+  }
   requestAnimationFrame(loop);
 }
 

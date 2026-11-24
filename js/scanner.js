@@ -211,6 +211,7 @@ function buildTrack(f, id, meta, artId, lrc, root, old) {
     channels: meta.channels || 0,
     bitrate: meta.bitrate || 0,
     lyrics: meta.lyrics ? meta.lyrics.slice(0, 20000) : '',
+    advisory: meta.advisory || '',
     lrc,
     artId: artId || null,
     file: f.name,

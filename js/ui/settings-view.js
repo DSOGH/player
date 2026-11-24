@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.6.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -192,7 +192,7 @@ function playback() {
       ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
       ${tm === 'smart' ? html`
         ${seg('djStyle', 'DJ style', [['auto', 'Auto'], ['beats', 'Beat match'], ['wordplay', 'Word play']],
-          { auto: 'Uses word play when a song sings the next song’s title, otherwise beat-matches.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Hunts for lyric cues: when a song sings the next title, that line echoes out and the next song drops in on its own title. DJ Order also chains songs by lyrics.' }[settings.get('djStyle')])}
+          { auto: 'Word play when two songs share words (or one sings the other’s title), otherwise beat-matched blends.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
         ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
         ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}` : ''}
       ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
@@ -285,6 +285,7 @@ function libraryPage() {
       ${button('analyze-all', 'bpm', 'Analyze whole library', { sub: 'Detect BPM, silences and loudness for every song (downloads each file once — best on Wi-Fi)' })}
     `)}
     ${group('Organizing', html`
+      ${seg('explicitPref', 'Explicit / clean albums', [['explicit', 'Explicit'], ['clean', 'Clean'], ['both', 'Show both']], 'When an album exists in both versions, show this one in your library, search, mixes and radio. Detected from tags, “(Clean)” / “[Explicit]” in names, and censored titles — even if Plex doesn’t label them. Album pages have a switch for the other version.')}
       ${toggle('groupCompilations', 'Group compilations', 'Albums tagged as compilations appear under “Various Artists”')}
       ${seg('albumSort', 'Sort albums by', [['added', 'Added'], ['title', 'Title'], ['artist', 'Artist'], ['year', 'Year']])}
       ${toggle('scanOnLaunch', 'Check for new music on launch')}
@@ -310,6 +311,8 @@ function appearance() {
       ${toggle('artShrinkOnPause', 'Shrink artwork when paused')}
       ${toggle('reactiveArt', 'Reactive artwork', 'Artwork pulses gently with the beat')}
       ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}
+      ${seg('visualizer', 'Visualizer', [['bars', 'Spectrum'], ['off', 'Off']], 'Live frequency bars behind the player controls')}
+      ${toggle('waveform', 'Waveform scrubber', 'Shows the song’s waveform with the DJ’s mix point and lyric cue marked')}
     `)}
     ${group('Library', html`
       ${seg('gridCols', 'Album grid', [[2, 'Large'], [3, 'Small']])}
@@ -320,6 +323,7 @@ function appearance() {
     ${group('Device', html`
       ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Split at hinge'], ['span', 'Span over hinge'], ['off', 'Off']], 'iPhone Duo, Surface Duo and other foldables: library on one side of the fold, player on the other. “Span over hinge” ignores the fold.')}
       <div class="set-row col"><div class="set-text"><span>Detected</span><small data-dual-info>${dualInfo.mode === 'single' ? 'Single screen right now — span the app across both screens to adjust' : `${dualInfo.device || 'Dual screen'} · split at ${(+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1)}px · hinge ${(+dualInfo.hinge).toFixed(1)}px`}</small></div></div>
+      ${toggle('dualSwap', 'Swap sides', 'Put the player on the left (or on top when rotated) and the library on the other side')}
       ${slider('dualShift', 'Nudge split', -40, 40, 0.5, 'px', 'Move the split left/right (up/down when rotated) until it sits exactly on the hinge')}
       ${slider('dualHinge', 'Hinge gap', -1, 60, 0.5, 'px', '−1 = automatic (iPhone Duo has no gap; Surface Duo 34px, Duo 2 26.4px)')}
       ${toggle('haptics', 'Haptic feedback')}

@@ -103,6 +103,7 @@ export function home() {
       ${likedN ? html`<a class="quick" href="#/liked"><div class="art quick-art liked-art">${icon('heart-fill')}</div><span>Liked Songs</span></a>` : ''}
       ${quick.slice(0, likedN ? 5 : 6).map((a) => html`<a class="quick" href="#/album/${a.id}">${art(a.artId, 'quick-art')}<span>${a.title}</span></a>`)}
     </div>
+    ${weekCard()}
     ${shelf('Made for You', mixes.map(mixCard), { cls: 'mixes' })}
     ${recent.length ? shelf('Jump Back In', recent.map((a) => albumCard(a))) : ''}
     ${shelf('Recently Added', added.map((a) => albumCard(a)), { href: '#/library/albums' })}
@@ -112,6 +113,23 @@ export function home() {
     ${shelf('Artists', library.sortedArtists().filter((a) => a.albums.size).sort(() => Math.random() - 0.5).slice(0, 14).map(artistCard), { href: '#/library/artists' })}
     <div class="bottom-pad"></div>`,
   };
+}
+
+function weekCard() {
+  const w = library.weekStats();
+  if (w.minutes < 1 && !w.mixes) return '';
+  const max = Math.max(1, ...w.byDay);
+  const days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  const today = new Date().getDay();
+  return html`<section class="week-card">
+    <div class="wk-top"><div><small>Your week</small><b>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m</b></div>
+      <div class="wk-bars">${w.byDay.map((m, i) => html`<div class="wk-bar"><i style="height:${Math.max(4, (m / max) * 100)}%"></i><span>${days[(today - 6 + i + 7) % 7]}</span></div>`)}</div></div>
+    <div class="wk-stats">
+      <div><b>${w.mixes}</b><span>DJ mixes</span></div>
+      <div><b>${w.plays}</b><span>songs</span></div>
+      ${w.topArtist ? html`<a href="#/artist/${w.topArtist.id}"><b>${w.topArtist.name}</b><span>top artist</span></a>` : ''}
+    </div>
+  </section>`;
 }
 
 // ---------- library ----------
@@ -204,8 +222,9 @@ export function albumView(id) {
     html: html`${pageHeader('', { back: true, actions: html`<button class="icon-btn" data-a="album-menu" data-id="${a.id}">${icon('more')}</button>` })}
     <div class="hero album-hero" data-tint="${a.artId || ''}">
       ${art(a.artId, 'hero-art', a.title)}
-      <h1 class="hero-title">${a.title}</h1>
+      <h1 class="hero-title">${a.title}${a.edition === 'explicit' ? html`<span class="ebadge big">E</span>` : ''}</h1>
       <a class="hero-sub accent" href="#/artist/${a.artistId}">${a.artist}</a>
+      ${a.editions?.length > 1 ? html`<div class="seg edition-switch">${a.editions.map((e, i) => html`<a class="${e.id === a.id ? 'on' : ''}" href="#/album/${e.id}">${e.edition === 'explicit' ? 'Explicit' : e.edition === 'clean' ? 'Clean' : `Version ${i + 1}`}</a>`)}</div>` : ''}
       <div class="hero-meta">${[a.genre, a.year || ''].filter(Boolean).join(' · ')} ${badges(first, { compact: true })}</div>
       ${playButtons(key, { extra: html`<button class="icon-btn round-btn${allOff ? ' on' : ''}" data-a="download-album" data-id="${a.id}" aria-label="Download">${icon(allOff ? 'downloaded' : 'download')}</button>` })}
     </div>

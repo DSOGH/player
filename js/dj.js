@@ -55,7 +55,22 @@ export function findCue(A, B, lyrA = cachedLyrics(A)) {
     else if (k.sig.length && k.sig.every((s) => lw.includes(' ' + s + ' '))) score = 2 + k.sig.length;
     if (!score) continue;
     const next = lines.slice(i + 1).find((x) => x.t > L.t);
-    const cand = { t: L.t, end: Math.min(next ? next.t : L.t + 4, L.t + 6), text: L.text, score, phrase: k.phrase };
+    const end = Math.min(next ? next.t : L.t + 4, L.t + 7);
+    // lyric files only time whole lines: estimate when the title phrase finishes inside the line
+    // (singing usually fills ~85% of the gap to the next line, roughly evenly by syllables/letters)
+    const lwords = words(L.text);
+    const target = k.phrase.split(' ');
+    let lastIdx = -1;
+    for (let w = 0; w + target.length <= lwords.length; w++) {
+      if (target.every((x, j) => lwords[w + j] === x)) lastIdx = w + target.length - 1;
+    }
+    if (lastIdx < 0 && k.sig.length) lastIdx = Math.max(...k.sig.map((x) => lwords.lastIndexOf(x)));
+    const chars = (arr) => arr.reduce((n, w) => n + w.length + 1, 0);
+    const ratio = lastIdx >= 0 ? chars(lwords.slice(0, lastIdx + 1)) / Math.max(1, chars(lwords)) : 1;
+    const sung = (end - L.t) * 0.85;
+    const phraseEnd = L.t + Math.max(0.5, sung * ratio) + 0.18;
+    if (ratio > 0.7) score += 1; // title at the end of the line = cleanest cut
+    const cand = { t: L.t, end, phraseEnd: Math.min(phraseEnd, end), text: L.text, score, phrase: k.phrase, ratio };
     // prefer the last strong occurrence (closest to the end of the song)
     if (!best || score > best.score || (score === best.score && L.t > best.t)) best = cand;
   }
@@ -91,7 +106,7 @@ export function transitionCost(A, B, mode = 'auto') {
   const de = b.energy - a.energy;
   cost += de < -0.12 ? (-de - 0.12) * 4 : de > 0.2 ? (de - 0.2) * 3 : 0;
   if (mode !== 'beats') {
-    const cue = findCue(A, B);
+    const cue = findHandoff(A, B) || findCue(A, B);
     if (cue) cost -= mode === 'wordplay' ? 6 : 2.5;
   }
   return cost;
@@ -165,7 +180,71 @@ export function stats(order, mode = 'auto') {
     if (keyCompat(a.camelot, b.camelot) >= 0.85) harmonic++;
     const r = tempoRatio(a.bpm, b.bpm);
     if (r) { jumps += Math.abs(r - 1) * 100; cnt++; }
-    if (mode !== 'beats' && findCue(order[k], order[k + 1])) wp++;
+    if (mode !== 'beats' && (findHandoff(order[k], order[k + 1]) || findCue(order[k], order[k + 1]))) wp++;
   }
   return { transitions: Math.max(0, order.length - 1), harmonic, wordplay: wp, avgTempoJump: cnt ? jumps / cnt : 0 };
+}
+
+// ---------- word handoff: the same words in both songs ----------
+// Finds a word or phrase sung near the end of A that B also sings early on, and estimates
+// (from line timings) when the shared words start in each song, so B can pick up the vocal
+// exactly where A's leaves off.
+function lineTimes(lines, i) {
+  const L = lines[i];
+  const next = lines.slice(i + 1).find((x) => x.t > L.t);
+  const end = Math.min(next ? next.t : L.t + 4, L.t + 7);
+  return { start: L.t, end, sung: (end - L.t) * 0.85 };
+}
+function posInLine(ws, from, to) {
+  const chars = (arr) => arr.reduce((n, w) => n + w.length + 1, 0);
+  const total = Math.max(1, chars(ws));
+  return { a: chars(ws.slice(0, from)) / total, b: chars(ws.slice(0, to)) / total };
+}
+export function findHandoff(A, B, lyrA = cachedLyrics(A), lyrB = cachedLyrics(B)) {
+  if (!lyrA?.synced || !lyrB?.synced) return null;
+  const durA = A.duration || 0, durB = B.duration || 0;
+  const LA = lyrA.lines, LB = lyrB.lines;
+  const index = new Map();
+  LB.forEach((L, li) => {
+    if (!L.text || L.t < 1.5 || (durB && L.t > durB * 0.6)) return;
+    const ws = words(L.text);
+    ws.forEach((w, i) => {
+      if (w.length < 3 || STOP.has(w)) return;
+      if (!index.has(w)) index.set(w, []);
+      index.get(w).push({ li, i, ws });
+    });
+  });
+  let best = null;
+  LA.forEach((L, li) => {
+    if (!L.text || L.t < Math.max(25, durA * 0.4) || (durA && L.t > durA - 8)) return;
+    const wsA = words(L.text);
+    wsA.forEach((w, i) => {
+      const hits = index.get(w);
+      if (!hits) return;
+      for (const m of hits) {
+        let back = 0, len = 1;
+        while (i - back - 1 >= 0 && m.i - back - 1 >= 0 && wsA[i - back - 1] === m.ws[m.i - back - 1]) back++;
+        while (i + len < wsA.length && m.i + len < m.ws.length && wsA[i + len] === m.ws[m.i + len]) len++;
+        const a0 = i - back, a1 = i + len, b0 = m.i - back;
+        const phrase = wsA.slice(a0, a1);
+        const content = phrase.filter((x) => !STOP.has(x) && x.length >= 3);
+        if (!content.length || (phrase.length === 1 && w.length < 4)) continue;
+        const pa = posInLine(wsA, a0, a1), pb = posInLine(m.ws, b0, b0 + phrase.length);
+        const ta = lineTimes(LA, li), tb = lineTimes(LB, m.li);
+        let score = phrase.length * 3 + content.reduce((s, x) => s + Math.min(3, x.length / 3), 0);
+        score += pa.a > 0.25 ? 1.5 : 0;          // some vocal before the shared words = a nice acapella lead-in
+        score += (1 - pb.a) * 2;                 // B line starts with the shared words = precise entry
+        score += (L.t / (durA || 1)) * 1.5;      // later in A is better
+        score -= (LB[m.li].t / (durB || 1)) * 2; // earlier in B is better
+        if (!best || score > best.score) {
+          best = {
+            score, phrase: phrase.join(' '),
+            aLine: { t: ta.start, text: L.text }, aStart: ta.start + ta.sung * pa.a, aEnd: ta.start + ta.sung * pa.b + 0.15,
+            bLine: { t: tb.start, text: LB[m.li].text }, bStart: tb.start + tb.sung * pb.a,
+          };
+        }
+      }
+    });
+  });
+  return best && best.score >= 6 ? best : null;
 }
