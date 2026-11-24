@@ -5,13 +5,13 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/util.js', './js/db.js', './js/settings.js', './js/sources.js', './js/tags.js',
   './js/scanner.js', './js/library.js', './js/art.js', './js/analysis.js', './js/engine.js', './js/demo.js',
-  './js/demo-synth.js', './js/plex.js', './js/ui/views.js', './js/ui/nowplaying.js', './js/ui/settings-view.js', './js/ui/components.js',
+  './js/demo-synth.js', './js/plex.js', './js/lyrics.js', './js/dj.js', './js/ui/views.js', './js/ui/nowplaying.js', './js/ui/settings-view.js', './js/ui/components.js',
   './js/ui/icons.js', './js/ui/dual.js', './js/ui/plex-view.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
 ];

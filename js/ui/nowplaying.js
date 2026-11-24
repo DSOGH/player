@@ -6,7 +6,7 @@ import { settings } from '../settings.js';
 import { analyze } from '../analysis.js';
 import { artColors, artUrl } from '../art.js';
 import { art, badges, haptic, actionSheet, toast, formatLine } from './components.js';
-import { plex } from '../plex.js';
+import { getLyrics } from '../lyrics.js';
 
 let mode = 'art'; // art | queue | lyrics
 let open = false;
@@ -160,6 +160,7 @@ async function act(a, el) {
     }
     case 'menu': npMenu(); break;
     case 'clear-queue': engine.clearUpNext(); break;
+    case 'dj-order': hooks.djOrderQueue?.(); break;
     default:
       if (a.startsWith('jump:')) engine.jumpTo(+a.slice(5));
       else if (a.startsWith('rm:')) engine.removeAt(+a.slice(3));
@@ -268,6 +269,8 @@ function trackInfo(t) {
     ['ReplayGain', t.rgTrack !== undefined ? `track ${t.rgTrack.toFixed(2)} dB${t.rgAlbum !== undefined ? ` · album ${t.rgAlbum.toFixed(2)} dB` : ''}` : 'none'],
     ['Leveling now', `${engine.gainDbFor(t).toFixed(1)} dB`],
     ['BPM', library.bpmOf(t) ? `${library.bpmOf(t)}${t.bpm && settings.get('preferBpmTag') ? ' (tag)' : an?.bpm ? ' (detected)' : ''}` : '—'],
+    ['Key', an?.key ? `${an.key} (${an.camelot})` : '—'],
+    ['Energy', an?.energy !== undefined ? `${Math.round(an.energy * 100)}%` : '—'],
     ['Analysis', an ? `intro silence ${an.leadIn}s · fade-out at ${fmtTime(an.fadeOutStart)} · loudness ${an.loudnessDb} dB` : 'not analyzed'],
     ['File', t.demo ? 'Generated demo track' : decodeURIComponent(t.url)],
   ].filter((r) => r[1]);
@@ -319,6 +322,7 @@ async function onTrack(t) {
   renderHint();
   lyrics = null;
   np.querySelector('.np-lyr').classList.toggle('has', !!(t.lyrics || t.lrc || t.plexLyrics));
+  getLyrics(t).then((l) => { if (engine.track === t) np.querySelector('.np-lyr').classList.toggle('has', !!l); });
   if (mode === 'lyrics') renderLyrics();
   if (mode === 'queue') renderQueue();
   document.querySelectorAll('.row.track.playing').forEach((r) => r.classList.remove('playing'));
@@ -361,8 +365,8 @@ function renderChips() {
   const el = $('#np .np-chips');
   if (!t || !el) return;
   const bpm = library.bpmOf(t);
-  $('#np .np-lyr')?.classList.toggle('has', !!(t.lyrics || t.lrc || t.plexLyrics));
-  el.innerHTML = html`${badges(t, { compact: true })}${settings.get('showBpm') && bpm ? html`<span class="badge bpm">${icon('bpm')}${Math.round(bpm)} BPM</span>` : ''}`;
+  const key = library.analysis.get(t.id)?.camelot;
+  el.innerHTML = html`${badges(t, { compact: true })}${settings.get('showBpm') && bpm ? html`<span class="badge bpm">${icon('bpm')}${Math.round(bpm)} BPM${key ? ` · ${key}` : ''}</span>` : ''}`;
 }
 
 function renderHint() {
@@ -435,6 +439,7 @@ function renderQueue() {
       <span class="q-tools">
         <button class="pill-sm${engine.shuffle ? ' on' : ''}" data-np="shuffle">${icon('shuffle')}</button>
         <button class="pill-sm${engine.repeat !== 'off' ? ' on' : ''}" data-np="repeat">${icon(engine.repeat === 'one' ? 'repeat-one' : 'repeat')}</button>
+        ${rows.length > 1 ? html`<button class="pill-sm dj" data-np="dj-order">${icon('mix')}DJ Order</button>` : ''}
         ${rows.length ? html`<button class="pill-sm" data-np="clear-queue">Clear</button>` : ''}
       </span></div>
     <div class="q-sub">${engine.context?.name ? `From ${engine.context.name}` : ''}</div>
@@ -442,54 +447,21 @@ function renderQueue() {
 }
 
 // ---------- lyrics ----------
-function parseLrc(text) {
-  const lines = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const tags = [...raw.matchAll(/\[(\d+):(\d+(?:[.:]\d+)?)\]/g)];
-    if (!tags.length) continue;
-    const txt = raw.replace(/\[[^\]]*\]/g, '').trim();
-    for (const m of tags) lines.push({ t: +m[1] * 60 + parseFloat(m[2].replace(':', '.')), text: txt });
-  }
-  return lines.sort((a, b) => a.t - b.t);
-}
-async function loadLyrics(t) {
-  if (lrcCache.has(t.id)) return lrcCache.get(t.id);
-  let out = null;
-  if (t.lrc) {
-    try {
-      const r = await fetch(nasUrl(t.lrc));
-      if (r.ok) { const lines = parseLrc(await r.text()); if (lines.length) out = { synced: true, lines }; }
-    } catch (e) { /* */ }
-  }
-  if (!out && t.plex) {
-    const txt = await plex.lyrics(t);
-    if (txt) {
-      const lines = parseLrc(txt);
-      out = lines.length ? { synced: true, lines } : { synced: false, lines: txt.split(/\r?\n/).map((text) => ({ t: 0, text })) };
-    }
-  }
-  if (!out && t.lyrics) {
-    const lines = parseLrc(t.lyrics);
-    out = lines.length ? { synced: true, lines } : { synced: false, lines: t.lyrics.split(/\r?\n/).map((text) => ({ t: 0, text })) };
-  }
-  lrcCache.set(t.id, out);
-  return out;
-}
 async function renderLyrics() {
   const box = $('#np .np-lyrics');
   const t = engine.track;
   if (!t) return;
   box.innerHTML = '<div class="ly-loading"><div class="spinner"></div></div>';
-  lyrics = await loadLyrics(t);
+  lyrics = await getLyrics(t);
   lastLyricIdx = -1;
   if (engine.track !== t) return;
   if (!lyrics) {
-    box.innerHTML = html`<div class="ly-none">${icon('lyrics')}<p>No lyrics for this song.</p><small>Add a .lrc file next to the song on your NAS (same name) or embed lyrics in the tags.</small></div>`;
+    box.innerHTML = html`<div class="ly-none">${icon('lyrics')}<p>No lyrics found for this song.</p><small>${settings.get('onlineLyrics') ? 'Searched your files, Plex and LRCLIB by title & artist.' : 'Turn on Online lyrics in Settings → Playback to search by title & artist.'}</small></div>`;
     return;
   }
   box.innerHTML = html`<div class="ly-wrap${lyrics.synced ? ' synced' : ''}">${lyrics.lines.map((l, i) => l.text
     ? html`<p class="ly" data-i="${i}" ${lyrics.synced ? raw(`data-np="seek:${l.t}"`) : ''}>${l.text}</p>`
-    : html`<p class="ly gap" data-i="${i}">•••</p>`)}</div>`;
+    : html`<p class="ly gap" data-i="${i}">•••</p>`)}<p class="ly-src">Lyrics · ${lyrics.source}</p></div>`;
   renderTime();
 }
 

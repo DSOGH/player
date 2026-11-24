@@ -11,7 +11,7 @@ import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
 import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -189,7 +189,11 @@ function playback() {
       ${seg('transition', 'Between songs', [['smart', 'DJ Mix'], ['crossfade', 'Crossfade'], ['off', 'Gapless']],
         { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings; and the next song slides under natural fade-outs. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
       ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
-      ${tm === 'smart' ? toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)') : ''}
+      ${tm === 'smart' ? html`
+        ${seg('djStyle', 'DJ style', [['auto', 'Auto'], ['beats', 'Beat match'], ['wordplay', 'Word play']],
+          { auto: 'Uses word play when a song sings the next song’s title, otherwise beat-matches.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Hunts for lyric cues: when a song sings the next title, that line echoes out and the next song drops in on its own title. DJ Order also chains songs by lyrics.' }[settings.get('djStyle')])}
+        ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
+        ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}` : ''}
       ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
       ${toggle('gaplessAlbums', 'Gapless albums', 'Never crossfade between consecutive tracks of the same album (live albums, DJ mixes, concept albums)')}
       ${toggle('skipSilence', 'Trim silence', 'Skip dead air at the start and end of songs')}
@@ -207,6 +211,9 @@ function playback() {
       ${slider('skipFadeSec', 'Skip fade length', 0.3, 3, 0.1, 's')}
       ${toggle('pauseFade', 'Soft pause', 'Fade out/in on pause and play')}
       ${slider('prevRestarts', 'Previous restarts song after', 1, 10, 1, 's')}
+    `)}
+    ${group('Lyrics', html`
+      ${toggle('onlineLyrics', 'Online lyrics', 'Find synced lyrics by song title and artist (LRCLIB) when your files and Plex don’t have them')}
     `)}
     ${group('Queue', html`
       ${toggle('autoplay', 'Autoplay', 'When your queue ends, keep playing similar music (genre, artist, tempo)')}
@@ -415,7 +422,7 @@ export function bindSettings(root, rerender) {
     const v = typeof DEFAULTS[k] === 'number' ? +raw : raw;
     settings.set(k, v);
     $$('button', b.parentNode).forEach((x) => x.classList.toggle('on', x === b));
-    if (k === 'transition') rerender.page();
+    if (k === 'transition' || k === 'djStyle') rerender.page();
   });
 }
 

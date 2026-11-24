@@ -16,6 +16,7 @@ import { getList, actionSheet, prompt, toast, confirmSheet, haptic, art } from '
 import { plex } from './plex.js';
 import { plexSignIn, plexSignOut, loadServers } from './ui/plex-view.js';
 import { trackSrc } from './analysis.js';
+import { optimizeOrder } from './dj.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -124,7 +125,7 @@ async function render({ keepScroll = false } = {}) {
   const search = path === 'search';
   v.innerHTML = (search ? searchHeader() : '') + String(res.html);
   v.dataset.page = path.split('/')[0];
-  document.title = res.title ? `${res.title} · Player` : 'Player';
+  if (!engine.track) document.title = res.title ? `${res.title} · Player` : 'Player';
   res.after?.(v);
   if (path.startsWith('settings')) bindSettings(v, { page: () => render({ keepScroll: true }), demo: toggleDemo });
   V.hydrateLazy(v);
@@ -219,6 +220,35 @@ async function toggleDownload(tracks) {
   rerender();
 }
 
+// ---------- DJ sets ----------
+let djBusy = false;
+async function djSet(tracks, { first = null, context = null, mode = 'play' } = {}) {
+  tracks = tracks.filter(Boolean);
+  if (tracks.length < 2) { toast('Need at least 2 songs'); return; }
+  if (djBusy) { toast('Already building a DJ set…'); return; }
+  djBusy = true;
+  const style = settings.get('djStyle');
+  toast(`Building your DJ set from ${tracks.length} songs…`, { ms: 4000 });
+  try {
+    const { order, stats } = await optimizeOrder(tracks.slice(0, 200), {
+      first, mode: style,
+      onProgress: (n, total, label) => toast(`${label}… ${n}/${total}`, { ms: 4000 }),
+    });
+    if (mode === 'queue') engine.setUpNext(order.slice(1));
+    else engine.playTracks(order, 0, { context: { ...(context || {}), name: `${context?.name || 'DJ Set'} · DJ order` } });
+    const parts = [`${stats.harmonic}/${stats.transitions} harmonic`];
+    if (style !== 'beats') parts.push(`${stats.wordplay} word play`);
+    parts.push(`avg tempo change ${stats.avgTempoJump.toFixed(1)}%`);
+    toast(`DJ order ready · ${parts.join(' · ')}`, { ms: 7000 });
+  } catch (e) {
+    toast('Couldn\u2019t build the DJ set');
+  } finally { djBusy = false; }
+}
+function djOrderQueue() {
+  const up = engine.upNext().slice(0, 150);
+  djSet([engine.track, ...up], { first: engine.track, mode: 'queue' });
+}
+
 // ---------- playlists ----------
 async function addToPlaylist(tracks) {
   const pls = [...library.playlists.values()].filter((p) => !p.source).sort((a, b) => (b.updated || 0) - (a.updated || 0));
@@ -283,7 +313,8 @@ async function albumMenu(a) {
       { icon: 'add-playlist', label: 'Add to Playlist…', value: 'playlist' },
       { icon: off ? 'downloaded' : 'download', label: off ? 'Remove Download' : 'Download Album', value: 'download' },
       { icon: 'artist', label: 'Go to Artist', value: 'artist' },
-      { icon: 'bpm', label: 'Analyze Album', value: 'analyze', sub: 'BPM, silences, loudness' },
+      { icon: 'mix', label: 'Play as DJ Set', value: 'djset', sub: 'Reorder by tempo, key & energy' },
+      { icon: 'bpm', label: 'Analyze Album', value: 'analyze', sub: 'BPM, key, silences, loudness' },
     ],
   });
   if (v === 'next') { engine.playNext(a.tracks); toast('Playing next'); }
@@ -291,6 +322,7 @@ async function albumMenu(a) {
   if (v === 'playlist') addToPlaylist(a.tracks);
   if (v === 'download') toggleDownload(a.tracks);
   if (v === 'artist') location.hash = `#/artist/${a.artistId}`;
+  if (v === 'djset') djSet(a.tracks, { context: { type: 'album', id: a.id, name: a.title } });
   if (v === 'analyze') {
     const { analyze } = await import('./analysis.js');
     toast(`Analyzing ${a.tracks.length} songs…`);
@@ -304,6 +336,7 @@ async function playlistMenu(p) {
   const v = await actionSheet({
     title: p.name,
     items: [
+      { icon: 'mix', label: 'Play as DJ Set', value: 'djset', sub: 'Reorder by tempo, key, energy & lyrics' },
       { icon: 'play-next', label: 'Play Next', value: 'next' },
       { icon: 'add-queue', label: 'Add to Queue', value: 'queue' },
       { icon: 'download', label: 'Download / Remove Download', value: 'download' },
@@ -315,6 +348,7 @@ async function playlistMenu(p) {
   if (v === 'next') engine.playNext(tracks);
   if (v === 'queue') engine.addToQueue(tracks);
   if (v === 'download') toggleDownload(tracks);
+  if (v === 'djset') djSet(tracks, { context: { type: 'playlist', id: p.id, name: p.name } });
   if (v === 'copy') {
     const np = await library.createPlaylist(`${p.name} (copy)`, [...p.trackIds]);
     location.hash = `#/playlist/${np.id}`;
@@ -371,6 +405,11 @@ async function doAction(a, el, e) {
       const t = library.track(d.tid);
       const pl = currentPath.startsWith('playlist/') ? currentPath.split('/')[1] : null;
       if (t) trackMenu(t, { playlist: pl });
+      break;
+    }
+    case 'dj-list': {
+      const L = getList(d.list);
+      if (L) djSet(L.ids.map((id) => library.track(id)), { context: L.context });
       break;
     }
     case 'album-menu': { const al = library.album(d.id); if (al) albumMenu(al); break; }
@@ -628,7 +667,7 @@ async function boot() {
   await loadKnown();
   await library.load();
   await plex.load();
-  initNowPlaying({ addToPlaylist, toggleDownload, onAccent: applyAccent });
+  initNowPlaying({ addToPlaylist, toggleDownload, onAccent: applyAccent, djOrderQueue });
   initDual((mode) => {
     if (mode !== 'single') { closeNP(true); }
     document.body.classList.toggle('np-docked', mode !== 'single');

@@ -8,6 +8,9 @@ A music player for your phone, in the style of Apple Music and Spotify. **Sign i
 
 ## Install on your phone
 
+> **iPhone / CarPlay:** add the app to your Home Screen (below) and open it from there. The lock screen, Control Center and CarPlay then show **Player** with the song, artist, album and cover, instead of "Safari".
+
+
 1. Open **https://dsogh.github.io/player/** in Chrome (Android / Surface Duo) or Safari (iPhone).
 2. Android: tap **⋮ → Add to Home screen → Install**. iPhone: tap **Share → Add to Home Screen**.
 3. Launch it from the home screen. It runs full screen, appears in your lock-screen and Bluetooth controls, and keeps playing with the screen off.
@@ -90,12 +93,16 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 ## Features
 
 **Transitions** (tap the button under the controls to switch)
-* **DJ Mix** (default) analyzes every song's tempo, beat grid, intro and outro, then picks a move for each transition:
+* **DJ Mix** (default) analyzes every song's tempo, beat grid, **musical key**, energy, intro and outro, then picks a move for each transition. Choose a **DJ style**: *Auto*, *Beat match* or *Word play*.
+  * **Word play:** when a song sings the next song's title (found in synced lyrics), that line echoes out and the next song drops in right on its own title line.
   * **DJ blend:** when tempos line up, a long, phrase-aligned, beat-matched blend. The incoming song is tempo-synced (pitch preserved), its bass is held back, then the basses **swap** halfway while the outgoing song is high-passed away.
   * **Fade under:** when the song fades out on its own, the next one slides in underneath it.
   * **Echo out:** when a song ends hard, its last beats ring out through a tempo-synced echo as the next song drops in.
   * **Filter sweep:** when tempos clash, the outgoing song is low-passed away while the next one opens up from a high-pass.
+  * **Harmonic mixing:** keys are shown in Camelot notation (e.g. 8A). Blends run long when keys agree and quick when they clash.
   * Silence is trimmed, and albums stay gapless.
+* **DJ Order:** reorders your queue, a playlist or an album into a DJ set, with smooth tempo steps, compatible keys, a rising energy flow and word-play links. It's under the **DJ Order** button in the queue, the mix button next to Play/Shuffle, or *Play as DJ Set* in the menus.
+* **Lyrics** come from a `.lrc` file, Plex or tags, and otherwise are looked up online by title and artist (LRCLIB).
 * **Gapless albums:** consecutive tracks of the same album never crossfade (live albums, DJ mixes).
 * **Crossfade** (classic, like Spotify; 1–16 s with equal-power, S-curve or linear curves) or **Gapless** (off).
 * The player shows what's coming: *"Next: … · Beat-matched 124 BPM in 0:12"*.

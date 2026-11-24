@@ -617,3 +617,8 @@ body.dual-wide .grid.cols-3 { --cols: 4; }
 .np-art .art { transform: scale(calc(1 + var(--pulse, 0) * 0.028)); transition: transform .08s linear, box-shadow .12s linear;
   box-shadow: 0 28px 60px rgba(0,0,0,.5), 0 0 calc(var(--pulse, 0) * 90px) color-mix(in srgb, var(--np-c2) 70%, transparent); }
 #np.swiping .np-art { transition: none; }
+
+/* v1.3 */
+.ly-src { font-size: 12px !important; font-weight: 600 !important; color: rgba(255,255,255,.4) !important; margin-top: 30px !important; filter: none !important; transform: none !important; letter-spacing: .02em; }
+.pill-sm.dj { background: rgba(255,255,255,.9); color: #111; }
+.play-btns .round-btn { flex: none; }

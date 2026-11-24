@@ -6,6 +6,9 @@ export const DEFAULTS = {
   transition: 'smart',        // 'off' | 'crossfade' | 'smart' (DJ Mix)
   crossfadeSec: 8,
   djEffects: true,            // bass swaps, filter sweeps, echo outs in DJ Mix
+  djStyle: 'auto',            // 'auto' | 'beats' | 'wordplay'
+  harmonicMix: true,          // use musical key (Camelot) to choose blend length
+  onlineLyrics: true,         // look up lyrics by title + artist (LRCLIB)
   fadeCurve: 'equalpower',    // 'equalpower' | 'linear' | 'scurve'
   gaplessAlbums: true,        // never crossfade consecutive album tracks
   skipSilence: true,          // trim leading/trailing silence

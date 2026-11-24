@@ -7,7 +7,7 @@ import { plex } from './plex.js';
 
 const SR = 11025;
 const WIN = 256;               // ~23 ms envelope windows
-const ANALYSIS_VERSION = 3;
+const ANALYSIS_VERSION = 4;
 const MAX_SECONDS = 20 * 60;   // skip very long files (mixes, audiobooks)
 const inflight = new Map();
 const PREFETCH_KEEP = 6;
@@ -232,7 +232,15 @@ export async function analyzeBuffer(ab) {
     while (t0 - pSec >= leadIn) t0 -= pSec;
     beatOffset = t0;
   }
+  const key = detectKey(mono, first * WIN, (last + 1) * WIN);
+  // energy: loudness + rhythmic density, 0..1
+  let onsetMean = 0;
+  for (let f = a0; f < a1; f++) onsetMean += on[f];
+  onsetMean /= Math.max(1, a1 - a0);
+  const energy = Math.max(0, Math.min(1, 0.6 * ((loudnessDb + 30) / 22) + 0.4 * Math.min(1, onsetMean * 3)));
   return {
+    key: key?.name || '', camelot: key?.camelot || '', keyConf: key ? Math.round(key.conf * 100) / 100 : 0,
+    energy: Math.round(energy * 100) / 100,
     bpm: Math.round(bpm * 10) / 10,
     bpmConf: Math.round(conf * 100) / 100,
     beatOffset: Math.round(beatOffset * 1000) / 1000,
@@ -243,5 +251,83 @@ export async function analyzeBuffer(ab) {
     loudnessDb: Math.round(loudnessDb * 10) / 10,
     peakDb: Math.round(toDb(peak * peak) * 10) / 10,
     duration: Math.round(duration * 100) / 100,
+  };
+}
+
+// ---------- musical key (chromagram + Krumhansl-Kessler profiles) ----------
+const NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+const CAMELOT_MAJ = ['8B', '3B', '10B', '5B', '12B', '7B', '2B', '9B', '4B', '11B', '6B', '1B'];
+const CAMELOT_MIN = ['5A', '12A', '7A', '2A', '9A', '4A', '11A', '6A', '1A', '8A', '3A', '10A'];
+const KK_MAJ = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+const KK_MIN = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+}
+function corr(a, b) {
+  const ma = a.reduce((s, x) => s + x, 0) / 12, mb = b.reduce((s, x) => s + x, 0) / 12;
+  let n = 0, da = 0, dbb = 0;
+  for (let i = 0; i < 12; i++) { n += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; dbb += (b[i] - mb) ** 2; }
+  return n / Math.sqrt(da * dbb || 1);
+}
+export function detectKey(mono, from, to) {
+  const N = 4096;
+  const win = new Float32Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
+  const binPc = new Int8Array(N / 2).fill(-1);
+  for (let k = 1; k < N / 2; k++) {
+    const f = (k * SR) / N;
+    if (f < 55 || f > 2000) continue;
+    binPc[k] = ((Math.round(12 * Math.log2(f / 440) + 69) % 12) + 12) % 12;
+  }
+  const chroma = new Float64Array(12);
+  const re = new Float32Array(N), im = new Float32Array(N);
+  const step = N * 2;
+  let frames = 0;
+  for (let o = from; o + N < to && frames < 400; o += step) {
+    let e = 0;
+    for (let i = 0; i < N; i++) { const v = mono[o + i]; re[i] = v * win[i]; im[i] = 0; e += v * v; }
+    if (e / N < 1e-5) continue;
+    fft(re, im);
+    const c = new Float64Array(12);
+    for (let k = 1; k < N / 2; k++) { const pc = binPc[k]; if (pc >= 0) c[pc] += Math.sqrt(re[k] * re[k] + im[k] * im[k]); }
+    const mx = Math.max(...c) || 1;
+    for (let i = 0; i < 12; i++) chroma[i] += c[i] / mx;
+    frames++;
+  }
+  if (frames < 8) return null;
+  const ch = Array.from(chroma);
+  let best = null, second = -2;
+  for (let r = 0; r < 12; r++) {
+    for (const [prof, minor] of [[KK_MAJ, false], [KK_MIN, true]]) {
+      const rot = prof.map((_, i) => prof[(i - r + 12) % 12]);
+      const c = corr(ch, rot);
+      if (!best || c > best.c) { if (best) second = Math.max(second, best.c); best = { c, r, minor }; }
+      else second = Math.max(second, c);
+    }
+  }
+  return {
+    name: `${NOTES[best.r]} ${best.minor ? 'minor' : 'major'}`,
+    camelot: (best.minor ? CAMELOT_MIN : CAMELOT_MAJ)[best.r],
+    conf: Math.max(0, Math.min(1, (best.c - second) * 5 + best.c * 0.3)),
   };
 }

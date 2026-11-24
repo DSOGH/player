@@ -41,6 +41,7 @@ function playButtons(listKey, { extra = '' } = {}) {
   return html`<div class="play-btns">
     <button class="btn pill primary" data-a="play-all" data-list="${listKey}">${icon('play')}Play</button>
     <button class="btn pill" data-a="shuffle-all" data-list="${listKey}">${icon('shuffle')}Shuffle</button>
+    <button class="icon-btn round-btn" data-a="dj-list" data-list="${listKey}" aria-label="Play as DJ set">${icon('mix')}</button>
     ${raw(extra)}
   </div>`;
 }

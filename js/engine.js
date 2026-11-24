@@ -7,6 +7,12 @@ import { analyze, prefetchTrack, trackSrc } from './analysis.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
 import { artUrl } from './art.js';
+import { findCue, titleEntry, keyCompat } from './dj.js';
+import { getLyrics } from './lyrics.js';
+
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// 0.1s of silence, used to unlock audio elements inside a tap (iOS only lets elements started by a tap play later on their own)
+const SILENT = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
 const dbToLin = (db) => Math.pow(10, db / 20);
 
@@ -34,6 +40,7 @@ class Deck {
     this.el = el;
     this.raw = raw;
     this.node = null;
+    this.unlocked = false;
   }
   load(track, startAt = 0) {
     this.token++;
@@ -358,7 +365,13 @@ class Engine extends Emitter {
       if (this.errors <= 4 && this.index + 1 < this.queue.length) setTimeout(() => this.playIndex(this.index + 1, { mode: 'cut' }), 1200);
       else { this.playing = false; this.emit('state'); }
     });
-    el.addEventListener('playing', () => { if (el === d.el && d === this.cur) { this.errors = 0; this.emit('buffering', false); } });
+    el.addEventListener('playing', () => {
+      if (el !== d.el || d !== this.cur) return;
+      this.errors = 0;
+      this.emit('buffering', false);
+      // iOS/CarPlay take "Now Playing" from whichever element just started: re-send the song info
+      this.updateMediaSession();
+    });
     el.addEventListener('waiting', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
     el.addEventListener('pause', () => {
       // paused by the OS (another app took audio focus, headphones unplugged...)
@@ -466,6 +479,15 @@ class Engine extends Emitter {
     this.invalidateNext();
     this.emit('queue'); this.saveState();
   }
+  setUpNext(tracks) {
+    const ids = tracks.map((t) => t.id);
+    this.queue = [...this.queue.slice(0, this.index + 1), ...ids];
+    this.origQueue = null;
+    this.shuffle = false;
+    this.autoplayFrom = -1;
+    this.invalidateNext();
+    this.emit('queue'); this.emit('state'); this.saveState();
+  }
   clearUpNext() {
     this.queue = this.queue.slice(0, this.index + 1);
     this.origQueue = null;
@@ -493,7 +515,23 @@ class Engine extends Emitter {
   }
 
   // ---------- transport ----------
+  // iOS: an <audio> element can only start by itself later if it was started inside a tap once
+  unlockDecks() {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* */ }
+    for (const d of this.decks) {
+      if (d.unlocked) continue;
+      d.unlocked = true;
+      if (d.track) continue; // the playing deck unlocks itself
+      const el = d.el;
+      try {
+        el.src = SILENT;
+        const p = el.play();
+        p?.then(() => { if (!d.track && el.src === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } }).catch((e) => { if (e.name === 'NotAllowedError') d.unlocked = false; });
+      } catch (e) { d.unlocked = false; }
+    }
+  }
   async play() {
+    this.unlockDecks();
     this.ensureGraph();
     await this.resume();
     if (!this.cur.track) {
@@ -557,6 +595,7 @@ class Engine extends Emitter {
 
   async playIndex(i, { mode = 'cut', startAt = 0, autoplay = true } = {}) {
     if (i < 0 || i >= this.queue.length) return;
+    if (autoplay) this.unlockDecks();
     const t = library.track(this.queue[i]);
     if (!t) { this.queue.splice(i, 1); return this.playIndex(Math.min(i, this.queue.length - 1), { mode, autoplay }); }
     this.ensureGraph();
@@ -644,6 +683,10 @@ class Engine extends Emitter {
     this.setFade(d, 0);
     if (this.wantsAnalysis()) analyze(t).then(() => this.computePlan());
     else prefetchTrack(t);
+    const st = settings.v;
+    if (st.transition === 'smart' && (st.djStyle || 'auto') !== 'beats') {
+      Promise.all([getLyrics(this.cur.track), getLyrics(t)]).then(() => { if (this.upcoming?.track === t) this.computePlan(); });
+    }
   }
 
   computePlan() {
@@ -674,6 +717,11 @@ class Engine extends Emitter {
   //  under     outgoing song fades out on its own → bring the next one in underneath, bass held back
   //  echo      outgoing song ends hard → echo/delay tail rings out as the next song drops in
   //  filter    tempos don't match → low-pass the outgoing song away while the next one opens up from a high-pass
+  // iPhone can't change an <audio> element's volume, so fades need the Web Audio engine
+  canFade(t) {
+    if (!IOS) return true;
+    return settings.get('engine') === 'enhanced' && !!this.ctx && !(t?.plex && this.plexNoCors);
+  }
   makePlan(A, B, durA) {
     const s = settings.v;
     const aA = library.analysis.get(A.id), aB = library.analysis.get(B.id);
@@ -690,6 +738,7 @@ class Engine extends Emitter {
       return gapless();
     }
     if (cont && s.gaplessAlbums) return gapless('Gapless · same album');
+    if (!this.canFade(A) || !this.canFade(B)) return gapless('Gapless (fades need Enhanced audio on iPhone)');
 
     let end = dur, bStart = 0;
     if (s.skipSilence) {
@@ -711,10 +760,28 @@ class Engine extends Emitter {
     const ratio = bpmA && bpmB ? bpmA / bpmB : 0;
     const tol = Math.max(0.02, s.tempoMatch ? s.tempoMatchMax / 100 : 0.02);
 
-    // 1) beat-matched blend
+    const djStyle = s.djStyle || 'auto';
+    // 0) word play: the outgoing song sings the next song's title → echo that line out and drop the next song on its own title
+    if (djStyle !== 'beats') {
+      const cue = findCue(A, B);
+      if (cue && cue.end < end - 0.5) {
+        const lead = clamp(cue.end - cue.t, 1.2, 6);
+        const entry = titleEntry(B);
+        const beatA = bpmA ? 60 / bpmA : 0.5;
+        return {
+          ...base, type: 'wordplay', style: 'echo', fx, cue,
+          label: `Word play · “${cue.phrase}”`,
+          mixStart: cue.t, overlap: lead + 0.4, inDur: 0.3, outDur: 0.06, outDelay: lead, lead,
+          bStart: entry != null ? Math.max(0, entry - 0.1) : bStart,
+          echoTime: clamp(beatA * 0.75, 0.2, 0.75),
+        };
+      }
+    }
+    // 1) beat-matched blend (harmonic-aware: long blends when keys agree, short when they clash)
+    const kc = s.harmonicMix !== false ? keyCompat(aA?.camelot, aB?.camelot) : 0.8;
     if (s.beatMatch && ratio && Math.abs(ratio - 1) <= tol && end > 30) {
       const beat = 60 / bpmA, bar = beat * 4;
-      let beats = clamp(Math.round(Math.max(D * 1.6, 8 * beat) / beat / 8) * 8, 8, 32);
+      let beats = clamp(Math.round(Math.max(D * 1.6, 8 * beat) / beat / 8) * 8, 8, kc >= 0.85 ? 32 : kc < 0.5 ? 8 : 16);
       while (beats > 8 && beats * beat > Math.min(dur * 0.35, durB * 0.4, 24)) beats -= 8;
       const overlap = beats * beat;
       // finish the blend as the outgoing song's outro begins (or at its end)
@@ -725,7 +792,7 @@ class Engine extends Emitter {
         const rate = s.tempoMatch ? ratio : 1;
         return {
           ...base, type: 'beatmatch', style: 'blend', fx,
-          label: `DJ blend · ${Math.round(bpmA)} BPM${Math.abs(rate - 1) > 0.003 ? ' · tempo synced' : ''}`,
+          label: `Beat match · ${Math.round(bpmA)} BPM${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : kc < 0.5 ? ' · quick (key clash)' : ''}`,
           mixStart: ms, overlap, inDur: overlap * 0.5, outDur: overlap * 0.62, outDelay: overlap * 0.38,
           bStart: aB.beatOffset || bStart, rate, beat,
         };
@@ -773,6 +840,23 @@ class Engine extends Emitter {
       if (p.style === 'echo') B.bass.gain.setValueAtTime(-12, now);
       if (p.style === 'filter') { B.hp.frequency.setValueAtTime(900, now); B.bass.gain.setValueAtTime(-10, now); }
     }
+    // echo / word play: the outgoing line rings out first, the next song starts exactly as it ends
+    if (p.style === 'echo') {
+      const tokA = A.token;
+      const ta = this.ctx ? this.ctx.currentTime + 0.01 : 0;
+      if (useFx) {
+        this.echoDelay.delayTime.setValueAtTime(p.echoTime, ta);
+        this.echoFb.gain.setValueAtTime(0.52, ta);
+        this.hold(A.send.gain, ta); A.send.gain.linearRampToValueAtTime(0.85, ta + p.lead);
+        this.fade(A, 0, 0.08, { delay: p.lead, shape: 'linear' });
+        this.echoFb.gain.setValueAtTime(0.52, ta + p.lead + 1.5);
+        this.echoFb.gain.linearRampToValueAtTime(0, ta + p.lead + 4);
+      } else this.fade(A, 0, p.lead, { shape: 'equalpower' });
+      this.echoPending = true;
+      await new Promise((r) => setTimeout(r, Math.max(0, p.lead * 0.94) * 1000));
+      this.echoPending = false;
+      if (A.token !== tokA || this.cur !== A || !this.playing) return;
+    }
     try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } }
     const t0 = this.ctx ? this.ctx.currentTime + 0.01 : 0;
     const D = p.overlap || p.outDelay + p.outDur;
@@ -805,20 +889,9 @@ class Engine extends Emitter {
         }
         break;
       case 'echo':
-        if (useFx) {
-          this.echoDelay.delayTime.setValueAtTime(p.echoTime, t0);
-          this.echoFb.gain.setValueAtTime(0.52, t0);
-          this.hold(A.send.gain, t0); A.send.gain.linearRampToValueAtTime(0.85, t0 + p.lead);
-          this.fade(A, 0, 0.06, { delay: p.lead, shape: 'linear' });
-          // B drops in on the last echo; its bass slides back in
-          this.fade(B, 1, p.inDur, { delay: p.lead * 0.92, shape: 'equalpower' });
-          this.hold(B.bass.gain, t0); B.bass.gain.setValueAtTime(-12, t0 + p.lead); B.bass.gain.linearRampToValueAtTime(0, t0 + p.lead + 2.5);
-          this.echoFb.gain.setValueAtTime(0.52, t0 + p.lead + 1.5);
-          this.echoFb.gain.linearRampToValueAtTime(0, t0 + p.lead + 4);
-        } else {
-          this.fade(A, 0, p.lead, { shape: 'equalpower' });
-          this.fade(B, 1, 0.5, { delay: p.lead * 0.8, shape: 'equalpower' });
-        }
+        // A's echo was started above; B drops in now and its bass slides back
+        this.fade(B, 1, p.inDur, { shape: 'equalpower' });
+        if (useFx) { this.hold(B.bass.gain, t0); B.bass.gain.linearRampToValueAtTime(0, t0 + 2.5); }
         break;
       case 'filter':
       default:
@@ -832,7 +905,7 @@ class Engine extends Emitter {
         break;
     }
     this.notePlayed(A);
-    const total = (p.style === 'echo' ? p.lead + 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
+    const total = (p.style === 'echo' ? 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
     this.transition = { from: A, to: B, plan: p };
     this.ai = 1 - this.ai;
     this.index = nx.index;
@@ -874,7 +947,7 @@ class Engine extends Emitter {
       setTimeout(() => { this.pause(); this.emit('sleep'); }, 8000);
       return;
     }
-    if (!this.playing || d.el.paused || this.transition) return;
+    if (!this.playing || d.el.paused || this.transition || this.echoPending) return;
     const dur = this.duration;
     if (!dur) return;
     const t = d.el.currentTime;
@@ -916,11 +989,14 @@ class Engine extends Emitter {
     if (!('mediaSession' in navigator)) return;
     const t = this.track;
     if (!t) return;
-    const art = new URL(t.artId ? artUrl(t.artId, 640) : './icons/icon-512.png', location.href).href;
+    const abs = (u) => new URL(u, location.href).href;
+    const artwork = t.artId
+      ? [256, 512, 640].map((sz) => ({ src: abs(artUrl(t.artId, sz)), sizes: `${sz}x${sz}`, type: 'image/jpeg' }))
+      : [{ src: abs('./icons/icon-512.png'), sizes: '512x512', type: 'image/png' }];
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: t.title, artist: t.artist, album: t.album,
-      artwork: [{ src: art, sizes: '640x640', type: 'image/jpeg' }],
+      title: t.title || 'Unknown song', artist: t.artist || '', album: t.album || '', artwork,
     });
+    document.title = `${t.title} · ${t.artist}`;
     if (!this._msWired) {
       this._msWired = true;
       const ms = navigator.mediaSession;
