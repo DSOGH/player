@@ -37,8 +37,9 @@ const ALBUMS = [
 
 async function makeCover(title, artist, colors, seed) {
   const c = document.createElement('canvas');
-  c.width = c.height = 640;
+  c.width = c.height = 1024;
   const x = c.getContext('2d');
+  x.scale(1024 / 640, 1024 / 640); // drawn on a 640 grid, rendered at 1024px for the lock screen
   const g = x.createLinearGradient(0, 0, 640, 640);
   g.addColorStop(0, colors[0]); g.addColorStop(0.55, colors[1]); g.addColorStop(1, colors[2]);
   x.fillStyle = g; x.fillRect(0, 0, 640, 640);

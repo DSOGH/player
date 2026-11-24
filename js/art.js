@@ -1,7 +1,7 @@
 // Artwork: resize, extract palette, store in IndexedDB. Served by the SW at ./__art/<id>
 import * as db from './db.js';
 
-const SIZE = 640;
+const SIZE = 1000;
 const known = new Set();
 let knownLoaded = false;
 
@@ -14,6 +14,40 @@ export const hasArt = (id) => known.has(id);
 // Sources can supply their own artwork URLs (Plex serves covers directly from your server).
 let resolver = null;
 export function setArtResolver(fn) { resolver = fn; }
+// Lock screen / CarPlay artwork: exact-size square JPEGs as blob URLs (iOS shows a full-screen
+// cover when you tap it, so it needs a real large image it can always load).
+const lockArt = new Map();
+export async function lockScreenArtwork(id) {
+  if (!id) return null;
+  if (lockArt.has(id)) return lockArt.get(id);
+  const src = artUrl(id, 1024);
+  try {
+    const img = new Image();
+    if (/^https?:/.test(src) && !src.startsWith(location.origin)) img.crossOrigin = 'anonymous';
+    img.src = src;
+    await img.decode();
+    const out = [];
+    for (const sz of [512, 1024]) {
+      const c = document.createElement('canvas');
+      c.width = c.height = sz;
+      const x = c.getContext('2d');
+      x.imageSmoothingQuality = 'high';
+      const s = Math.min(img.naturalWidth, img.naturalHeight);
+      x.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, sz, sz);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+      out.push({ src: URL.createObjectURL(blob), sizes: `${sz}x${sz}`, type: 'image/jpeg' });
+    }
+    lockArt.set(id, out);
+    if (lockArt.size > 6) {
+      const [k, v] = lockArt.entries().next().value;
+      v.forEach((a) => URL.revokeObjectURL(a.src));
+      lockArt.delete(k);
+    }
+    return out;
+  } catch (e) {
+    return null; // e.g. Plex server without CORS: fall back to direct URLs
+  }
+}
 export function artUrl(id, size = 640) {
   if (!id) return '';
   return (resolver && resolver(id, size)) || `./__art/${encodeURIComponent(id)}`;

@@ -14,7 +14,8 @@ export const DEFAULTS = {
   skipSilence: true,          // trim leading/trailing silence
   beatMatch: true,            // align mixes to the beat when BPMs are known
   tempoMatch: true,           // nudge incoming tempo during the mix
-  tempoMatchMax: 6,           // percent
+  tempoMatchMax: 12,          // percent (each song); songs meet in the middle for bigger gaps
+  sv: 2,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
   analysisNetwork: 'any',     // 'any' | 'wifi'
@@ -90,6 +91,12 @@ class Settings extends Emitter {
   constructor() { super(); this.v = { ...DEFAULTS }; }
   async load() {
     const saved = (await kv.get('settings')) || {};
+    if (!saved.sv || saved.sv < 2) {
+      // v1.4: wider tempo sync + longer default mixes
+      saved.tempoMatchMax = Math.max(saved.tempoMatchMax || 0, 12);
+      saved.crossfadeSec = Math.max(saved.crossfadeSec || 0, 8);
+      saved.sv = 2;
+    }
     this.v = { ...DEFAULTS, ...saved };
   }
   get(k) { return this.v[k]; }

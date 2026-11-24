@@ -95,7 +95,7 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 **Transitions** (tap the button under the controls to switch)
 * **DJ Mix** (default) analyzes every song's tempo, beat grid, **musical key**, energy, intro and outro, then picks a move for each transition. Choose a **DJ style**: *Auto*, *Beat match* or *Word play*.
   * **Word play:** when a song sings the next song's title (found in synced lyrics), that line echoes out and the next song drops in right on its own title line.
-  * **DJ blend:** when tempos line up, a long, phrase-aligned, beat-matched blend. The incoming song is tempo-synced (pitch preserved), its bass is held back, then the basses **swap** halfway while the outgoing song is high-passed away.
+  * **DJ blend:** a long (16–32 beat), phrase-aligned, beat-matched overlay. Both songs **meet at a middle tempo** (each can move up to 12%, pitch preserved), a live **beat lock** keeps the kicks within a few milliseconds, the incoming bass is held back, and the basses **swap** halfway while the outgoing song is high-passed away.
   * **Fade under:** when the song fades out on its own, the next one slides in underneath it.
   * **Echo out:** when a song ends hard, its last beats ring out through a tempo-synced echo as the next song drops in.
   * **Filter sweep:** when tempos clash, the outgoing song is low-passed away while the next one opens up from a high-pass.
@@ -128,8 +128,10 @@ Your password is stored only on your phone. It's sent only to your NAS, never an
 * Lock screen, notification, Bluetooth and headphone controls (Media Session).
 * Swipe the mini player to skip, swipe the player down to close, long-press anything for options.
 
-**Surface Duo / foldables / tablets**
-* Span the app across both screens: library on one side, player on the other, split exactly at the hinge. When the Duo is rotated, the player goes on top and the library on the bottom.
+**iPhone Duo / Surface Duo / foldables**
+* **iPhone Duo:** open it and the inner screen splits at the fold, with the library on the left and the player on the right. Rotated, the player is on top and the library below. Closed, the outer screen uses the normal phone layout.
+* **Surface Duo / Duo 2:** split exactly at the hinge, using each model's real dimensions.
+* Settings → Appearance has *Span over hinge*, *Nudge split* and *Hinge gap* if you want to adjust it.
 
 **Settings for everything:** transitions, tempo, controls, queue, leveling, EQ, engine, theme (Dark / Black / Light / Auto), accent color (or dynamic from the artwork), grid size, badges, haptics, preloading, storage, backup/restore and more.
 

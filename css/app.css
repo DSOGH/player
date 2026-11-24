@@ -625,3 +625,9 @@ body.dual-wide .grid.cols-3 { --cols: 4; }
 /* v1.3.1 dual-screen spacing */
 body.dual-h #main, body.dual-v #main { padding-bottom: calc(var(--tabs-h) + var(--sab) + 36px) !important; }
 body.dual-duo #np .np-inner { padding-left: 24px; padding-right: 24px; }
+
+/* v1.4: side safe areas so nothing sits under rounded corners / sensors in landscape */
+body.dual-h #main { padding-left: env(safe-area-inset-left, 0px); }
+body.dual-h #tabs { padding-left: env(safe-area-inset-left, 0px); }
+body.dual-h #np .np-inner { padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
+body.dual-h #np { right: 0; }

@@ -27,6 +27,8 @@ function segments() {
 }
 const mq = (q) => { try { return matchMedia(q).matches; } catch (e) { return false; } };
 const near = (v, target, tol) => Math.abs(v - target) <= tol;
+const IPHONE = /iPhone/.test(navigator.userAgent);
+const TOUCH = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 
 // Surface Duo models by spanned size. Returns { device, seg, hinge } for the long axis.
 function duoModel(long) {
@@ -58,9 +60,18 @@ export function detect() {
         // double-landscape: the status bar sits on the top screen, so the top segment is shorter by that much
         mode = 'v'; device = duoV.device; hinge = duoV.hinge;
         topH = duoV.seg - (Math.max(sh, H) - H >= 16 ? 24 : 0); // status bar (24dp) is on the top screen
+      } else if (IPHONE && W >= 600 && H >= 520 && W > H) {
+        // iPhone Duo inner display (passport-style, ~890×626 CSS px): one seamless screen, fold down the middle
+        mode = 'h'; device = 'iPhone Duo'; leftW = W / 2; hinge = 0;
+      } else if (IPHONE && H >= 760 && W >= 560 && H > W) {
+        // iPhone Duo inner display rotated: fold runs across the middle
+        mode = 'v'; device = 'iPhone Duo'; topH = H / 2; hinge = 0;
       } else if (mq('(horizontal-viewport-segments: 2)') || mq('(spanning: single-fold-vertical)')) { mode = 'h'; device = 'Dual screen'; }
       else if (mq('(vertical-viewport-segments: 2)') || mq('(spanning: single-fold-horizontal)')) { mode = 'v'; device = 'Dual screen'; }
-      else if (W >= 900 && W > H * 1.1) {
+      else if (TOUCH && W >= 740 && H >= 500 && W > H * 1.15) {
+        // other foldables / tablets in landscape: split down the middle (where a fold would be)
+        mode = 'h'; device = 'Foldable'; leftW = W / 2; hinge = 0;
+      } else if (W >= 900 && W > H * 1.1) {
         mode = 'wide'; device = 'Wide screen';
         leftW = Math.round(Math.min(W * 0.55, Math.max(420, W - 520)));
       }

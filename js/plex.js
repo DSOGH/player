@@ -66,7 +66,7 @@ class Plex extends Emitter {
     // covers load straight from the Plex server (no CORS needed for <img>)
     setArtResolver((id, size) => {
       const th = library.plexThumbs?.get(id);
-      return th && this.connected ? this.artSrc(th, size >= 400 ? 640 : size >= 250 ? 360 : 200) : null;
+      return th && this.connected ? this.artSrc(th, size >= 900 ? 1024 : size >= 500 ? 640 : size >= 250 ? 360 : 200) : null;
     });
     library.on('liked', (id, on) => this.rate(library.track(id), on));
     library.on('played', (id) => this.scrobble(library.track(id)));

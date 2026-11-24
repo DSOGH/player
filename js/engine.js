@@ -6,7 +6,7 @@ import { library } from './library.js';
 import { analyze, prefetchTrack, trackSrc } from './analysis.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
-import { artUrl } from './art.js';
+import { artUrl, lockScreenArtwork } from './art.js';
 import { findCue, titleEntry, keyCompat } from './dj.js';
 import { getLyrics } from './lyrics.js';
 
@@ -662,6 +662,7 @@ class Engine extends Emitter {
   // ---------- transitions ----------
   cancelNext() {
     clearTimeout(this.planTimer); this.planTimer = null;
+    if (!this.transition && this.cur.track && Math.abs(this.cur.el.playbackRate - 1) > 0.001) this.rampRate(this.cur, 1, 1.5);
     this.plan = null;
     if (this.upcoming && !this.transition) this.other.unload();
     this.upcoming = null;
@@ -737,7 +738,11 @@ class Engine extends Emitter {
       }
       return gapless();
     }
-    if (cont && s.gaplessAlbums) return gapless('Gapless · same album');
+    if (cont && s.gaplessAlbums) {
+      // only stay gapless when the songs really run into each other (live albums, DJ mixes, segues)
+      const runsIn = !aA || !aB || (dur - (aA.tailOut || dur) < 0.6 && (aB.leadIn || 0) < 0.6 && (aA.tailOut - aA.fadeOutStart) < 2);
+      if (runsIn || s.transition !== 'smart') return gapless('Gapless · same album');
+    }
     if (!this.canFade(A) || !this.canFade(B)) return gapless('Gapless (fades need Enhanced audio on iPhone)');
 
     let end = dur, bStart = 0;
@@ -779,22 +784,29 @@ class Engine extends Emitter {
     }
     // 1) beat-matched blend (harmonic-aware: long blends when keys agree, short when they clash)
     const kc = s.harmonicMix !== false ? keyCompat(aA?.camelot, aB?.camelot) : 0.8;
-    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= tol && end > 30) {
-      const beat = 60 / bpmA, bar = beat * 4;
-      let beats = clamp(Math.round(Math.max(D * 1.6, 8 * beat) / beat / 8) * 8, 8, kc >= 0.85 ? 32 : kc < 0.5 ? 8 : 16);
-      while (beats > 8 && beats * beat > Math.min(dur * 0.35, durB * 0.4, 24)) beats -= 8;
-      const overlap = beats * beat;
+    // tempo sync: the incoming song matches the outgoing one; for bigger gaps both meet in the middle
+    const maxEach = (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
+    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= maxEach * 2.02 + 0.005 && end > 20) {
+      let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
+      if (s.tempoMatch && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
+      const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
+      // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
+      let beats = clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
+      while (beats > 8 && beats * beat > Math.min(dur * 0.4, durB * 0.45, 28)) beats -= 8;
+      const overlapTrack = beats * beat;
+      const overlap = overlapTrack / aRate; // real seconds
       // finish the blend as the outgoing song's outro begins (or at its end)
       const mixEnd = outroLen > 4 ? Math.min(end, aA.fadeOutStart + outroLen * 0.5) : end;
       const off = aA.beatOffset || 0;
-      let ms = off + Math.floor((mixEnd - overlap - off) / bar) * bar;
+      let ms = off + Math.floor((mixEnd - overlapTrack - off) / bar) * bar;
       if (ms > 1) {
-        const rate = s.tempoMatch ? ratio : 1;
+        const T = bpmA * aRate;
+        const tempoTxt = Math.abs(aRate - 1) > 0.002 ? `${Math.round(bpmA)}→${Math.round(T)}←${Math.round(aB.bpm)} BPM` : `${Math.round(bpmA)} BPM`;
         return {
           ...base, type: 'beatmatch', style: 'blend', fx,
-          label: `Beat match · ${Math.round(bpmA)} BPM${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : kc < 0.5 ? ' · quick (key clash)' : ''}`,
+          label: `Beat match · ${tempoTxt}${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : ''} · ${beats} beats`,
           mixStart: ms, overlap, inDur: overlap * 0.5, outDur: overlap * 0.62, outDelay: overlap * 0.38,
-          bStart: aB.beatOffset || bStart, rate, beat,
+          bStart: aB.beatOffset || bStart, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate,
         };
       }
     }
@@ -904,6 +916,7 @@ class Engine extends Emitter {
         }
         break;
     }
+    if (p.style === 'blend') this.startBeatLock(A, B, p);
     this.notePlayed(A);
     const total = (p.style === 'echo' ? 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
     this.transition = { from: A, to: B, plan: p };
@@ -919,6 +932,26 @@ class Engine extends Emitter {
       setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, 10); }, D * 1000);
     }
     this.afterTrackChange(p);
+  }
+  // Keeps the incoming song's beats locked to the outgoing song during a blend by
+  // nudging its speed (±3%) — corrects start-up latency and any drift.
+  startBeatLock(A, B, p) {
+    clearInterval(this.lockTimer);
+    const rb = p.rate || 1;
+    const until = performance.now() + (p.overlap || 8) * 1000;
+    const tokA = A.token, tokB = B.token;
+    this.lockTimer = setInterval(() => {
+      if (performance.now() > until || A.token !== tokA || B.token !== tokB || A.el.paused || B.el.paused) {
+        clearInterval(this.lockTimer);
+        if (B.token === tokB) B.el.playbackRate = rb;
+        return;
+      }
+      const ra = A.el.playbackRate || 1;
+      const expB = p.bStart + (A.el.currentTime - p.mixStart) * (rb / ra);
+      const err = B.el.currentTime - expB; // seconds of B's track; + means B is ahead
+      if (Math.abs(err) > 0.35) { try { B.el.currentTime = expB + 0.05; } catch (e) { /* */ } return; }
+      B.el.playbackRate = rb * (1 + clamp(-err * 0.9, -0.03, 0.03));
+    }, 80);
   }
   finishTransition() {
     if (!this.transition) return;
@@ -953,6 +986,11 @@ class Engine extends Emitter {
     const t = d.el.currentTime;
     const remaining = dur - t;
     if (!this.upcoming && remaining < 90) this.prepareNext();
+    const pl = this.plan;
+    if (pl && pl.aRate && Math.abs(pl.aRate - 1) > 0.001 && !pl.aRamped && t >= pl.mixStart - (pl.preroll || 4)) {
+      pl.aRamped = true;
+      this.rampRate(d, pl.aRate, Math.max(0.5, (pl.mixStart - t) / (d.el.playbackRate || 1)));
+    }
     if (this.plan && !this.planTimer) {
       const dt = (this.plan.mixStart - t) / (d.el.playbackRate || 1);
       if (dt <= 1.2) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
@@ -990,12 +1028,19 @@ class Engine extends Emitter {
     const t = this.track;
     if (!t) return;
     const abs = (u) => new URL(u, location.href).href;
-    const artwork = t.artId
-      ? [256, 512, 640].map((sz) => ({ src: abs(artUrl(t.artId, sz)), sizes: `${sz}x${sz}`, type: 'image/jpeg' }))
+    const meta = (artwork) => new MediaMetadata({ title: t.title || 'Unknown song', artist: t.artist || '', album: t.album || '', artwork });
+    const cached = this._lockArt?.id === t.artId ? this._lockArt.art : null;
+    const direct = t.artId
+      ? [512, 1024].map((sz) => ({ src: abs(artUrl(t.artId, sz)), sizes: `${sz}x${sz}`, type: 'image/jpeg' }))
       : [{ src: abs('./icons/icon-512.png'), sizes: '512x512', type: 'image/png' }];
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: t.title || 'Unknown song', artist: t.artist || '', album: t.album || '', artwork,
-    });
+    navigator.mediaSession.metadata = meta(cached || direct);
+    if (t.artId && !cached) {
+      lockScreenArtwork(t.artId).then((art) => {
+        if (!art || this.track !== t) return;
+        this._lockArt = { id: t.artId, art };
+        navigator.mediaSession.metadata = meta(art);
+      });
+    }
     document.title = `${t.title} · ${t.artist}`;
     if (!this._msWired) {
       this._msWired = true;

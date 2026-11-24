@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.4.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -203,7 +203,7 @@ function playback() {
       ${seg('bpmDetect', 'BPM detection', [['auto', 'Automatic'], ['manual', 'On demand'], ['off', 'Off']], 'Automatic analyses each song as it comes up. On demand: use “Detect BPM” in the player menu.')}
       ${toggle('beatMatch', 'Beat-matched mixing', 'In Smart mode, line mixes up on the beat when two songs have similar tempos')}
       ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back (pitch preserved)')}
-      ${slider('tempoMatchMax', 'Max tempo change', 1, 12, 1, '%')}
+      ${slider('tempoMatchMax', 'Max tempo change per song', 1, 16, 1, '%', 'Both songs meet in the middle, so tempos up to twice this far apart still mix on the beat')}
       ${toggle('preferBpmTag', 'Prefer BPM tags', 'Use the BPM from your file tags when present')}
       ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
     `)}
@@ -318,10 +318,10 @@ function appearance() {
       ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
     `)}
     ${group('Device', html`
-      ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Split at hinge'], ['span', 'Span over hinge'], ['off', 'Off']], 'Surface Duo / Duo 2 / foldables: library on one screen, player on the other. “Span over hinge” lets the app run under the hinge with no gap.')}
+      ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Split at hinge'], ['span', 'Span over hinge'], ['off', 'Off']], 'iPhone Duo, Surface Duo and other foldables: library on one side of the fold, player on the other. “Span over hinge” ignores the fold.')}
       <div class="set-row col"><div class="set-text"><span>Detected</span><small data-dual-info>${dualInfo.mode === 'single' ? 'Single screen right now — span the app across both screens to adjust' : `${dualInfo.device || 'Dual screen'} · split at ${(+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1)}px · hinge ${(+dualInfo.hinge).toFixed(1)}px`}</small></div></div>
       ${slider('dualShift', 'Nudge split', -40, 40, 0.5, 'px', 'Move the split left/right (up/down when rotated) until it sits exactly on the hinge')}
-      ${slider('dualHinge', 'Hinge gap', -1, 60, 0.5, 'px', '−1 = automatic (Duo 34px, Duo 2 26.4px)')}
+      ${slider('dualHinge', 'Hinge gap', -1, 60, 0.5, 'px', '−1 = automatic (iPhone Duo has no gap; Surface Duo 34px, Duo 2 26.4px)')}
       ${toggle('haptics', 'Haptic feedback')}
     `)}
     <div class="bottom-pad"></div>`,
