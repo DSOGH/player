@@ -819,13 +819,6 @@ html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s eas
 /* lyrics */
 .car-lyrics { display: flex; flex-direction: column; justify-content: center; padding: 0 24px; overflow: hidden; position: relative; }
 #car.no-lyrics .car-lyrics { display: none; }
-.car-ly-stack { display: flex; flex-direction: column; gap: 10px; }
-.car-ly-stack p { margin: 0; font-family: var(--font-d, system-ui); letter-spacing: -.015em; line-height: 1.15; overflow-wrap: anywhere; }
-.car-ly-stack .prev { font-size: clamp(18px, 4vw, 24px); font-weight: 700; color: rgba(255,255,255,.3); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-.car-ly-stack .cur { font-size: clamp(30px, 8.6vw, 54px); font-weight: 850; color: #fff; }
-.car-ly-stack .next { font-size: clamp(20px, 5vw, 30px); font-weight: 750; color: rgba(255,255,255,.42); }
-.car-ly-stack .next2 { font-size: clamp(18px, 4.2vw, 26px); font-weight: 700; color: rgba(255,255,255,.22); }
-.car-ly-stack .gap { letter-spacing: .3em; }
 .car-ly-plain { overflow-y: auto; max-height: 100%; padding: 12px 0; scrollbar-width: none; }
 .car-ly-plain p { margin: 0 0 10px; font: 750 clamp(20px, 5.4vw, 30px)/1.25 var(--font-d, system-ui); color: rgba(255,255,255,.9); }
 .car-ly-none, .car-ly-wait { display: flex; flex-direction: column; align-items: center; gap: 8px; color: rgba(255,255,255,.4); font-weight: 600; }
@@ -850,18 +843,16 @@ html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s eas
   .car-art { width: clamp(64px, 18vh, 120px); }
   .car-ctl button { height: clamp(70px, 22vh, 120px); }
   .car-lyrics { padding: 0 max(24px, var(--sar, 0px)) 0 24px; }
-  .car-ly-stack .cur { font-size: clamp(28px, 6.4vh, 50px); }
-  .car-ly-stack .next { font-size: clamp(20px, 4.4vh, 30px); }
-}
+    }
 /* unfolded iPhone Duo / foldables: one screen each side of the fold, nothing on the crease */
 body.dual-h #car { grid-template-columns: var(--seg-w, 50%) var(--hinge, 0px) 1fr; grid-template-rows: 1fr; }
-body.dual-h #car .car-lyrics { position: static; padding: 0 28px; }
+body.dual-h #car .car-lyrics { padding: 0 28px; }
 body.dual-h #car .car-main { display: flex; justify-content: space-between; }
 body.dual-h #car .car-top { flex-direction: column; align-items: flex-start; }
 body.dual-h #car .car-art { width: min(70%, 34vh); }
 body.dual-h.dual-swap #car .car-main { order: 3; } body.dual-h.dual-swap #car .car-lyrics { order: 1; }
 body.dual-v #car { grid-template-rows: var(--seg-h, 50%) var(--hinge, 0px) 1fr; grid-template-columns: 1fr; }
-body.dual-v #car .car-lyrics { position: static; order: 1; padding: calc(var(--sat, 0px) + 12px) 24px 12px; }
+body.dual-v #car .car-lyrics { order: 1; padding: calc(var(--sat, 0px) + 12px) 24px 12px; }
 body.dual-v #car .car-hinge { order: 2; } body.dual-v #car .car-main { order: 3; padding-top: 14px; }
 body.dual-v.dual-swap #car .car-lyrics { order: 3; } body.dual-v.dual-swap #car .car-main { order: 1; }
 body.dual #car.no-lyrics { grid-template-columns: 1fr; grid-template-rows: 1fr; }
@@ -956,8 +947,40 @@ body, #app { overflow: clip; }
   #car .car-title { font-size: clamp(22px, 6.5vh, 32px); -webkit-line-clamp: 1; }
   #car .car-artist { font-size: clamp(15px, 4.4vh, 20px); }
   #car .car-ctl button { height: clamp(64px, 21vh, 100px); }
-  #car .car-ly-stack .cur { font-size: clamp(26px, 8.5vh, 44px); }
-  #car .car-ly-stack .prev { font-size: clamp(15px, 4.4vh, 20px); }
-  #car .car-ly-stack .next { font-size: clamp(18px, 5.4vh, 26px); }
-  #car .car-ly-stack .next2 { display: none; }
+  #car   #car   #car   #car }
+
+/* ---------- v1.12.1: Car Mode lyrics = same design as the player's lyrics, just bigger ---------- */
+.car-lyrics { justify-content: stretch; padding: 0 !important; }
+.car-ly-scroll { position: relative; height: 100%; overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  padding: 0 max(24px, calc(var(--sar, 0px) + 14px)) 0 24px; transform: translateZ(0); }
+.car-ly-scroll::-webkit-scrollbar { display: none; }
+.car-ly-scroll .ly-wrap { padding: 32vh 0 50vh; }
+#car .ly { font-size: clamp(28px, 7.2vw, 46px); line-height: 1.22; margin: 0 0 22px; letter-spacing: -.015em; }
+#car .ly-wrap.synced .ly { color: rgba(255,255,255,.28); transition: color .45s ease; }
+#car .ly-wrap.synced .ly.on { color: #fff; }
+#car .ly.space { height: 16px; }
+/* soft fade at the top and bottom edges (plain overlays — no filters, so no iPhone rendering glitches) */
+.car-lyrics { position: relative !important; }
+.car-lyrics::before, .car-lyrics::after { content: ""; position: absolute; left: 0; right: 0; height: 18%; z-index: 2; pointer-events: none; }
+.car-lyrics::before { top: 0; background: linear-gradient(#000 calc(var(--sat, 0px) * .6), rgba(0,0,0,0)); }
+.car-lyrics::after { bottom: 0; background: linear-gradient(rgba(0,0,0,0), #000); }
+@media (orientation: portrait) {
+  body:not(.dual) #car .car-lyrics { margin: 0 -20px; }
+  body:not(.dual) #car .car-ly-scroll .ly-wrap { padding: 18vh 0 34vh; }
 }
+@media (orientation: landscape) { .car-ly-scroll .ly-wrap { padding: 36vh 0 50vh; } #car .ly { font-size: clamp(26px, 8vh, 44px); } }
+
+/* Dynamic Island & screen edges: keep everything inside the safe area, whichever side it's on */
+#car .car-main { padding-left: max(20px, calc(var(--sal, 0px) + 12px)); }
+body.dual-h #car .car-main { padding-right: 20px; }
+body.dual #car .car-lyrics { padding-top: var(--sat, 0px) !important; }
+body.dual-h.dual-swap #car .car-ly-scroll { padding-left: max(24px, calc(var(--sal, 0px) + 14px)); padding-right: 24px; }
+body.dual-h.dual-swap #car .car-main { padding-left: 20px; padding-right: max(20px, calc(var(--sar, 0px) + 12px)); }
+@media (orientation: landscape) { body:not(.dual) #car .car-main, body.dual-h:not(.dual-swap) #car .car-main { padding-left: max(20px, calc(var(--sal, 0px) + 12px)); } }
+.set-alert { display: flex; align-items: center; gap: 12px; margin: 4px var(--pad) 14px; padding: 14px 16px; border-radius: 16px; color: inherit; text-decoration: none;
+  background: color-mix(in srgb, #ff9f0a 16%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, #ff9f0a 40%, transparent); animation: alert-in .35s var(--ease, ease) both; }
+.set-alert-ic { width: 34px; height: 34px; border-radius: 10px; background: #ff9f0a; color: #000; display: grid; place-items: center; flex: none; }
+.set-alert-ic .ic { width: 20px; height: 20px; }
+.set-alert div { flex: 1; } .set-alert b { display: block; } .set-alert small { color: var(--text2); line-height: 1.35; }
+.set-alert .chev { width: 18px; height: 18px; color: var(--text3); }
+@keyframes alert-in { from { opacity: 0; transform: translateY(-6px); } }

@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.12.0';
+export const APP_VERSION = '1.12.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -54,6 +54,8 @@ async function root() {
   return {
     title: 'Settings',
     html: html`${pageHeader('Settings')}
+    ${plex.connected && plex.cfg.connKind === 'relay' ? html`<a class="set-alert" href="#/settings/plex">
+      <span class="set-alert-ic">${icon('wifi')}</span><div><b>Plex is on a slow connection</b><small>It’s using Plex Relay, so songs can start slowly. Tap to see how to fix it.</small></div>${icon('right', 'chev')}</a>` : ''}
     ${group('', html`
       ${link('#/settings/sources', 'server', 'Music Sources', srcLabel)}
       ${link('#/settings/playback', 'mix', 'Playback & Transitions', modeLabel)}

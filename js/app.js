@@ -688,13 +688,7 @@ function wireEngineEvents() {
   });
   // network changed (Wi-Fi ↔ cellular) or app came back from the background: re-find the Plex server
   const recheck = () => { if (plex.connected) plex.reconnect(); };
-  let relayWarned = false;
-  plex.on('connection', () => {
-    if (plex.cfg?.connKind === 'relay' && !relayWarned) {
-      relayWarned = true;
-      toast('Plex is using its Relay (speed-limited) — songs will start slowly. Turn on Remote Access in Plex for fast playback.', { ms: 8000 });
-    }
-  });
+  plex.on('connection', () => { if (currentPath?.startsWith('settings')) render({ keepScroll: true }); });
   addEventListener('online', recheck);
   navigator.connection?.addEventListener?.('change', recheck);
   let hiddenAt = 0;

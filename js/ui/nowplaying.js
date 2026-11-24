@@ -951,10 +951,16 @@ async function renderCar() {
   const box = car.querySelector('.car-lyrics');
   car.classList.toggle('lyr-none', !l);
   if (!l) { box.innerHTML = html`<div class="car-ly-none">${icon('lyrics')}<span>No lyrics for this song</span></div>`; return; }
-  if (!l.synced) { box.innerHTML = html`<div class="car-ly-plain">${l.lines.map((x) => html`<p>${x.text || ' '}</p>`)}</div>`; return; }
-  box.innerHTML = html`<div class="car-ly-stack"></div>`;
-  carTime();
+  // same look as the player's lyrics: a scrolling sheet, sung line bright, the rest dimmed
+  box.innerHTML = html`<div class="car-ly-scroll"><div class="ly-wrap${l.synced ? ' synced' : ''}">${l.lines.map((x, i) => x.text
+    ? html`<p class="ly" data-i="${i}" ${l.synced ? raw(`data-car="seek:${x.t}"`) : ''}>${x.text}</p>`
+    : (i === 0 || !l.lines[i - 1].text || i === l.lines.length - 1) ? ''
+      : l.synced && l.lines[i + 1] && l.lines[i + 1].t - x.t > 6 ? html`<p class="ly gap" data-i="${i}">•••</p>` : html`<p class="ly space" data-i="${i}"></p>`)}</div></div>`;
+  const sc = box.querySelector('.car-ly-scroll');
+  for (const ev of ['touchstart', 'wheel']) sc.addEventListener(ev, () => { carTouch = Date.now(); }, { passive: true });
+  carTime(true);
 }
+let carTouch = 0;
 function renderCarState() {
   const car = $('#car');
   const t = engine.track;
@@ -964,8 +970,7 @@ function renderCarState() {
   const like = car.querySelector('.car-like');
   if (like) { const on = library.likes.has(t.id); like.classList.toggle('on', on); like.innerHTML = icon(on ? 'heart-fill' : 'heart'); }
 }
-// synced lyrics: previous line small, the sung line huge, the next two lines dim — readable at a glance
-function carTime() {
+function carTime(force = false) {
   if (!carOpen) return;
   const car = $('#car');
   const d = engine.duration || 0, t = engine.currentTime;
@@ -974,17 +979,17 @@ function carTime() {
   if (!carLyr?.synced) return;
   const L = carLyr.lines;
   let idx = -1;
-  for (let i = 0; i < L.length; i++) { if (L[i].t <= t + 0.3) idx = i; else break; }
-  if (idx === carLyrIdx) return;
-  const fwd = idx > carLyrIdx;
+  for (let i = 0; i < L.length; i++) { if (L[i].t <= t + 0.25) idx = i; else break; }
+  if (idx === carLyrIdx && force !== true) return;
   carLyrIdx = idx;
-  const stack = car.querySelector('.car-ly-stack');
-  if (!stack) return;
-  const line = (i, cls) => {
-    const x = L[i];
-    if (!x) return html`<p class="${cls} blank"> </p>`;
-    return html`<p class="${cls}${x.text ? '' : ' gap'}" data-car="seek:${x.t}">${x.text || '♪'}</p>`;
-  };
-  stack.innerHTML = html`${line(idx - 1, 'prev')}${idx < 0 ? html`<p class="cur gap">♪</p>` : line(idx, 'cur')}${line(idx + 1, 'next')}${line(idx + 2, 'next2')}`;
-  if (fwd) stack.animate?.([{ transform: 'translateY(14%)', opacity: 0.4 }, { transform: 'none', opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  const sc = car.querySelector('.car-ly-scroll');
+  if (!sc) return;
+  sc.querySelectorAll('.ly.on').forEach((x) => x.classList.remove('on'));
+  const line = sc.querySelector(`.ly[data-i="${idx}"]`) || sc.querySelector('.ly');
+  if (!line) return;
+  if (idx >= 0) line.classList.add('on');
+  if (Date.now() - carTouch > 3500) {
+    const top = sc.scrollTop + line.getBoundingClientRect().top - sc.getBoundingClientRect().top - sc.clientHeight * 0.32;
+    sc.scrollTo({ top, behavior: force === true || Math.abs(top - sc.scrollTop) > sc.clientHeight * 1.5 ? 'auto' : 'smooth' });
+  }
 }
