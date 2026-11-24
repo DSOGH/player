@@ -622,3 +622,6 @@ body.dual-wide .grid.cols-3 { --cols: 4; }
 .ly-src { font-size: 12px !important; font-weight: 600 !important; color: rgba(255,255,255,.4) !important; margin-top: 30px !important; filter: none !important; transform: none !important; letter-spacing: .02em; }
 .pill-sm.dj { background: rgba(255,255,255,.9); color: #111; }
 .play-btns .round-btn { flex: none; }
+/* v1.3.1 dual-screen spacing */
+body.dual-h #main, body.dual-v #main { padding-bottom: calc(var(--tabs-h) + var(--sab) + 36px) !important; }
+body.dual-duo #np .np-inner { padding-left: 24px; padding-right: 24px; }

@@ -10,8 +10,9 @@ import * as db from '../db.js';
 import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
 import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
+import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.3.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -317,7 +318,10 @@ function appearance() {
       ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
     `)}
     ${group('Device', html`
-      ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Auto'], ['off', 'Off']], 'On Surface Duo and foldables, span the app across both screens: library on one side, player on the other.')}
+      ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Split at hinge'], ['span', 'Span over hinge'], ['off', 'Off']], 'Surface Duo / Duo 2 / foldables: library on one screen, player on the other. “Span over hinge” lets the app run under the hinge with no gap.')}
+      <div class="set-row col"><div class="set-text"><span>Detected</span><small data-dual-info>${dualInfo.mode === 'single' ? 'Single screen right now — span the app across both screens to adjust' : `${dualInfo.device || 'Dual screen'} · split at ${(+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1)}px · hinge ${(+dualInfo.hinge).toFixed(1)}px`}</small></div></div>
+      ${slider('dualShift', 'Nudge split', -40, 40, 0.5, 'px', 'Move the split left/right (up/down when rotated) until it sits exactly on the hinge')}
+      ${slider('dualHinge', 'Hinge gap', -1, 60, 0.5, 'px', '−1 = automatic (Duo 34px, Duo 2 26.4px)')}
       ${toggle('haptics', 'Haptic feedback')}
     `)}
     <div class="bottom-pad"></div>`,
@@ -412,7 +416,11 @@ export function bindSettings(root, rerender) {
     const v = +r.value;
     settings.set(k, v);
     const lab = root.querySelector(`[data-val="${k}"]`);
-    if (lab) lab.textContent = fmtNum(v) + (r.dataset.unit || '');
+    if (lab) lab.textContent = k === 'dualHinge' && v < 0 ? 'Auto' : fmtNum(v) + (r.dataset.unit || '');
+    if (k === 'dualShift' || k === 'dualHinge') setTimeout(() => {
+      const el = root.querySelector('[data-dual-info]');
+      if (el && dualInfo.mode !== 'single') el.textContent = `${dualInfo.device || 'Dual screen'} · split at ${(+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1)}px · hinge ${(+dualInfo.hinge).toFixed(1)}px`;
+    }, 50);
   });
   root.addEventListener('click', (e) => {
     const b = e.target.closest('[data-seg] button');

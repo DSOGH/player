@@ -51,7 +51,9 @@ export const DEFAULTS = {
   showBpm: true,
   showNextTransition: true,
   haptics: true,
-  dualScreen: 'auto',         // 'auto' | 'off'
+  dualScreen: 'auto',         // 'auto' (split at hinge) | 'span' (across hinge) | 'off'
+  dualShift: 0,               // px nudge of the split
+  dualHinge: -1,              // px hinge width override (-1 = automatic)
   artShrinkOnPause: true,
   // Data
   prefetch: 'any',            // 'any' | 'wifi' | 'off'
