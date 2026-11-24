@@ -32,14 +32,14 @@ function networkOk() {
 }
 
 // Download a track fully and keep it in the "prefetch" cache so playback starts instantly.
-export async function fetchTrackBuffer(t) {
+export async function fetchTrackBuffer(t, signal) {
   const key = library.cacheKey(t);
   for (const name of ['offline-tracks', 'prefetch']) {
     const c = await caches.open(name);
     const hit = await c.match(key);
     if (hit) return hit.arrayBuffer();
   }
-  const r = await fetch(trackSrc(t));
+  const r = await fetch(trackSrc(t), signal ? { signal } : undefined);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const blob = await r.blob();
   if (!t.demo) {
@@ -63,7 +63,7 @@ export async function prefetchTrack(t) {
   try { await fetchTrackBuffer(t); } catch (e) { /* ignore */ }
 }
 
-export function analyze(t, { force = false } = {}) {
+export function analyze(t, { force = false, signal = null } = {}) {
   if (!t) return Promise.resolve(null);
   if (!force && isAnalyzed(t)) return Promise.resolve(library.analysis.get(t.id));
   if (inflight.has(t.id)) return inflight.get(t.id);
@@ -71,7 +71,7 @@ export function analyze(t, { force = false } = {}) {
   if ((t.duration || 0) > MAX_SECONDS || t.size > 400e6) return Promise.resolve(null);
   const p = (async () => {
     try {
-      const ab = await fetchTrackBuffer(t);
+      const ab = await fetchTrackBuffer(t, signal);
       const res = await analyzeBuffer(ab);
       if (!res) return null;
       const rec = { id: t.id, v: ANALYSIS_VERSION, ...res, at: Date.now() };
@@ -85,7 +85,7 @@ export function analyze(t, { force = false } = {}) {
       library.setAnalysis(rec);
       return rec;
     } catch (e) {
-      console.warn('analysis failed', t.title, e);
+      if (e?.name !== 'AbortError') console.warn('analysis failed', t.title, e);
       return null;
     } finally {
       inflight.delete(t.id);

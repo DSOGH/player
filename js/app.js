@@ -665,6 +665,13 @@ function wireEngineEvents() {
   });
   // network changed (Wi-Fi ↔ cellular) or app came back from the background: re-find the Plex server
   const recheck = () => { if (plex.connected) plex.reconnect(); };
+  let relayWarned = false;
+  plex.on('connection', () => {
+    if (plex.cfg?.connKind === 'relay' && !relayWarned) {
+      relayWarned = true;
+      toast('Plex is using its Relay (speed-limited) — songs will start slowly. Turn on Remote Access in Plex for fast playback.', { ms: 8000 });
+    }
+  });
   addEventListener('online', recheck);
   navigator.connection?.addEventListener?.('change', recheck);
   let hiddenAt = 0;
@@ -730,7 +737,8 @@ function wireScanner() {
 
 function warmAllCovers() {
   const ids = [...new Set([...library.albums.values()].map((a) => a.artId).filter(Boolean))];
-  warmCovers(ids);
+  // never compete with the music: wait while a song is loading or buffering
+  warmCovers(ids, [200], { busy: () => engine.buffering || (engine.playing && engine.cur.el.readyState < 3) });
 }
 
 // ---------- boot ----------
@@ -774,7 +782,7 @@ async function boot() {
   document.body.classList.add('ready');
   const src = await db.kv.get('source');
   if (src?.url && settings.get('scanOnLaunch')) setTimeout(() => scanner.run(), 1500);
-  setTimeout(warmAllCovers, 3000);
+  setTimeout(warmAllCovers, 8000);
   if (plex.connected) {
     const pt = [...library.tracks.values()].filter((t) => t.plex);
     const stale = !pt.length || pt.some((t) => !t.plexThumb && t.artId);

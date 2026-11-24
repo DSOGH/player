@@ -159,22 +159,23 @@ export async function artColors(id) {
   return c;
 }
 
-// Download every cover in the background (small + large) so lists and Now Playing never wait for art.
+// Download every cover in the background so lists never wait for art. Gentle on the Plex server: one at a
+// time, small size only, paused while a song is starting/buffering, and covers already on the phone cost nothing.
 let warming = null;
-export function warmCovers(ids, sizes = [200, 640]) {
+export function warmCovers(ids, sizes = [200], { busy = () => false } = {}) {
   if (warming || !navigator.serviceWorker?.controller) return warming;
   const urls = [];
   for (const id of ids) for (const sz of sizes) { const u = artUrl(id, sz); if (u.startsWith('./__pa/')) urls.push(u); }
   if (!urls.length) return null;
-  let i = 0;
-  const worker = async () => {
-    while (i < urls.length) {
-      const u = urls[i++];
+  const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+  warming = (async () => {
+    const cache = await caches.open('plexart-v1');
+    for (const u of urls) {
+      if (await cache.match(new URL(u, location.href).href)) continue;
+      while (busy() || document.hidden) await nap(1500);
       try { const r = await fetch(u); await r.blob(); } catch (e) { /* */ }
-      // stay out of the way of scrolling / playback
-      if (i % 24 === 0) await new Promise((r) => (window.requestIdleCallback || setTimeout)(r, { timeout: 400 }));
+      await nap(120);
     }
-  };
-  warming = Promise.all([worker(), worker(), worker()]).finally(() => { warming = null; });
+  })().finally(() => { warming = null; });
   return warming;
 }

@@ -3,7 +3,7 @@
 // (silence trimming, fade-aware overlaps, album awareness, beat-matched + tempo-matched mixing).
 import { settings, EQ_FREQS, EQ_PRESETS } from './settings.js';
 import { library } from './library.js';
-import { analyze, prefetchTrack, trackSrc } from './analysis.js';
+import { analyze, prefetchTrack, trackSrc, isAnalyzed } from './analysis.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
 import { artUrl, lockScreenArtwork } from './art.js';
@@ -623,6 +623,7 @@ class Engine extends Emitter {
   // iOS: an <audio> element can only start by itself later if it was started inside a tap once
   unlockDecks() {
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* */ }
+    const waits = [];
     for (const d of this.decks) {
       for (const el of Object.values(d.els)) {
         if (el._unlocked) continue;
@@ -632,10 +633,22 @@ class Engine extends Emitter {
         try {
           el.src = SILENT;
           const p = el.play();
-          p?.then(() => { if (el.getAttribute('src') === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } })
-            .catch((e) => { if (e.name === 'NotAllowedError') el._unlocked = false; });
+          if (p) waits.push(p.then(() => { if (el.getAttribute('src') === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } })
+            .catch((e) => { if (e.name === 'NotAllowedError') el._unlocked = false; }));
         } catch (e) { el._unlocked = false; }
       }
+    }
+    // iOS hands "Now Playing" (lock screen / Dynamic Island) to whichever element started last — if a
+    // silent unlock finished after the song started, take it back so it doesn't show a frozen "paused" song
+    if (waits.length) Promise.allSettled(waits).then(() => this.reclaimNowPlaying());
+  }
+  reclaimNowPlaying() {
+    if (!this.track) return;
+    const d = this.cur;
+    if (this.playing && !d.el.paused) {
+      this.updateMediaSession();
+      this.updatePosition();
+      setTimeout(() => { if (this.playing) { this.updateMediaSession(); this.updatePosition(); } }, 500);
     }
   }
   async play() {
@@ -763,8 +776,22 @@ class Engine extends Emitter {
     this.updateMediaSession();
     this.saveState();
     if (this.sleepEndOfTrack && transitionPlan) { /* handled in prepare */ }
-    // analyse the current track (for its outro + loudness) and warm up the next one
-    if (t && this.wantsAnalysis()) analyze(t);
+    // analyse the current track (for its outro + loudness) — but only once it's playing smoothly, so the
+    // download never competes with the song you just picked; a skipped song's download is cancelled
+    this.scheduleAnalysis(t);
+  }
+  scheduleAnalysis(t) {
+    clearTimeout(this._anTimer);
+    if (this._anCtl && this._anFor !== t?.id && this._anFor !== this.upcoming?.track?.id) { this._anCtl.abort(); this._anCtl = null; }
+    if (!t || !this.wantsAnalysis() || isAnalyzed(t)) return;
+    const go = () => {
+      if (this.track !== t) return;
+      const el = this.cur.el;
+      if (this.playing && (el.paused || el.readyState < 3)) { this._anTimer = setTimeout(go, 1500); return; }
+      this._anCtl = new AbortController(); this._anFor = t.id;
+      analyze(t, { signal: this._anCtl.signal });
+    };
+    this._anTimer = setTimeout(go, 2500);
   }
   wantsAnalysis() {
     const s = settings.v;
@@ -1246,6 +1273,7 @@ class Engine extends Emitter {
   tick() {
     const d = this.cur;
     if (!d.track) return;
+    this.syncPlayState(d);
     this.emit('time');
     if (this.playing && !d.el.paused) {
       // keep the lock screen / CarPlay clock in step (tempo-synced mixes change the playback speed)
@@ -1281,6 +1309,29 @@ class Engine extends Emitter {
       if (dt <= 1.2) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
     }
     if (Math.floor(t) % 5 === 0) this.saveState();
+  }
+
+  // Self-healing: the screen must always match what you hear. If the audio is clearly running but we think
+  // it's paused (or the other way round for 2s), fix the state, the controls and the lock screen.
+  syncPlayState(d) {
+    const ct = d.el.currentTime;
+    const moving = !d.el.paused && ct > (this._lastCt ?? -1) + 0.05;
+    this._lastCt = ct;
+    if (this._pausing || d.switching || this.transition) { this._stuck = 0; return; }
+    if (!this.playing && moving) {
+      this.playing = true;
+      this.emit('state');
+      this.updateMediaSession();
+      this.updatePosition();
+      this._stuck = 0;
+    } else if (this.playing && d.el.paused && !d.el.ended && !d.recovering) {
+      if ((this._stuck = (this._stuck || 0) + 1) >= 10) { // 10 ticks × 200 ms
+        this._stuck = 0;
+        this.playing = false;
+        this.emit('state');
+        this.updatePosition();
+      }
+    } else this._stuck = 0;
   }
 
   onAnalysis(id) {
