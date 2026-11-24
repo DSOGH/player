@@ -1,12 +1,18 @@
 // Stats page: your listening, broken down like stats.fm / Spotify Wrapped — live, any time.
 import { html, icon, esc } from '../util.js';
 import { library } from '../library.js';
-import { plex } from '../plex.js';
-import { computeStats, RANGES } from '../stats.js';
+import { plex, deviceName as dn } from '../plex.js';
+const deviceName = () => (dn() === 'Web' ? 'device' : dn());
+import { computeStats, allListens, RANGES } from '../stats.js';
 import { art, regList, trackRow, pageHeader } from './components.js';
 
 let range = localStorage.getItem('statsRange') || '4w';
+let source = localStorage.getItem('statsSource') || 'device';
 export function setStatsRange(r) { range = r; try { localStorage.setItem('statsRange', r); } catch (e) { /* */ } }
+export function setStatsSource(v) { source = v; try { localStorage.setItem('statsSource', v); } catch (e) { /* */ } }
+const sourceChips = (has) => (has ? html`<div class="seg stats-src">
+  <button class="${source === 'device' ? 'on' : ''}" data-a="stats-source" data-v="device">This ${deviceName()}</button>
+  <button class="${source === 'all' ? 'on' : ''}" data-a="stats-source" data-v="all">All devices (Plex)</button></div>` : '');
 
 const hm = (min) => (min >= 60 ? `${Math.floor(min / 60).toLocaleString()}h ${min % 60}m` : `${min}m`);
 const delta = (a, b) => {
@@ -18,8 +24,11 @@ const pct = (x) => `${Math.round(x * 100)}%`;
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export async function statsView() {
-  const s = await computeStats(range);
-  const chips = html`<div class="chips stats-range">${RANGES.map(([k, l]) => html`<button class="chip${k === range ? ' on' : ''}" data-a="stats-range" data-v="${k}">${l}</button>`)}</div>`;
+  if (!library.plexHistory) await allListens('all');
+  const has = !!library.plexHistory?.length;
+  const src = has ? source : 'device';
+  const s = await computeStats(range, src);
+  const chips = html`${sourceChips(has)}<div class="chips stats-range">${RANGES.map(([k, l]) => html`<button class="chip${k === range ? ' on' : ''}" data-a="stats-range" data-v="${k}">${l}</button>`)}</div>`;
   const plexRow = plex.connected ? html`<button class="stats-plex" data-a="stats-import">${icon('refresh')}<span>${s.hasPlexHistory ? 'Refresh history from Plex' : 'Import your listening history from Plex'}</span></button>` : '';
   if (s.empty) {
     return {
@@ -51,6 +60,8 @@ export async function statsView() {
         <div><b>${hm(s.perDayAvg)}</b><span>per day</span></div>
       </div>
     </section>
+
+    <a class="stats-history-link" href="#/history">${icon('timer')}<span><b>Listening history</b><small>Every song you played${src === 'device' ? ` on this ${deviceName()}` : ''}, by day</small></span>${icon('right', 'chev')}</a>
 
     <section class="stats-card"><h2>Listening over time</h2>
       <div class="st-chart ${s.bucket}">${s.timeline.map((b, i) => html`<div class="st-col" title="${hm(Math.round(b.sec / 60))}"><i style="height:${Math.max(2, (b.sec / maxT) * 100)}%"></i>${(s.bucket === 'day' ? i % 7 === 6 : s.bucket === 'week' ? i % 4 === 0 : i % Math.max(1, Math.ceil(s.timeline.length / 8)) === 0) ? html`<span>${b.label}</span>` : ''}</div>`)}</div>
@@ -101,7 +112,51 @@ export async function statsView() {
       </div>
     </section>
     ${plexRow}
-    <p class="set-foot">Counted on this phone${s.hasPlexHistory ? ' plus your Plex history' : ''}. A listen counts after 20 seconds.</p>
+    <p class="set-foot">${src === 'device' ? `Only music played on this ${deviceName()}.` : 'This phone plus your Plex history from other apps and devices.'} A listen counts after 20 seconds.</p>
+    <div class="bottom-pad"></div>`,
+  };
+}
+
+// ---------- Listening history: every listen, newest first, grouped by day ----------
+let histLimit = 150;
+export function moreHistory() { histLimit += 300; }
+export async function historyView() {
+  if (!library.plexHistory) await allListens('all');
+  const has = !!library.plexHistory?.length;
+  const src = has ? source : 'device';
+  const list = (await allListens(src)).reverse();
+  const shown = list.slice(0, histLimit);
+  const key = regList(shown.map((e) => library.track(e[0])), { type: 'history', name: 'Listening History' });
+  const dayLabel = (ts) => {
+    const d = new Date(ts * 1000), today = new Date();
+    const y = new Date(); y.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return 'Today';
+    if (d.toDateString() === y.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
+  };
+  const dayTotals = new Map();
+  for (const e of list) { const k = new Date(e[1] * 1000).toDateString(); dayTotals.set(k, (dayTotals.get(k) || 0) + e[2]); }
+  const out = [];
+  let lastDay = null;
+  shown.forEach((e, i) => {
+    const t = library.track(e[0]);
+    const dk = new Date(e[1] * 1000).toDateString();
+    if (dk !== lastDay) {
+      lastDay = dk;
+      const mins = Math.round((dayTotals.get(dk) || 0) / 60);
+      out.push(html`<div class="hist-day"><b>${dayLabel(e[1])}</b><span>${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`}</span></div>`);
+    }
+    const when = new Date(e[1] * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const meta = html`<span class="hist-when">${e[4] === 'now' ? html`<i class="live"></i>Now` : when}${e[3] === 'p' ? html`<em>Plex</em>` : ''}</span>`;
+    out.push(trackRow(t, i, key, { showAlbum: true, extra: meta }));
+  });
+  const minutes = Math.round(list.reduce((s2, e) => s2 + e[2], 0) / 60);
+  return {
+    title: 'Listening History',
+    html: html`${pageHeader('Listening History', { back: true })}${sourceChips(has)}
+    <div class="lib-count">${list.length.toLocaleString()} listens · ${minutes >= 60 ? `${Math.floor(minutes / 60).toLocaleString()} hours` : `${minutes} min`}${src === 'device' ? ` on this ${deviceName()}` : ''}</div>
+    ${list.length ? html`<div class="rows hist-rows">${out}</div>` : html`<div class="empty"><div class="empty-ic">${icon('timer')}</div><h3>Nothing yet</h3><p>Every song you listen to for 20 seconds or more shows up here, with the time you played it.</p></div>`}
+    ${list.length > shown.length ? html`<button class="btn pill ghost hist-more" data-a="history-more">Show more</button>` : ''}
     <div class="bottom-pad"></div>`,
   };
 }

@@ -176,7 +176,8 @@ export function libraryView(tab = 'albums') {
   } else if (tab === 'history') {
     const list = library.recentlyPlayed(200);
     const key = regList(list, { type: 'history', name: 'Recently Played' });
-    body = list.length ? html`<div class="lib-count">Recently played</div>${lazyRows(list, key, { showAlbum: true })}`
+    body = list.length ? html`<a class="stats-history-link" href="#/history">${icon('timer')}<span><b>Full listening history</b><small>Every play with the time, by day</small></span>${icon('right', 'chev')}</a>
+      <div class="lib-count">Recently played</div>${lazyRows(list, key, { showAlbum: true })}`
       : empty('timer', 'Nothing played yet', 'Songs you listen to show up here.');
   } else if (tab === 'downloaded') {
     const list = [...library.tracks.values()].filter((t) => library.isOffline(t));

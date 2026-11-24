@@ -885,3 +885,15 @@ em.up { color: #30d158; } em.down { color: #ff6961; }
 #mini .mini-prev { margin-right: -6px; }
 /* the app frame must never scroll as a whole (that slid the hidden player up into view) */
 body, #app { overflow: clip; }
+.stats-src { margin: 4px 16px 6px; }
+.stats-history-link { display: flex; align-items: center; gap: 12px; margin: 0 16px 14px; padding: 14px 16px; border-radius: 16px; background: var(--card); color: inherit; text-decoration: none; }
+.stats-history-link > .ic:first-child { width: 22px; height: 22px; color: var(--accent); }
+.stats-history-link span { flex: 1; } .stats-history-link b { display: block; } .stats-history-link small { color: var(--text2); }
+.stats-history-link .chev { width: 18px; height: 18px; color: var(--text3); }
+.hist-day { display: flex; justify-content: space-between; align-items: baseline; padding: 18px 16px 6px; position: sticky; top: calc(var(--sat, 0px) + 52px); z-index: 2; background: var(--bg); }
+.hist-day b { font-size: 17px; } .hist-day span { color: var(--text3); font-size: 13px; font-weight: 600; }
+.hist-when { flex: none; color: var(--text3); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; margin-left: 6px; display: inline-flex; gap: 5px; align-items: center; }
+.hist-when em { font-style: normal; font-size: 10px; font-weight: 800; color: #e5a00d; border: 1px solid currentColor; border-radius: 4px; padding: 0 3px; }
+.hist-when .live { width: 7px; height: 7px; border-radius: 4px; background: var(--accent); animation: live 1.2s ease-in-out infinite; }
+@keyframes live { 50% { opacity: .3; } }
+.hist-more { display: block; margin: 16px auto; }

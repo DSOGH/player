@@ -10,20 +10,22 @@ function rangeStart(r, now) {
 }
 const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
-export async function allListens() {
+// source: 'device' = only what was played on this phone; 'all' = plus your Plex history (other apps/devices)
+export async function allListens(source = 'all') {
   const log = await library.loadPlayLog();
   if (!library.plexHistory) library.plexHistory = (await db.kv.get('plexHistory'))?.list || [];
-  const local = Object.values(log).flat();
-  if (library._curListen && library._curListen[2] >= 20) local.push([...library._curListen]);
+  const local = Object.values(log).flat().map((e) => [e[0], e[1], e[2], 'd']);
+  if (library._curListen && library._curListen[2] >= 20) local.push([...library._curListen, 'd', 'now']);
+  if (source === 'device') return local.filter((e) => library.track(e[0])).sort((a, b) => a[1] - b[1]);
   // Plex history overlaps with plays this app reported to Plex: drop duplicates (same song within 15 min)
   const seen = new Map();
   for (const e of local) { const a = seen.get(e[0]) || []; a.push(e[1]); seen.set(e[0], a); }
-  const plex = library.plexHistory.filter((e) => !(seen.get(e[0]) || []).some((t) => Math.abs(t - e[1]) < 900));
+  const plex = library.plexHistory.filter((e) => !(seen.get(e[0]) || []).some((t) => Math.abs(t - e[1]) < 900)).map((e) => [e[0], e[1], e[2], 'p']);
   return [...local, ...plex].filter((e) => library.track(e[0])).sort((a, b) => a[1] - b[1]);
 }
 
-export async function computeStats(range = '4w') {
-  const all = await allListens();
+export async function computeStats(range = '4w', source = 'all') {
+  const all = await allListens(source);
   const now = Date.now() / 1000;
   const from = rangeStart(range, now);
   const span = now - (from || (all[0]?.[1] ?? now));
@@ -127,5 +129,6 @@ export async function computeStats(range = '4w') {
     obsession: obsession && obsession[1] >= 3 ? { track: library.track(obsession[0].split('|')[1]), day: obsession[0].split('|')[0], plays: obsession[1] } : null,
     mixes,
     hasPlexHistory: !!library.plexHistory?.length,
+    source,
   };
 }

@@ -17,7 +17,7 @@ import { plex } from './plex.js';
 import { plexSignIn, plexSignOut, loadServers } from './ui/plex-view.js';
 import { trackSrc } from './analysis.js';
 import { optimizeOrder } from './dj.js';
-import { statsView, setStatsRange } from './ui/stats-view.js';
+import { statsView, setStatsRange, setStatsSource, historyView, moreHistory } from './ui/stats-view.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -131,10 +131,11 @@ async function route(path) {
     case 'search': return V.searchView(searchQ);
     case 'settings': return settingsView(a || '');
     case 'stats': return statsView();
+    case 'history': return historyView();
     default: return V.home();
   }
 }
-const TAB_OF = { stats: 'home', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
+const TAB_OF = { history: 'home', stats: 'home', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
 
 async function render({ keepScroll = false } = {}) {
   const path = parseHash();
@@ -603,6 +604,8 @@ async function doAction(a, el, e) {
     }
     case 'force-refresh': await forceRefresh(); break;
     case 'open-stats': if (!e?.target?.closest('a')) location.hash = '#/stats'; break;
+    case 'stats-source': setStatsSource(el.dataset.v); render({ keepScroll: true }); break;
+    case 'history-more': moreHistory(); render({ keepScroll: true }); break;
     case 'stats-range': setStatsRange(el.dataset.v); render({ keepScroll: true }); break;
     case 'stats-import': {
       toast('Reading your Plex history…', { ms: 4000 });

@@ -21,7 +21,7 @@ export function clientId() {
   }
   return id;
 }
-function deviceName() {
+export function deviceName() {
   const ua = navigator.userAgent;
   if (/Surface Duo/i.test(ua)) return 'Surface Duo';
   if (/iPhone/i.test(ua)) return 'iPhone';
