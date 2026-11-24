@@ -375,8 +375,8 @@ body:not(.is-playing) #np .np-bg-img { animation-play-state: paused; }
 /* lyrics */
 .ly-wrap { padding: 30% 0 60%; }
 .ly { font-family: var(--font-d); font-size: 27px; font-weight: 750; line-height: 1.3; letter-spacing: -0.01em; margin: 0 0 18px; color: rgba(255,255,255,.95); }
-.ly-wrap.synced .ly { color: rgba(255,255,255,.32); transition: color .35s, transform .35s var(--ease), filter .35s; transform-origin: left; cursor: pointer; filter: blur(.6px); }
-.ly-wrap.synced .ly.on { color: #fff; transform: scale(1.03); filter: none; }
+.ly-wrap.synced .ly { color: rgba(255,255,255,.32); transition: color .35s, opacity .35s; cursor: pointer; }
+.ly-wrap.synced .ly.on { color: #fff; }
 .ly.gap { letter-spacing: .2em; }
 .ly-none, .ly-loading { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; color: rgba(255,255,255,.6); padding: 0 20px; }
 .ly-none .ic { width: 44px; height: 44px; opacity: .6; }
@@ -769,3 +769,9 @@ html[data-nav="tab"]::view-transition-new(page) { animation: vt-fade-in .22s eas
 /* smoother everyday motion */
 .row, .card, .quick, .set-row { transition: transform .16s var(--ease, ease), background-color .16s; }
 .row:active { transform: scale(.985); }
+
+/* v1.9.1: no blur filters on lyrics — iPhone draws black seams/lines across blurred text while scrolling */
+.np-lyrics, .np-lyrics * { filter: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+.ly.space { height: 14px; margin: 0; }
+.np-lyrics { -webkit-transform: translateZ(0); transform: translateZ(0); }
+.np-lyrics .ly { transform: none !important; }

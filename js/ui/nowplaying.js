@@ -506,9 +506,12 @@ async function renderLyrics(fresh = false) {
     return;
   }
   setTimeout(markCue, 0);
+  // blank lines: a short "•••" for instrumental breaks in synced lyrics, plain spacing otherwise; never doubled up
   box.innerHTML = html`<div class="ly-wrap${lyrics.synced ? ' synced' : ''}">${lyrics.lines.map((l, i) => l.text
     ? html`<p class="ly" data-i="${i}" ${lyrics.synced ? raw(`data-np="seek:${l.t}"`) : ''}>${l.text}</p>`
-    : html`<p class="ly gap" data-i="${i}">•••</p>`)}<p class="ly-src">Lyrics · ${lyrics.source}</p></div>`;
+    : (i === 0 || !lyrics.lines[i - 1].text || i === lyrics.lines.length - 1) ? ''
+      : lyrics.synced && lyrics.lines[i + 1] && lyrics.lines[i + 1].t - l.t > 6 ? html`<p class="ly gap" data-i="${i}">•••</p>`
+        : html`<p class="ly space" data-i="${i}"></p>`)}<p class="ly-src">Lyrics · ${lyrics.source}</p></div>`;
   renderTime();
 }
 
