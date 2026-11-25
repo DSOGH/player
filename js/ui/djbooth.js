@@ -137,12 +137,12 @@ export function renderBooth(box) {
   } else if (p && nx) {
     const steps = explain(p, t, nx);
     trans = html`<div class="dj-trans">
-      <div class="dj-trans-head">${icon(STYLE_ICON[p.style] || 'smart')}<div><b>${p.label}</b><span data-dj-when></span></div></div>
+      <div class="dj-trans-head">${icon(STYLE_ICON[p.style] || 'smart')}<div><b>${p.label}</b><span data-dj-when></span></div>${p.style !== 'gapless' ? html`<button class="hear-mix" data-np="hear-mix">Hear it</button>` : ''}</div>
       <div class="dj-timeline" data-dj-tl><i class="dj-tl-now"></i><i class="dj-tl-mix"></i>${p.cue ? html`<i class="dj-tl-cue"></i>` : ''}</div>
       <ol class="dj-steps">${steps.map((s) => html`<li>${s}</li>`)}</ol>
     </div>`;
   } else if (engine.queue.length > engine.index + 1 || settings.get('autoplay')) {
-    trans = html`<div class="dj-trans dim"><div class="spinner"></div><div><b>Planning the next mix…</b><span>It’s worked out ~90s before the song ends (tempo, key, lyrics).</span></div></div>`;
+    trans = html`<div class="dj-trans dim"><div class="spinner"></div><div><b>Planning the next mix…</b><span>It’s worked out a few seconds into each song (tempo, key, lyrics) and marked on the scrubber.</span></div></div>`;
   } else trans = html`<div class="dj-trans dim">${icon('info')}<div><b>Nothing up next</b><span>Add songs or turn on Autoplay.</span></div></div>`;
 
   // preview the following transitions

@@ -809,7 +809,16 @@ class Engine extends Emitter {
     // jumped past where the DJ mix was going to start: don't mix away right away — let you hear the
     // part you picked, then a short crossfade into the next song at the very end
     this.stopPreroll();
-    const p = this.plan;
+    let p = this.plan;
+    // a Cook It Up build-up in progress: stop it cleanly, you're going somewhere else in the song
+    if (this.cooking && p) { p._aborted = true; this.cookAbort(d); }
+    // Cook It Up and you jumped past (or into) its mix point: pick a new one further on instead of
+    // giving up on the transition
+    if (p && p.style === 'cook' && this.upcoming && (to > p.mixStart - 0.3 || p._aborted)) {
+      const A = d.track, B = this.upcoming.track;
+      const np = this.cookPlan({ A, B, aA: library.analysis.get(A.id), aB: library.analysis.get(B.id), bpmA: library.analysis.get(A.id)?.bpm || 0, dur: this.duration, end: this.duration, base: { aId: A.id, bId: B.id, rate: 1, bStart: 0, outDelay: 0, shape: p.shape, style: 'cook' }, durB: B.duration, after: to + 3 });
+      if (np) { clearTimeout(this.planTimer); this.planTimer = null; this.plan = p = np; this.emit('plan', np); }
+    }
     this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 0.3);
     this._lateGo = false;
     if (p && !this.lateSeek) p.aRamped = false;
@@ -989,6 +998,7 @@ class Engine extends Emitter {
   }
   cancelNext() {
     clearTimeout(this.planTimer); this.planTimer = null;
+    if (this.cooking && this.plan) { this.plan._aborted = true; this.cookAbort(this.cur); }
     this.stopPreroll();
     if (!this.transition && this.cur.track && Math.abs(this.cur.el.playbackRate - 1) > 0.001) this.rampRate(this.cur, 1, 1.5);
     this.plan = null;
@@ -1270,7 +1280,7 @@ class Engine extends Emitter {
   // Picks one of several "crazy" transitions — never one of the last two used — with its own random
   // lengths, echo times and entry style, and leaves the outgoing song at a random phrase (not always the
   // end), always on a bar line. The pick is stable for a given pair of songs until it's actually played.
-  cookPlan({ A, B, aA, aB, bpmA, dur, end, base, durB }) {
+  cookPlan({ A, B, aA, aB, bpmA, dur, end, base, durB, after = 0 }) {
     if (!this.cookSalt) this.cookSalt = Math.random().toString(36).slice(2);
     let seed = 2166136261;
     for (const ch of A.id + '|' + B.id + '|' + this.cookSalt + '|' + (this.cookHist || []).join()) { seed ^= ch.charCodeAt(0); seed = Math.imul(seed, 16777619); }
@@ -1297,6 +1307,12 @@ class Engine extends Emitter {
       const target = end * (0.55 + rnd() * 0.3);
       C = bpmA ? off + Math.round((target - off) / (bar * 4)) * bar * 4 : target;
       if (C > end - 1 || C < L + 20) C = bpmA ? off + Math.floor((end - 0.5 - off) / bar) * bar : end;
+    }
+    // after a jump: the next phrase line at least a few seconds past where you landed
+    if (after && C - L < after) {
+      const need = after + L;
+      C = bpmA ? off + Math.ceil((need - off) / bar) * bar : need;
+      if (C > end - 0.3) return null;
     }
     C = Math.min(C, end);
     if (C - L < 1) return null;
@@ -1409,6 +1425,7 @@ class Engine extends Emitter {
     // get the next song rolling (silent) just before the cut so it's heard exactly on it
     const lead = 0.3;
     await new Promise((r) => setTimeout(r, Math.max(0, (tc - ctx.currentTime - lead) * 1000)));
+    if (p._aborted) return false;
     if (A.token !== tokA || this.cur !== A || !this.playing) { this.cookAbort(A); return false; }
     try { B.el.currentTime = Math.max(0, p.bStart - lead); } catch (e) { /* */ }
     return true;
@@ -1802,7 +1819,9 @@ class Engine extends Emitter {
     if (!dur) return;
     const t = d.el.currentTime;
     const remaining = dur - t;
-    if (!this.upcoming && remaining < 90) this.prepareNext();
+    // the next song + its mix are worked out early (10 s into a song), so the mix point is known — and
+    // marked on the scrubber — long before it comes, and scrubbing to just before it always works
+    if (!this.upcoming && (remaining < 90 || t > 10)) this.prepareNext();
     if (this.lateSeek) {
       if (remaining < 1.6 && !this._lateGo) {
         this._lateGo = true;

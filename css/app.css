@@ -1391,3 +1391,6 @@ body.desk .cook-card:hover { transform: translateY(-2px); }
 .restore-part input { width: 20px; height: 20px; accent-color: var(--c1); flex: none; }
 .restore-part span { display: flex; flex-direction: column; min-width: 0; }
 .restore-part b { font-size: 14.5px; } .restore-part small { font-size: 12px; color: var(--text2); }
+.hear-mix { all: unset; cursor: pointer; flex: none; margin-left: 8px; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #fff; background: rgba(255,255,255,.18); -webkit-tap-highlight-color: transparent; transition: background .15s, transform .12s; }
+.hear-mix:hover { background: rgba(255,255,255,.28); } .hear-mix:active { transform: scale(.94); }
+.dj-trans-head .hear-mix { margin-left: auto; align-self: center; }

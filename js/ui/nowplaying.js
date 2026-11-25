@@ -183,6 +183,7 @@ async function act(a, el) {
     case 'lyrics': setMode('lyrics'); break;
     case 'lyrics-retry': { const { forgetLyrics } = await import('../lyrics.js'); forgetLyrics(engine.track); renderLyrics(true); break; }
     case 'booth': setMode('booth'); break;
+    case 'hear-mix': { const p = engine.plan; if (p) { engine.seek(Math.max(0, p.mixStart - 6)); haptic(10); toast('6 seconds before the mix'); } break; }
     case 'dj-style': {
       const order = ['beats', 'auto', 'wordplay', 'cook'];
       const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % order.length];
@@ -437,7 +438,7 @@ function renderHint() {
   el.classList.remove('live');
   if (!settings.get('showNextTransition') || !p || !nx) { el.classList.remove('show'); return; }
   el.dataset.mix = p.mixStart;
-  el.innerHTML = html`${icon(p.style === 'gapless' ? 'gapless' : p.style === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>`;
+  el.innerHTML = html`${icon(p.style === 'gapless' ? 'gapless' : p.style === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>${p.style !== 'gapless' ? html`<button class="hear-mix" data-np="hear-mix" aria-label="Jump to just before the mix">Hear it</button>` : ''}`;
   el.classList.add('show');
 }
 
@@ -595,7 +596,8 @@ function renderWaveMarks() {
   if (!p || !d || !engine.upcoming || p.style === 'gapless') { mix.style.display = 'none'; cue.style.display = 'none'; return; }
   mix.style.display = 'block';
   mix.style.left = `${(p.mixStart / d) * 100}%`;
-  mix.style.width = `${Math.max(0.6, (((p.overlap || 0.3) * (p.aRate || 1)) / d) * 100)}%`;
+  const span = p.style === 'cook' ? (p.cutAt - p.mixStart) + (p.overlap || 0) : (p.overlap || 0.3) * (p.aRate || 1);
+  mix.style.width = `${Math.max(0.6, (span / d) * 100)}%`;
   cue.style.display = p.cue ? 'block' : 'none';
   if (p.cue) cue.style.left = `${(p.cue.t / d) * 100}%`;
 }
