@@ -4,10 +4,11 @@ import { library } from './library.js';
 import { settings } from './settings.js';
 import { nasUrl } from './util.js';
 import { plex } from './plex.js';
+import { onlineBpm, tempoRelation } from './bpm-online.js';
 
 const SR = 11025;
 const WIN = 256;               // ~23 ms envelope windows
-const ANALYSIS_VERSION = 5;
+const ANALYSIS_VERSION = 6;
 const MAX_SECONDS = 20 * 60;   // skip very long files (mixes, audiobooks)
 const inflight = new Map();
 const PREFETCH_KEEP = 6;
@@ -71,10 +72,18 @@ export function analyze(t, { force = false, signal = null } = {}) {
   if ((t.duration || 0) > MAX_SECONDS || t.size > 400e6) return Promise.resolve(null);
   const p = (async () => {
     try {
+      // the online tempo is looked up while the song downloads; it steers detection to the right
+      // octave (no more half-time / double-time), and the audio still sets the exact value and beat grid
+      const ob = onlineBpm(t);
       const ab = await fetchTrackBuffer(t, signal);
-      const res = await analyzeBuffer(ab);
+      const online = await Promise.race([ob, new Promise((r) => setTimeout(() => r(0), 5000))]);
+      const tag = t.bpm >= 40 && t.bpm <= 250 ? t.bpm : 0;
+      const hint = online || tag;
+      const res = await analyzeBuffer(ab, hint);
       if (!res) return null;
-      const rec = { id: t.id, v: ANALYSIS_VERSION, ...res, at: Date.now() };
+      const rec = { id: t.id, v: ANALYSIS_VERSION, ...res, at: Date.now(), bpmOnline: online || 0, ochk: online ? 1 : 0,
+        bpmSrc: online ? 'online' : tag ? 'tag' : 'audio' };
+      if (!online) ob.then((b) => { if (b && library.analysis.get(t.id) === rec) Object.assign(rec, { bpmOnline: b, ochk: 1 }) && library.setAnalysis(rec); });
       // a BPM you tapped in yourself always wins over detection
       const old = library.analysis.get(t.id);
       if (old?.tapped && old.bpm) {
@@ -95,6 +104,29 @@ export function analyze(t, { force = false, signal = null } = {}) {
   return p;
 }
 
+// Songs measured before online tempos existed get checked once: if the stored BPM disagrees with the
+// online one, the song is re-measured with the online tempo as its guide (cached audio → no new download).
+const verifying = new Set();
+export async function verifyBpm(t, { reanalyze = true } = {}) {
+  const a = t && library.analysis.get(t.id);
+  if (!a || a.ochk || a.tapped || verifying.has(t.id) || !settings.get('onlineBpm')) return a;
+  verifying.add(t.id);
+  try {
+    const online = await onlineBpm(t);
+    const cur = library.analysis.get(t.id);
+    if (cur !== a) return cur;
+    if (!online) { if (navigator.onLine) library.setAnalysis({ ...a, ochk: 1 }); return a; }
+    const f = tempoRelation(a.bpm, online);
+    if (f === 1) { library.setAnalysis({ ...a, ochk: 1, bpmOnline: online, bpmSrc: 'online' }); return library.analysis.get(t.id); }
+    // half-time read: every detected beat is still a real beat, so the grid survives a simple ×2
+    const quick = f === 2 ? { ...a, bpm: Math.round(a.bpm * 20) / 10, ochk: 1, bpmOnline: online, bpmSrc: 'online', bpmFixed: a.bpm } : { ...a, bpmOnline: online, ochk: 0 };
+    library.setAnalysis(quick);
+    if (reanalyze && f !== 2) { const r = await analyze(t, { force: true }); if (r) { r.bpmFixed = a.bpm; library.setAnalysis(r); } return r || quick; }
+    return quick;
+  } catch (e) { return a; }
+  finally { verifying.delete(t.id); }
+}
+
 async function decode(ab) {
   const ctx = new OfflineAudioContext(1, 1, SR);
   return ctx.decodeAudioData(ab);
@@ -112,13 +144,13 @@ async function lowpass(buf, freq) {
   return out.getChannelData(0);
 }
 
-export async function analyzeBuffer(ab) {
+export async function analyzeBuffer(ab, hint = 0) {
   const buf = await decode(ab);
   if (buf.length < SR * 3) return null;
   const lp = await lowpass(buf, 180);
   const channels = [];
   for (let c = 0; c < buf.numberOfChannels; c++) channels.push(buf.getChannelData(c).slice());
-  return runCore({ channels, lp: lp.slice(), SR, duration: buf.duration });
+  return runCore({ channels, lp: lp.slice(), SR, duration: buf.duration, hint });
 }
 
 // heavy math runs in a background thread

@@ -3,7 +3,7 @@
 // (silence trimming, fade-aware overlaps, album awareness, beat-matched + tempo-matched mixing).
 import { settings, EQ_FREQS, EQ_PRESETS } from './settings.js';
 import { library } from './library.js';
-import { analyze, prefetchTrack, trackSrc, isAnalyzed } from './analysis.js';
+import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm } from './analysis.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
 import { artUrl, lockScreenArtwork } from './art.js';
@@ -932,7 +932,8 @@ class Engine extends Emitter {
       if (this.track !== t || !this.playing) return;
       const i = this.nextIndex(true);
       const n = i >= 0 ? library.track(this.queue[i]) : null;
-      if (n && n !== this.upcoming?.track) prefetchTrack(n);
+      if (n) (n !== this.upcoming?.track ? prefetchTrack(n) : Promise.resolve()).then(() => { if (isAnalyzed(n)) verifyBpm(n); });
+      if (isAnalyzed(t)) verifyBpm(t);
     }, 4000);
   }
   scheduleAnalysis(t) {

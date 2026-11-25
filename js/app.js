@@ -20,6 +20,8 @@ import { optimizeOrder } from './dj.js';
 import { statsView, setStatsRange } from './ui/stats-view.js';
 import { friends } from './friends.js';
 import { friendsView, chatView, acceptView, drafts } from './ui/friends-view.js';
+import { accounts, writeMeta } from './accounts.js';
+import { showLogin, noteAccount, connectSheet } from './ui/accounts-view.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -532,6 +534,13 @@ async function doAction(a, el, e) {
     }
     case 'demo': await toggleDemo(true); break;
     case 'plex-signin': plexSignIn(); break;
+    case 'accounts': try { await engine.saveNow(); } catch (e) { /* */ } showLogin(); break;
+    case 'add-account': try { await engine.saveNow(); } catch (e) { /* */ } showLogin().then(() => document.querySelector('#login [data-l="add"]')?.click()); break;
+    case 'lock-account': {
+      try { await engine.saveNow(); library.saveLog(); } catch (e) { /* */ }
+      accounts.lock(); sessionStorage.removeItem('picked'); location.reload();
+      break;
+    }
     case 'plex-signout': await plexSignOut(() => render({ keepScroll: false })); break;
     case 'plex-servers': loadServers(view()); break;
     case 'plex-sync': if (!plex.running) { plex.sync(); toast('Syncing with Plex…'); render({ keepScroll: true }); } break;
@@ -1082,6 +1091,17 @@ function warmAllCovers() {
 }
 
 // ---------- boot ----------
+// sidebar (computer) account button: avatar + name, opens the login screen
+function paintAccountChip() {
+  const tabs = $('#tabs');
+  if (!tabs) return;
+  let b = $('.side-acct', tabs);
+  if (!b) { tabs.insertAdjacentHTML('beforeend', '<button class="side-acct side-only" data-a="accounts" aria-label="Switch account"></button>'); b = $('.side-acct', tabs); }
+  const a = accounts.active, [c1, c2] = accounts.colors(a), name = accounts.label(a);
+  b.style.setProperty('--c1', c1); b.style.setProperty('--c2', c2);
+  b.innerHTML = html`<span class="sa-av">${a.thumb ? html`<img src="${a.thumb}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<em>${(name[0] || '♪').toUpperCase()}</em></span><span class="sa-txt"><b>${name}</b><small>${accounts.all.length > 1 ? 'Switch account' : 'Add account'}</small></span>${icon('switch')}`.toString();
+}
+
 async function boot() {
   // home-screen app (no browser bars): lay out against the full screen
   const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
@@ -1095,6 +1115,14 @@ async function boot() {
     $('#view').innerHTML = `<div class="empty"><h3>Can’t start</h3><p>${e.message}</p></div>`;
     return;
   }
+  // accounts: show "Who's listening?" before any account's data is opened
+  if (accounts.needsPicker()) {
+    $('#view').innerHTML = '';
+    document.body.classList.add('ready');
+    await showLogin({ boot: true });
+  } else { try { sessionStorage.setItem('picked', accounts.activeId); } catch (e) { /* */ } }
+  await writeMeta();
+  navigator.serviceWorker?.controller?.postMessage({ type: 'account-changed' });
   await settings.load();
   applyTheme();
   settings.on('change', (k) => {
@@ -1126,6 +1154,17 @@ async function boot() {
   await render();
   await engine.restore();
   document.body.classList.add('ready');
+  paintAccountChip();
+  // keep this account's tile on the login screen current (Plex name + avatar, server, song count)
+  let nasSrc = null;
+  const note = () => { noteAccount({ plexUser: plex.user, server: plex.cfg?.server?.name, songs: library.size, nas: !plex.connected && !!nasSrc?.url }); paintAccountChip(); };
+  db.kv.get('source').then((v) => { nasSrc = v; note(); });
+  plex.on('auth', note);
+  plex.on('done', note);
+  if (sessionStorage.getItem('afterSwitch') === 'connect') {
+    sessionStorage.removeItem('afterSwitch');
+    if (!plex.signedIn && !library.size) setTimeout(() => connectSheet({ plexSignIn }), 500);
+  }
   const src = await db.kv.get('source');
   if (src?.url && settings.get('scanOnLaunch')) setTimeout(() => scanner.run(), 1500);
   setTimeout(warmAllCovers, 8000);

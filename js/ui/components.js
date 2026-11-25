@@ -67,8 +67,8 @@ export function bpmChip(t) {
   if (!settings.get('showBpmRows')) return '';
   const bpm = library.bpmOf(t);
   if (!bpm) return '';
-  const k = library.analysis.get(t.id)?.camelot;
-  return html`<span class="bpmchip">${Math.round(bpm)} BPM${k ? html`<i>${k}</i>` : ''}</span>`;
+  const a = library.analysis.get(t.id), k = a?.camelot, ok = a?.tapped || a?.bpmSrc === 'online';
+  return html`<span class="bpmchip${ok ? ' ok' : ''}" title="${a?.tapped ? 'Tapped by you' : ok ? 'Confirmed online' : 'Measured from the audio'}">${Math.round(bpm)} BPM${k ? html`<i>${k}</i>` : ''}</span>`;
 }
 export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum = false, extra = '' } = {}) {
   const playing = engine.track?.id === t.id;

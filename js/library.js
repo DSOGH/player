@@ -262,6 +262,8 @@ class Library extends Emitter {
   bpmOf(t) {
     if (!t) return 0;
     const an = this.analysis.get(t.id);
+    // tapped or online-confirmed tempos are the truth; then your tags; then what the audio says
+    if (an?.bpm && (an.tapped || an.bpmSrc === 'online')) return an.bpm;
     if (settings.get('preferBpmTag') && t.bpm) return t.bpm;
     return an?.bpm || t.bpm || 0;
   }

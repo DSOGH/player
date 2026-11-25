@@ -2,7 +2,7 @@
 // freezes the UI or audio; also importable directly as a fallback.
 const WIN = 256;
 
-export function computeAnalysis({ channels, lp, SR, duration }) {
+export function computeAnalysis({ channels, lp, SR, duration, hint = 0 }) {
   const n = lp.length;
   // mono mix
   const mono = new Float32Array(n);
@@ -89,11 +89,15 @@ export function computeAnalysis({ channels, lp, SR, duration }) {
     for (let i = 0; i + L < seg.length; i++) s += seg[i] * seg[i + L];
     ac[L] = s / Math.max(1, seg.length - L);
   }
+  // a hint outside the 60–200 search window is folded in, then the result is scaled back out
+  let hintF = 0, hintMul = 1;
+  if (hint > 0) { hintF = hint; while (hintF > 196) { hintF /= 2; hintMul *= 2; } while (hintF < 62) { hintF *= 2; hintMul /= 2; } }
   let bestL = 0, bestS = -1, sumS = 0, cntS = 0;
   for (let L = minLag; L <= maxLag; L++) {
     const bpm = (60 * fps) / L;
-    // tempo prior centred on 120 BPM, plus support from the double period
-    const prior = Math.exp(-0.5 * (Math.log2(bpm / 120) / 0.8) ** 2);
+    // tempo prior centred on 120 BPM — or tightly on the known (online / tagged) tempo, which settles
+    // half-time / double-time / 3:2 confusion while the audio still decides the exact value and the grid
+    const prior = hintF ? Math.exp(-0.5 * (Math.log2(bpm / hintF) / 0.12) ** 2) : Math.exp(-0.5 * (Math.log2(bpm / 120) / 0.8) ** 2);
     const s = (ac[L] + 0.5 * (ac[2 * L] || 0)) * prior;
     sumS += s; cntS++;
     if (s > bestS) { bestS = s; bestL = L; }
@@ -115,8 +119,8 @@ export function computeAnalysis({ channels, lp, SR, duration }) {
     }
     period = bestP;
     bpm = (60 * fps) / period;
-    while (bpm < 70) bpm *= 2;
-    while (bpm > 190) bpm /= 2;
+    if (hintF) bpm *= hintMul;
+    else { while (bpm < 70) bpm *= 2; while (bpm > 190) bpm /= 2; }
     conf = Math.min(1, (bestS / (sumS / cntS) - 1) / 3);
     // first beat at or after the music starts
     const pSec = period / fps;

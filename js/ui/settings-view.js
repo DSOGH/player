@@ -4,7 +4,8 @@ import { settings, EQ_FREQS, EQ_PRESETS, EQ_NAMES, DEFAULTS } from '../settings.
 import { library } from '../library.js';
 import { engine } from '../engine.js';
 import { scanner } from '../scanner.js';
-import { analyze, isAnalyzed } from '../analysis.js';
+import { analyze, isAnalyzed, verifyBpm } from '../analysis.js';
+import { accounts } from '../accounts.js';
 import { saveSource, loadSource, testSource } from '../sources.js';
 import * as db from '../db.js';
 import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
@@ -12,7 +13,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.17.4';
+export const APP_VERSION = '1.18.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -32,7 +33,7 @@ const text = (k, label, sub = '') => html`<div class="set-row col">
   <input class="text-input" data-text="${k}" value="${settings.get(k)}" autocomplete="off" autocapitalize="off" spellcheck="false">
 </div>`;
 // iOS-style colored icon tiles
-const TILE = { server: '#0a84ff', mix: '#ff375f', eq: '#ff9f0a', library: '#bf5af2', palette: '#5e5ce6', sparkle: '#30b0c7', bpm: '#30d158', storage: '#8e8e93', info: '#8e8e93', refresh: '#64d2ff', car: '#ff9f0a', wifi: '#ff9f0a', download: '#30d158', trash: '#ff453a', timer: '#ff9f0a' };
+const TILE = { server: '#0a84ff', mix: '#ff375f', eq: '#ff9f0a', library: '#bf5af2', palette: '#5e5ce6', sparkle: '#30b0c7', bpm: '#30d158', storage: '#8e8e93', info: '#8e8e93', refresh: '#64d2ff', car: '#ff9f0a', wifi: '#ff9f0a', download: '#30d158', trash: '#ff453a', timer: '#ff9f0a', switch: '#5e5ce6', lock: '#636366' };
 const tile = (ic) => (TILE[ic] ? `style="background:${TILE[ic]}"` : '');
 const link = (href, ic, label, value = '') => html`<a class="set-row link" href="${href}">
   <span class="set-ic" ${raw(tile(ic))}>${icon(ic)}</span><div class="set-text"><span>${label}</span></div><span class="set-value">${value}</span>${icon('right', 'chev')}
@@ -49,14 +50,27 @@ export async function settingsView(page = '') {
   return fn();
 }
 
+// every account on this device, one tap to switch (the login screen handles PINs)
+function accountsGroup() {
+  const list = accounts.all, cur = accounts.activeId;
+  const av = (a) => { const [c1, c2] = accounts.colors(a), n = accounts.label(a); return html`<span class="acct-av sm" style="--c1:${c1};--c2:${c2}">${a.thumb ? html`<img src="${a.thumb}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<em>${(n[0] || '♪').toUpperCase()}</em></span>`; };
+  return html`<section class="set-group"><h3>Accounts</h3><div class="acct-strip">
+    ${list.map((a) => html`<button class="acct-chip${a.id === cur ? ' on' : ''}" data-a="accounts">${av(a)}<b>${accounts.label(a)}</b>${a.pin ? icon('lock', 'chip-lock') : ''}</button>`)}
+    <button class="acct-chip add" data-a="add-account"><span class="acct-av sm plus">${icon('plus')}</span><b>Add</b></button>
+  </div><div class="set-card">
+    ${button('accounts', 'switch', list.length > 1 ? 'Switch account' : 'Add another account', { sub: list.length > 1 ? `${list.length} accounts on this device · each keeps its own Plex, likes, stats and friends` : 'Someone else’s Plex, or a second library — each one stays signed in' })}
+    ${accounts.hasPin(cur) ? button('lock-account', 'lock', 'Lock now', { sub: 'Shows the login screen; your PIN opens it again' }) : ''}
+  </div></section>`;
+}
+
 function profileCard() {
   const u = plex.user;
-  const name = u?.name || u?.username || 'Your Music';
+  const name = accounts.active?.name || u?.name || u?.username || 'Your Music';
   const albums = library.albums?.size || 0, artists = library.artists?.size || 0;
   const w = library.weekStats?.() || { minutes: 0 };
   const where = plex.connected ? plex.cfg.server.name : 'This device';
   return html`<a class="set-profile" href="#/stats">
-    ${u?.thumb ? html`<img class="sp-avatar" src="${u.thumb}" alt="" referrerpolicy="no-referrer">` : html`<div class="sp-avatar">${(name[0] || '♪').toUpperCase()}</div>`}
+    ${u?.thumb ? html`<img class="sp-avatar" src="${u.thumb}" alt="" referrerpolicy="no-referrer">` : html`<div class="sp-avatar" style="background:linear-gradient(140deg,${accounts.colors(accounts.active)[0]},${accounts.colors(accounts.active)[1]})">${(name[0] || '♪').toUpperCase()}</div>`}
     <div class="sp-text"><b>${name}</b><small>${library.size.toLocaleString()} songs · ${albums.toLocaleString()} albums · ${artists.toLocaleString()} artists</small>
       <span class="sp-chips"><i>${where}</i><i>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m this week</i><i>v${APP_VERSION}</i></span></div>
     ${icon('right', 'chev')}</a>`;
@@ -71,6 +85,7 @@ async function root() {
     title: 'Settings',
     html: html`${pageHeader('Settings')}
     ${profileCard()}
+    ${accountsGroup()}
     ${plex.connected && plex.cfg.connKind === 'relay' ? html`<a class="set-alert" href="#/settings/plex">
       <span class="set-alert-ic">${icon('wifi')}</span><div><b>Plex is on a slow connection</b><small>It’s using Plex Relay, so songs can start slowly. Tap to see how to fix it.</small></div>${icon('right', 'chev')}</a>` : ''}
     ${group('', html`
@@ -229,6 +244,7 @@ function playback() {
       ${toggle('vocalStrip', 'Cut vocals when they’d clash', 'If both songs would still be singing, the outgoing one drops its vocals and only its music & beat blend in')}
       ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back (pitch preserved)')}
       ${slider('tempoMatchMax', 'Max tempo change', 1, 12, 1, '%', 'How much a song may be sped up or slowed down to match the beat. Small = you never notice it; songs further apart get a different kind of mix. The song goes back to normal speed as soon as the old one is gone.')}
+      ${toggle('onlineBpm', 'Look up BPM online', 'Checks each song’s tempo against Deezer’s catalogue once and saves it, so the DJ never mixes at half or double speed')}
       ${toggle('preferBpmTag', 'Prefer BPM tags', 'Use the BPM from your file tags when present')}
       ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
     `)}
@@ -307,7 +323,7 @@ function libraryPage() {
       <div class="stats"><div><b>${total}</b><span>Songs</span></div><div><b>${library.albums.size}</b><span>Albums</span></div><div><b>${library.artists.size}</b><span>Artists</span></div><div><b>${analyzed}</b><span>Analyzed</span></div></div>
       ${button('rescan', 'refresh', 'Scan for new music', { sub: 'Only reads new or changed files' })}
       ${button('rescan-full', 'refresh', 'Full rescan', { sub: 'Re-read every file’s tags and artwork' })}
-      ${button('analyze-all', 'bpm', 'Analyze whole library', { sub: 'Detect BPM, silences and loudness for every song (downloads each file once — best on Wi-Fi)' })}
+      ${button('analyze-all', 'bpm', 'Analyze whole library', { sub: 'Detect BPM, silences and loudness for every song and check each tempo online (downloads each file once — best on Wi-Fi)' })}
     `)}
     ${group('Organizing', html`
       ${seg('explicitPref', 'Explicit / clean albums', [['explicit', 'Explicit'], ['clean', 'Clean'], ['both', 'Show both']], 'When an album exists in both versions, show this one in your library, search, mixes and radio. Detected from tags, “(Clean)” / “[Explicit]” in names, and censored titles — even if Plex doesn’t label them. Album pages have a switch for the other version.')}
@@ -514,11 +530,12 @@ export async function eqPresetSheet() {
 }
 
 export async function analyzeAll(onProgress) {
-  const todo = [...library.tracks.values()].filter((t) => !isAnalyzed(t));
+  const all = [...library.tracks.values()];
+  const todo = all.filter((t) => !isAnalyzed(t) || !library.analysis.get(t.id)?.ochk);
   let done = 0;
   for (const t of todo) {
     if (analyzeAll.stop) break;
-    await analyze(t, { force: true });
+    if (isAnalyzed(t)) await verifyBpm(t); else await analyze(t, { force: true });
     done++;
     onProgress(done, todo.length);
   }

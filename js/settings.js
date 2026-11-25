@@ -18,6 +18,7 @@ export const DEFAULTS = {
   sv: 6,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
+  onlineBpm: true,            // look tempos up online (Deezer) once and keep them
   analysisNetwork: 'any',     // 'any' | 'wifi'
   skipFade: false,            // quick crossfade when you press next/prev (off = instant cut)
   skipFadeSec: 1.2,

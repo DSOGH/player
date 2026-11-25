@@ -5,14 +5,14 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.17.4';
+const VERSION = 'v1.18.0';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/util.js', './js/db.js', './js/settings.js', './js/sources.js', './js/tags.js',
   './js/scanner.js', './js/library.js', './js/art.js', './js/analysis.js', './js/engine.js', './js/demo.js',
   './js/demo-synth.js', './js/plex.js', './js/lyrics.js', './js/dj.js', './js/analysis-core.js', './js/analysis-worker.js', './js/ui/djbooth.js', './js/vocal-worklet.js', './js/ui/views.js', './js/ui/nowplaying.js', './js/ui/settings-view.js', './js/ui/components.js',
-  './js/ui/icons.js', './js/ui/dual.js', './js/ui/plex-view.js', './js/ui/stats-view.js', './js/stats.js', './js/friends.js', './js/ui/friends-view.js',
+  './js/ui/icons.js', './js/ui/dual.js', './js/ui/plex-view.js', './js/ui/stats-view.js', './js/stats.js', './js/friends.js', './js/ui/friends-view.js', './js/bpm-online.js', './js/accounts.js', './js/ui/accounts-view.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
 ];
 
@@ -31,19 +31,38 @@ self.addEventListener('activate', (e) => {
 });
 
 // ---------- IndexedDB (same schema as js/db.js) ----------
-let dbp;
+// Each account on this device has its own database; the page records which one is in use in a tiny
+// shared "nasplayer-meta" database so the worker always reads the right account's settings.
+let dbp, dbHandle = null;
+function metaActive() {
+  return new Promise((res) => {
+    try {
+      const r = indexedDB.open('nasplayer-meta', 1);
+      r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+      r.onsuccess = () => {
+        const d = r.result;
+        try {
+          const q = d.transaction('kv').objectStore('kv').get('activeDb');
+          q.onsuccess = () => { d.close(); res(q.result || 'nasplayer'); };
+          q.onerror = () => { d.close(); res('nasplayer'); };
+        } catch (e) { d.close(); res('nasplayer'); }
+      };
+      r.onerror = () => res('nasplayer');
+    } catch (e) { res('nasplayer'); }
+  });
+}
 function idb() {
   if (dbp) return dbp;
-  dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('nasplayer', 1);
+  dbp = metaActive().then((name) => new Promise((res, rej) => {
+    const r = indexedDB.open(name, 1);
     r.onupgradeneeded = () => {
       const d = r.result;
       for (const s of ['tracks', 'art', 'analysis', 'playlists']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' });
       if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
     };
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => { const d = r.result; dbHandle = d; d.onversionchange = () => { d.close(); if (dbHandle === d) { dbHandle = null; dbp = null; } }; res(d); };
     r.onerror = () => { dbp = null; rej(r.error); };
-  });
+  }));
   return dbp;
 }
 async function idbGet(store, key) {
@@ -99,6 +118,7 @@ async function fromCachesByKey(key, req) {
 self.addEventListener('message', (e) => {
   if (e.data?.type === 'cache-changed') loadPlexKeys();
   if (e.data?.type === 'config-changed') { cfg = null; plexCfg = null; loadPlexKeys(); }
+  if (e.data?.type === 'account-changed') { try { dbHandle?.close(); } catch (er) { /* */ } dbHandle = null; dbp = null; cfg = null; plexCfg = null; loadPlexKeys(); }
   if (e.data?.type === 'skip-waiting') self.skipWaiting();
 });
 

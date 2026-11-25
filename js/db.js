@@ -4,13 +4,17 @@
 //  analysis {id, bpm, ...} per-track audio analysis
 //  playlists{id, name, trackIds}
 //  kv       out-of-line keys: settings, source, state, stats, likes...
-const NAME = 'nasplayer';
+import { activeDbName } from './accounts.js';
+// one database per account on this device (the first account keeps the original "nasplayer")
+let NAME = null;
+export const openedName = () => NAME;
 const VERSION = 1;
 const STORES = ['tracks', 'art', 'analysis', 'playlists'];
 let _db;
 
 export function open() {
   if (_db) return _db;
+  NAME = activeDbName();
   _db = new Promise((res, rej) => {
     const r = indexedDB.open(NAME, VERSION);
     r.onupgradeneeded = () => {
@@ -18,7 +22,7 @@ export function open() {
       for (const s of STORES) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' });
       if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
     };
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => { const d = r.result; d.onversionchange = () => d.close(); res(d); };
     r.onerror = () => rej(r.error);
   });
   return _db;

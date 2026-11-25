@@ -67,6 +67,9 @@ const I = {
   tap: '<circle cx="12" cy="12" r="3" fill="currentColor"/><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" opacity=".55"/><circle cx="12" cy="12" r="10.5" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".25"/>',
   lossless: '<path d="M2 12h2.5M6 8v8M9.5 5v14M13 8v8M16.5 10v4M20 11.5v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   wifi: '<path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.8 16a4.8 4.8 0 0 1 6.4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="19.3" r="1.4" fill="currentColor"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.3 10.5V7.8a3.7 3.7 0 0 1 7.4 0v2.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  user: '<circle cx="12" cy="8.3" r="3.8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4.5 20.2c.9-3.7 3.9-5.7 7.5-5.7s6.6 2 7.5 5.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  switch: '<path d="M7 7.5h11.5M15 4l3.5 3.5L15 11M17 16.5H5.5M9 13l-3.5 3.5L9 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
 export function sprite() {

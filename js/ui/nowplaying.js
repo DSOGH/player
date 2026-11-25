@@ -250,7 +250,7 @@ async function npMenu() {
   else if (v === 'bpm') {
     toast('Analyzing…');
     const r = await analyze(t, { force: true });
-    toast(r ? `${Math.round(r.bpm)} BPM · ${r.bpmConf > 0.3 ? 'confident' : 'rough estimate'}` : 'Couldn’t analyze this file');
+    toast(r ? `${Math.round(r.bpm)} BPM · ${r.bpmSrc === 'online' ? 'confirmed online' : r.bpmConf > 0.3 ? 'confident' : 'rough estimate'}` : 'Couldn’t analyze this file');
     renderChips();
   } else if (v === 'tap') tapTempo(t);
   else if (v === 'eq') { closeNP(); location.hash = '#/settings/sound'; }
@@ -320,7 +320,7 @@ function trackInfo(t) {
     ['Duration', fmtTime(t.duration)], ['Size', t.size ? (t.size / 1048576).toFixed(1) + ' MB' : ''],
     ['ReplayGain', t.rgTrack !== undefined ? `track ${t.rgTrack.toFixed(2)} dB${t.rgAlbum !== undefined ? ` · album ${t.rgAlbum.toFixed(2)} dB` : ''}` : 'none'],
     ['Leveling now', `${engine.gainDbFor(t).toFixed(1)} dB`],
-    ['BPM', library.bpmOf(t) ? `${library.bpmOf(t)}${t.bpm && settings.get('preferBpmTag') ? ' (tag)' : an?.bpm ? ' (detected)' : ''}` : '—'],
+    ['BPM', library.bpmOf(t) ? `${library.bpmOf(t)}${an?.tapped ? ' (tapped)' : an?.bpmSrc === 'online' ? ' (confirmed online)' : t.bpm && settings.get('preferBpmTag') ? ' (tag)' : an?.bpm ? ' (detected)' : ''}${an?.bpmFixed ? ` · was ${Math.round(an.bpmFixed)}` : ''}` : '—'],
     ['Key', an?.key ? `${an.key} (${an.camelot})` : '—'],
     ['Energy', an?.energy !== undefined ? `${Math.round(an.energy * 100)}%` : '—'],
     ['Analysis', an ? `intro silence ${an.leadIn}s · fade-out at ${fmtTime(an.fadeOutStart)} · loudness ${an.loudnessDb} dB` : 'not analyzed'],
