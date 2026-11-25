@@ -591,7 +591,8 @@ class Engine extends Emitter {
     // Cook It Up only applies to this queue: your normal DJ settings aren't touched
     if (settings.get('transition') !== 'smart') { this._cookPrevTransition = settings.get('transition'); settings.set('transition', 'smart'); }
     this.cookSalt = Math.random().toString(36).slice(2);
-    this.cookHist = []; this._cookPicked = new Set(); this._userNext = new Set();
+    this.cookHist = []; this._cookPicked = new Set(); this._userNext = new Set(); this._cookN = 0;
+    (async () => { for (const t of all.slice(1, 60)) { if (!this.cookMode) break; if (!library.bpmOf(t)) await onlineBpm(t).catch(() => 0); } })();
     this.playTracks(all.slice(0, 400), 0, { context: { type: 'cook', name: 'DJ Cook It Up' } });
     return true;
   }
@@ -1021,26 +1022,44 @@ class Engine extends Emitter {
     const cur = this.cur.track;
     if (!cur) return;
     const tempo = (t) => library.bpmOf(t) || onlineBpmCached(t) || 0;
-    const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot;
-    const recentArtists = new Set(this.queue.slice(Math.max(0, this.index - 2), this.index + 1).map((id) => library.track(id)?.artist).filter(Boolean));
+    const genres = (t) => new Set(String(t.genre || '').toLowerCase().split(/[\/,;&|]+/).map((g) => g.replace(/[^a-z0-9]+/g, ' ').trim()).filter(Boolean));
+    const energy = (t) => { const L = library.analysis.get(t.id)?.loud; if (!L?.length) return null; let s2 = 0; for (const v of L) s2 += v; return s2 / L.length; };
+    const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot, gA = genres(cur), eA = energy(cur), yA = +cur.year || 0;
+    // a set breathes: energy climbs gently, with a short breather every few songs
+    this._cookN = (this._cookN || 0) + 1;
+    const target = eA == null ? null : eA + (this._cookN % 6 === 0 ? -8 : 2);
+    const recent = this.queue.slice(Math.max(0, this.index - 5), this.index + 1).map((id) => library.track(id)).filter(Boolean);
+    const recentArtists = new Set(recent.map((t) => t.artist)), recentAlbums = new Set(recent.map((t) => t.albumId));
     let best = -1, bestS = -Infinity;
     const lookup = [];
-    for (let j = i; j < Math.min(this.queue.length, i + 24); j++) {
+    for (let j = i; j < Math.min(this.queue.length, i + 40); j++) {
       const t = library.track(this.queue[j]);
-      if (!t) continue;
-      let sc = Math.random() * 1.2;
+      if (!t || this._userNext?.has(t.id)) continue;
+      let sc = Math.random() * 0.8;
+      // tempo the DJ can match without anyone noticing
       const bB = tempo(t);
       if (bA && bB) {
         let r = bB / bA; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2;
         const d = Math.abs(r - 1);
-        sc += d <= 0.03 ? 3 : d <= 0.06 ? 2.2 : d <= 0.1 ? 1 : 0;
-      } else { sc += 0.8; if (!bB && lookup.length < 6) lookup.push(t); }
+        sc += d <= 0.02 ? 4 : d <= 0.04 ? 3 : d <= 0.06 ? 1.5 : d <= 0.1 ? 0.3 : -1.5;
+      } else if (!bB && lookup.length < 10) lookup.push(t);
+      // keys that sit together
       const kB = library.analysis.get(t.id)?.camelot;
-      if (kA && kB) sc += keyCompat(kA, kB) >= 0.85 ? 1.4 : keyCompat(kA, kB) >= 0.6 ? 0.5 : -0.4;
-      if (recentArtists.has(t.artist)) sc -= 1.5;
+      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 1.5 : kc >= 0.6 ? 0.5 : -0.5; }
+      // same vibe: genre, era
+      const gB = genres(t);
+      if (gA.size && gB.size) sc += [...gB].some((g) => gA.has(g)) ? 2.5 : -2;
+      const yB = +t.year || 0;
+      if (yA && yB) sc += Math.abs(yA - yB) <= 3 ? 0.5 : Math.abs(yA - yB) > 15 ? -0.5 : 0;
+      // energy flow
+      const eB = energy(t);
+      if (target != null && eB != null) sc -= Math.abs(eB - target) / 15;
+      // variety: not the same artist or album again so soon
+      if (t.artist === cur.artist) sc -= 3; else if (recentArtists.has(t.artist)) sc -= 1.5;
+      if (recentAlbums.has(t.albumId)) sc -= 1;
       if (sc > bestS) { bestS = sc; best = j; }
     }
-    // tempos for songs nobody has measured yet are looked up online, so later picks get better
+    // tempos for songs nobody has measured yet are looked up online, so the next picks are better
     for (const t of lookup) onlineBpm(t).catch(() => {});
     if (best > i) { const [id] = this.queue.splice(best, 1); this.queue.splice(i, 0, id); this.emit('queue'); }
   }
@@ -1230,7 +1249,7 @@ class Engine extends Emitter {
     const kc = s.harmonicMix !== false ? keyCompat(aA?.camelot, aB?.camelot) : 0.8;
     // tempo sync: the incoming song matches the outgoing one; for bigger gaps both meet in the middle
     // (Cook It Up blends allow a bigger tempo change: it's a DJ set, the songs are bent to fit)
-    const maxEach = cookBlend ? (IOS ? 0.08 : 0.1) : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
+    const maxEach = cookBlend && !IOS ? Math.max(0.07, (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100) : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
     // iPhone: every speed change of a playing song can click, so only the incoming song changes speed (once, before it's heard)
     if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 1.6 + 0.005) && end > 20) {
       let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
@@ -1275,8 +1294,7 @@ class Engine extends Emitter {
             const eA = loudAt(aA, ms, ms + ovT), eB = loudAt(aB, st.bS, st.bS + ov * bRate);
             const eGap = eA != null && eB != null ? Math.abs(eA - eB) / 20 : 0;
             tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
-              score: clash * 6 + eGap + (st.dropOn ? -2 : 0) + k * 0.7 + (beats - bt) * 0.06
-                + (cookBlend ? (((cookBlend.jitter * 997 + bt * 13 + k * 7 + (st.dropOn ? 3 : 0)) % 1) * 1.6) : 0) });
+              score: clash * 6 + eGap + (st.dropOn ? -2 : 0) + k * 0.7 + (beats - bt) * 0.06});
           }
         }
       }
@@ -1354,11 +1372,10 @@ class Engine extends Emitter {
     // Smooth & Hype are a DJ set: every transition is a real beat-matched blend (the songs are picked so
     // tempos line up, and Cook It Up allows a bigger tempo change), Hype sometimes throws in a cut or a
     // loop roll. Only Wild uses the stand-alone effects.
-    if (level !== 'wild' && !after) {
-      const trick = level === 'hype' && sync && rnd() < 0.22 ? pickOf(['cut', 'roll']) : null;
-      if (!trick || (this.cookHist || []).includes(trick)) return { cookBlend: true, throwEcho: rnd() < (level === 'smooth' ? 0.3 : 0.5), cookKind: 'blend', jitter: rnd() };
-      exclude = [...exclude, ...Object.keys(W).filter((k) => k !== trick)];
-    }
+    // Smooth & Hype are a DJ set: the mix itself is the regular DJ engine (beat-matched, phrase-aligned,
+    // bass swap, vocals kept apart, drop landed) — what makes it a set is the song picking (cookPickNext).
+    // Hype adds the odd echo throw; the stand-alone effects are Wild only.
+    if (level !== 'wild' && !after) return { cookBlend: true, throwEcho: level === 'hype' && rnd() < 0.25, cookKind: 'blend' };
     const recent = this.cookHist || [];
     let pool = Object.keys(W).filter((k) => !recent.includes(k) && !exclude.includes(k));
     if (after) pool = pool.filter((k) => k !== 'blend'); // after a jump there's no room planning a long blend

@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.24.0';
+export const APP_VERSION = '1.25.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -60,6 +60,7 @@ function accountsGroup() {
     <button class="acct-chip add" data-a="add-account"><span class="acct-av sm plus">${icon('plus')}</span><b>Add</b></button>
   </div><div class="set-card">
     ${button('accounts', 'switch', list.length > 1 ? 'Switch account' : 'Add another account', { sub: list.length > 1 ? `${list.length} accounts on this device · each keeps its own Plex, likes, stats and friends` : 'Someone else’s Plex, or a second library — each one stays signed in' })}
+    ${list.length > 1 ? button('toggle-ask', 'user', `Ask who’s listening on open: ${accounts.ask ? 'On' : 'Off'}`, { sub: accounts.ask ? 'Shows the account picker every time the app opens' : 'Opens straight into the account you used last' }) : ''}
     ${accounts.hasPin(cur) ? button('lock-account', 'lock', 'Lock now', { sub: 'Shows the login screen; your PIN opens it again' }) : ''}
   </div></section>
   ${cloudGroup()}`;
@@ -274,8 +275,8 @@ function playback() {
           { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs: the beat drops out, the vocal is isolated, and the next song picks up singing those exact words.' }[settings.get('djStyle')])}` : ''}
     `)}
     ${tm === 'smart' ? group('DJ Cook It Up', html`
-      ${button('cook-it-up', 'sparkle', 'Start DJ Cook It Up', { sub: 'Your whole library at random — the DJ picks what fits next and mixes it with tricks' })}
-      ${seg('cookLevel', 'Energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'Mostly clean beat-matched blends, with the odd echo throw or cut — near the end of songs.', hype: 'More tricks: loop rolls, brakes, spin-backs, risers — and it leaves songs a bit earlier.', wild: 'Everything, often, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
+      ${button('cook-it-up', 'sparkle', 'Start DJ Cook It Up', { sub: 'Your whole library as a DJ set — songs picked to fit each other, mixed on the beat' })}
+      ${seg('cookLevel', 'Energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'A real DJ set: each next song is picked to fit (tempo, key, genre, energy, a different artist) and every transition is a beat-matched blend with a bass swap.', hype: 'The same set, plus the odd echo throw as songs leave.', wild: 'Party tricks: loop rolls, brakes, spin-backs, risers, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
     `) : ''}
     ${group('Playing', html`
       ${toggle('skipFade', 'Fade when skipping', 'Off = the next song starts instantly when you press ⏭ / ⏮')}

@@ -544,6 +544,7 @@ async function doAction(a, el, e) {
       if (settings.get('engine') !== 'enhanced' && /iPhone|iPad/.test(navigator.userAgent)) toast('Tip: turn on Enhanced audio for the full effects on iPhone', { ms: 5000 });
       break;
     }
+    case 'toggle-ask': accounts.ask = !accounts.ask; toast(accounts.ask ? 'The app will ask who’s listening when it opens' : 'The app opens straight into your last account'); render({ keepScroll: true }); break;
     case 'cloud-remove': {
       const name = el.dataset.name || 'this account';
       if (!(await confirmSheet(`Remove “${name}” from the cloud? It stays on any device that has it (and is saved again from there).`, 'Remove', true))) break;

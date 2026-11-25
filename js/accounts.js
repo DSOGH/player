@@ -8,9 +8,16 @@ export const COLORS = [
   ['#ff5ac8', '#8f5cff'], ['#3d7bff', '#00e0c6'], ['#e94057', '#8a2387'], ['#20bf55', '#01baef'],
 ];
 
-function blank() { return { v: 1, list: [{ id: 'main', name: '', color: 1, created: Date.now() }], active: 'main', ask: true }; }
+function blank() { return { v: 2, list: [{ id: 'main', name: '', color: 1, created: Date.now() }], active: 'main', ask: false }; }
 function read() {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s?.list?.length) return s; } catch (e) { /* */ }
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s?.list?.length) {
+      // v1.25: the app opens straight into the account you used last (the picker is opt-in)
+      if ((s.v || 1) < 2) { s.v = 2; s.ask = false; try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* */ } }
+      return s;
+    }
+  } catch (e) { /* */ }
   return blank();
 }
 function write(s) {
@@ -55,7 +62,7 @@ export const accounts = {
   get all() { return read().list; },
   get activeId() { return read().active; },
   get active() { const s = read(); return s.list.find((a) => a.id === s.active) || s.list[0]; },
-  get ask() { return read().ask !== false; },
+  get ask() { return read().ask === true; },
   set ask(v) { const s = read(); s.ask = !!v; write(s); },
   get(id) { return read().list.find((a) => a.id === id); },
   label(a) { return a?.name || a?.plexName || 'Me'; },
@@ -128,7 +135,7 @@ export const accounts = {
   needsPicker() {
     const s = read();
     if (sessionStorage.getItem('picked')) return !this.isUnlocked(s.active);
-    if (s.list.length + this.cloudOnly().length > 1 && s.ask !== false) return true;
+    if (s.list.length > 1 && s.ask === true) return true;
     return !this.isUnlocked(s.active);
   },
 };

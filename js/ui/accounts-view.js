@@ -39,7 +39,7 @@ function pickerHTML() {
       <button class="login-link" data-l="manage">${manage ? 'Done' : 'Manage accounts'}</button>
       ${mode !== 'boot' ? html`<button class="login-link" data-l="close">Cancel</button>` : ''}
     </div>
-    ${mode === 'boot' && list.length > 1 ? html`<label class="login-ask"><input type="checkbox" data-l="ask" ${accounts.ask ? 'checked' : ''}> Ask every time the app opens</label>` : ''}
+    ${list.length > 1 ? html`<label class="login-ask"><input type="checkbox" data-l="ask" ${accounts.ask ? 'checked' : ''}> Ask who’s listening every time the app opens</label>` : ''}
   </div>`;
 }
 
