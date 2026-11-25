@@ -648,6 +648,14 @@ async function doAction(a, el, e) {
       try { const f = await friends.acceptInvite(d.code); toast(`You and ${f.name} are now friends`); location.replace(`#/chat/${f.id}`); } catch (er) { toast(er.message); }
       break;
     }
+    case 'fr-notify': {
+      if (!('Notification' in window)) { toast('Add Player to your Home Screen first — iPhone only allows notifications for home-screen apps'); break; }
+      const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      settings.set('friendNotify', perm === 'granted');
+      toast(perm === 'granted' ? 'Message notifications are on' : 'Notifications are blocked — turn them on in iPhone Settings → Notifications → Player');
+      render({ keepScroll: true });
+      break;
+    }
     case 'fr-copy': try { await navigator.clipboard.writeText(d.code); toast('Code copied'); } catch (er) { await prompt({ title: 'Friend code', value: d.code, ok: 'Done' }); } break;
     case 'fr-rename': {
       const n = await prompt({ title: 'Your name', value: friends.me.name, ok: 'Save' });
@@ -904,12 +912,20 @@ function wireEngineEvents() {
       const atBottom = main().scrollHeight - main().scrollTop - main().clientHeight < 120;
       render({ keepScroll: true }).then(() => { if (atBottom || !incoming) main().scrollTo({ top: main().scrollHeight, behavior: 'smooth' }); });
       if (incoming) haptic(10);
+    } else if (incoming && document.hidden && settings.get('friendNotify') && 'Notification' in window && Notification.permission === 'granted') {
+      // app in the background (e.g. playing music): a real iPhone notification
+      const f = friends.friend(fid);
+      navigator.serviceWorker?.ready.then((reg) => reg.showNotification(f?.name || 'Friend', {
+        body: m.type === 'song' ? `♪ ${m.song.title} — ${m.song.artist}${m.song.at ? ` (from ${fmtTimeShort(m.song.at)})` : ''}${m.note ? `\n${m.note}` : ''}` : m.text,
+        tag: 'chat-' + fid, renotify: true, icon: './icons/icon-192.png', badge: './icons/icon-192.png', data: { url: `#/chat/${fid}` },
+      })).catch(() => {});
     } else if (incoming) {
       const f = friends.friend(fid);
       toast(`${f?.name || 'Friend'}: ${m.type === 'song' ? '♪ ' + m.song.title : m.text}`.slice(0, 90), { action: { label: 'Open', run: () => { location.hash = '#/chat/' + fid; } }, ms: 5000 });
     }
   });
   addEventListener('hashchange', () => { if (!location.hash.startsWith('#/chat/')) friends.viewing = null; });
+  navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type === 'open' && e.data.url) location.hash = e.data.url; });
   // switches on non-settings pages (e.g. Friends)
   document.addEventListener('change', (e) => {
     const sw = e.target.closest?.('#view [data-set]');

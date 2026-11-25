@@ -16,6 +16,12 @@ const ago = (t) => {
 };
 const avatar = (f, cls = '') => html`<span class="fr-av ${cls}" style="background:${f.color || '#5e5ce6'}">${(f.name || '?')[0].toUpperCase()}</span>`;
 export const drafts = new Map();
+function notifyText() {
+  if (!('Notification' in window)) return 'Add Player to your Home Screen to get notifications';
+  if (Notification.permission === 'granted' && settings.get('friendNotify')) return 'On — while Player is open or playing in the background';
+  if (Notification.permission === 'denied') return 'Blocked — allow in iPhone Settings → Notifications → Player';
+  return 'Tap to get a notification when a friend messages you';
+}
 
 export async function friendsView() {
   if (!friends.ready) {
@@ -57,6 +63,7 @@ export async function friendsView() {
     </section>
     ${rows.length ? html`<div class="fr-list">${rows}</div>` : html`<div class="empty"><div class="empty-ic">${icon('friends')}</div><h3>No friends yet</h3><p>Share your link — once a friend opens it, they show up here.</p></div>`}
     <section class="set-group"><div class="set-card">
+      <button class="set-row link" data-a="fr-notify"><div class="set-text"><span>Message notifications</span><small>${notifyText()}</small></div>${icon('right', 'chev')}</button>
       <label class="set-row"><div class="set-text"><span>Share what I’m listening to</span><small>Friends see your current song next to your name</small></div><input type="checkbox" class="switch" data-set="friendsShareNp" ${settings.get('friendsShareNp') ? 'checked' : ''}></label>
       <button class="set-row link" data-a="fr-rename"><div class="set-text"><span>Your name</span><small>${friends.me.name}</small></div>${icon('right', 'chev')}</button>
     </div></section>

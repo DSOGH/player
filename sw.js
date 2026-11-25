@@ -5,7 +5,7 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.14.4';
+const VERSION = 'v1.15.0';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -277,4 +277,15 @@ self.addEventListener('fetch', (e) => {
   if (p.includes('/__art/')) return e.respondWith(art(decodeURIComponent(p.split('/__art/')[1])));
   if (p.includes('/__demo/')) return e.respondWith(demo(e.request, url));
   if (e.request.method === 'GET') e.respondWith(shell(e.request));
+});
+
+// tapping a message notification opens that chat
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = e.notification.data?.url || '#/friends';
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) { c.postMessage({ type: 'open', url }); if ('focus' in c) return c.focus(); }
+    return self.clients.openWindow('./' + url);
+  })());
 });

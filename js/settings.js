@@ -78,8 +78,11 @@ export const DEFAULTS = {
   smartResume: true, // rewind a couple of seconds after a long pause
   miniPrev: true, // back button in the mini player
   carLyrics: true, // live lyrics in Car Mode
+  friendNotify: false, // notifications for messages while the app runs in the background
   friendsShareNp: false, // let friends see what you're listening to
   friendRelay: 'https://ntfy.sh', // message relay (ntfy) — can be your own
+  vocalStrip: true, // if two vocals would still overlap, blend only the outgoing song's music & beat
+  vocalAware: true, // DJ blends avoid two vocals singing at once (uses synced lyrics)
   rowSwipe: true, // swipe a song right to queue it, left to add it to a playlist
   likeBurst: true, // little burst animation when you like a song
 };

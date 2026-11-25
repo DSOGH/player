@@ -8,7 +8,7 @@ import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
 import { artUrl, lockScreenArtwork } from './art.js';
 import { findCue, findHandoff, titleEntry, keyCompat } from './dj.js';
-import { getLyrics } from './lyrics.js';
+import { getLyrics, cachedLyrics } from './lyrics.js';
 import { plex } from './plex.js';
 
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -17,6 +17,27 @@ const SILENT = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQ
 
 const dbToLin = (db) => Math.pow(10, db / 20);
 
+// Where the singing is, from synced lyrics: [[start, end], …] in track seconds (each line lasts until the
+// next one, at most 6 s)
+function vocalSpans(lyr) {
+  if (!lyr?.synced) return null;
+  const L = lyr.lines, out = [];
+  for (let i = 0; i < L.length; i++) {
+    if (!L[i].text) continue;
+    const next = L[i + 1]?.t ?? L[i].t + 4;
+    out.push([L[i].t, Math.min(next, L[i].t + 6)]);
+  }
+  return out.length ? out : null;
+}
+// Seconds during a blend where both songs are singing and both are clearly audible (the outgoing song
+// is loud for the first ~80%, the incoming one from ~25%)
+function vocalClash(vA, vB, ms, aRate, bS, bRate, ov) {
+  const a = vA.map(([x, y]) => [(x - ms) / aRate, (y - ms) / aRate]).filter(([x, y]) => y > ov * 0.25 && x < ov * 0.8);
+  const b = vB.map(([x, y]) => [(x - bS) / bRate, (y - bS) / bRate]).filter(([x, y]) => y > ov * 0.25 && x < ov * 0.8);
+  let sum = 0;
+  for (const [x1, y1] of a) for (const [x2, y2] of b) sum += Math.max(0, Math.min(y1, y2, ov * 0.8) - Math.max(x1, x2, ov * 0.25));
+  return sum;
+}
 const BASS_CUT = -26;      // dB, low-shelf cut used for DJ "bass swaps"
 const HP_OFF = 12, LP_OFF = 22000;
 
@@ -219,7 +240,9 @@ class Engine extends Emitter {
     d.send = ctx.createGain(); d.send.gain.value = 0;
     // constant delay equal to the vocal isolator's latency, so dry and isolated vocal stay sample-aligned
     d.lat = ctx.createDelay(0.2); d.lat.delayTime.value = 2048 / ctx.sampleRate;
-    d.node.connect(d.rg).connect(d.lat).connect(d.bass).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
+    // dry = the normal signal; during a vocal-free blend it hands over to the instrumental from the isolator
+    d.dry = ctx.createGain();
+    d.node.connect(d.rg).connect(d.lat).connect(d.dry).connect(d.bass).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
     d.fade.connect(d.send).connect(this.echoIn);
     // "karaoke" underlay: side signal (L-R removes centered vocals) + the low end, cheap native nodes
     d.instGain = ctx.createGain(); d.instGain.gain.value = 0;
@@ -241,6 +264,10 @@ class Engine extends Emitter {
       d.voxSend = ctx.createGain(); d.voxSend.gain.value = 0;
       d.rg.connect(d.vox);
       d.vox.connect(d.voxGain, 0);
+      // instrumental (vocals removed) joins the normal chain, so filters / fades / bass swaps still apply
+      d.instV = ctx.createGain(); d.instV.gain.value = 0;
+      d.vox.connect(d.instV, 1);
+      d.instV.connect(d.bass);
       d.voxGain.connect(this.input);
       d.voxGain.connect(d.voxSend).connect(this.echoIn);
     } catch (e) { d.vox = null; }
@@ -270,7 +297,7 @@ class Engine extends Emitter {
     if (!d.node || !this.ctx) return;
     const now = this.ctx.currentTime;
     for (const [p, v] of [[d.bass.gain, 0], [d.hp.frequency, HP_OFF], [d.lp.frequency, LP_OFF], [d.send.gain, 0],
-      [d.instGain.gain, 0], ...(d.vox ? [[d.voxGain.gain, 0], [d.voxSend.gain, 0]] : [])]) {
+      [d.instGain.gain, 0], ...(d.dry ? [[d.dry.gain, 1]] : []), ...(d.vox ? [[d.voxGain.gain, 0], [d.voxSend.gain, 0], ...(d.instV ? [[d.instV.gain, 0]] : [])] : [])]) {
       p.cancelScheduledValues(0);
       p.setValueAtTime(v, now);
     }
@@ -747,7 +774,7 @@ class Engine extends Emitter {
     // part you picked, then a short crossfade into the next song at the very end
     this.stopPreroll();
     const p = this.plan;
-    this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 3);
+    this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 0.3);
     this._lateGo = false;
     if (p && !this.lateSeek) p.aRamped = false;
     if (Math.abs(d.el.playbackRate - 1) > 0.001 && !this.transition) { clearInterval(d.rateTimer); d.el.playbackRate = 1; }
@@ -949,8 +976,10 @@ class Engine extends Emitter {
     if (this.wantsAnalysis()) analyze(t).then(() => this.computePlan());
     else prefetchTrack(t);
     const st = settings.v;
-    if (st.transition === 'smart' && (st.djStyle || 'auto') !== 'beats') {
-      Promise.all([getLyrics(this.cur.track), getLyrics(t)]).then(() => { if (this.upcoming?.track === t) this.computePlan(); });
+    // lyrics tell the DJ where the singing is: word play needs them, and beat-match blends use them so
+    // two vocals never sing over each other
+    if (st.transition === 'smart' && settings.get('vocalAware') !== false) {
+      Promise.all([getLyrics(this.cur.track), getLyrics(t)]).then(() => { if (this.upcoming?.track === t && !this.transition) this.computePlan(); });
     }
   }
 
@@ -1118,15 +1147,38 @@ class Engine extends Emitter {
       // finish the blend as the outgoing song's outro begins (or at its end)
       const mixEnd = outroLen > 4 ? Math.min(end, aA.fadeOutStart + outroLen * 0.5) : end;
       const off = aA.beatOffset || 0;
-      let ms = off + Math.floor((mixEnd - overlapTrack - off) / bar) * bar;
-      if (ms > 1) {
+      const bS = aB.beatOffset || bStart;
+      // Vocal-aware placement: try the latest phrase first, then earlier phrases and shorter blends, and
+      // pick the one where the two songs' singing overlaps least (from the synced lyrics).
+      const vOn = s.vocalAware !== false;
+      const vA = vOn ? vocalSpans(cachedLyrics(A)) : null, vB = vOn ? vocalSpans(cachedLyrics(B)) : null;
+      const tries = [];
+      for (let bt = beats; bt >= 16; bt -= 8) {
+        const ovT = bt * beat;
+        const last = off + Math.floor((mixEnd - ovT - off) / bar) * bar;
+        for (let k = 0; k < 4; k++) {
+          const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
+          if (ms <= 1 || ms < dur * 0.5) break;
+          const ov = ovT / aRate;
+          const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, bS, bRate, ov) : 0;
+          // prefer: no clash, then the natural (latest) spot, then the longer blend
+          tries.push({ bt, ms, ov, clash, score: clash * 10 + k * 1.2 + (beats - bt) * 0.08 });
+        }
+      }
+      tries.sort((x, y) => x.score - y.score);
+      const pick = tries[0];
+      if (pick) {
+        const { ms, ov: overlapR, bt } = pick;
         const T = bpmA * aRate;
         const tempoTxt = Math.abs(aRate - 1) > 0.002 ? `${Math.round(bpmA)}→${Math.round(T)}←${Math.round(aB.bpm)} BPM` : `${Math.round(bpmA)} BPM`;
+        // still two voices at once? take the outgoing song's vocals out and blend just its music and beat
+        const stripA = !!(vA && vB && pick.clash >= 1 && fx && this.voxReady && settings.get('vocalStrip') !== false);
+        const vocalTxt = vA && vB ? (stripA ? ' · vocals out, beat in' : pick.clash < 0.5 ? ' · vocals clear' : '') : '';
         return {
           ...base, type: 'beatmatch', style: 'blend', fx,
-          label: `Beat match · ${tempoTxt}${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : ''} · ${beats} beats`,
-          mixStart: ms, overlap, inDur: overlap * 0.5, outDur: overlap * 0.62, outDelay: overlap * 0.38,
-          bStart: aB.beatOffset || bStart, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate,
+          label: `Beat match · ${tempoTxt}${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : ''}${vocalTxt} · ${bt} beats`,
+          mixStart: ms, overlap: overlapR, inDur: overlapR * 0.5, outDur: overlapR * 0.62, outDelay: overlapR * 0.38,
+          bStart: bS, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate, vocalClash: pick.clash, stripA,
         };
       }
     }
@@ -1267,6 +1319,13 @@ class Engine extends Emitter {
           this.hold(B.lp.frequency, t0); B.lp.frequency.setValueAtTime(2600, t0); B.lp.frequency.exponentialRampToValueAtTime(LP_OFF, t0 + D * 0.42);
           // outgoing highs soften as it leaves
           this.hold(A.lp.frequency, t0); A.lp.frequency.setValueAtTime(LP_OFF, t0 + D * 0.5); A.lp.frequency.exponentialRampToValueAtTime(5200, t0 + D);
+          // vocals would clash: the outgoing song drops its vocals (keeps its music and beat) as the next one comes in
+          if (p.stripA && A.vox && A.instV && A.dry) {
+            this.voxActive(A, true);
+            const ts = t0 + D * 0.18, len = Math.max(0.25, Math.min(1.2, (p.beat || 0.5) * 2));
+            this.hold(A.dry.gain, t0); A.dry.gain.setValueAtTime(1, ts); A.dry.gain.linearRampToValueAtTime(0, ts + len);
+            this.hold(A.instV.gain, t0); A.instV.gain.setValueAtTime(0, ts); A.instV.gain.linearRampToValueAtTime(1.05, ts + len);
+          }
         }
         break;
       }
