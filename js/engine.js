@@ -587,15 +587,17 @@ class Engine extends Emitter {
     const all = (pool || [...library.tracks.values()].filter((t) => library.visible(t))).filter((t) => (t.duration || 200) > 45);
     if (!all.length) return false;
     for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-    if (settings.get('djStyle') !== 'cook') settings.set('djPrevStyle', settings.get('djStyle'));
-    settings.set('transition', 'smart');
-    settings.set('djStyle', 'cook');
+    // Cook It Up only applies to this queue: your normal DJ settings aren't touched
+    if (settings.get('transition') !== 'smart') { this._cookPrevTransition = settings.get('transition'); settings.set('transition', 'smart'); }
     this.cookSalt = Math.random().toString(36).slice(2);
     this.cookHist = [];
     this.playTracks(all.slice(0, 400), 0, { context: { type: 'cook', name: 'DJ Cook It Up' } });
     return true;
   }
+  get cookMode() { return this.context?.type === 'cook'; }
   playTracks(tracks, start = 0, { context = null, shuffle = null } = {}) {
+    // leaving a Cook It Up session: put the transition setting back if Cook It Up had to change it
+    if (this.cookMode && context?.type !== 'cook' && this._cookPrevTransition) { settings.set('transition', this._cookPrevTransition); this._cookPrevTransition = null; }
     if (!tracks.length) return;
     this.queue = tracks.map((t) => t.id);
     this.context = context;
@@ -1114,7 +1116,7 @@ class Engine extends Emitter {
     // DJ Cook It Up: wild, different-every-time transitions at random points in the song
     let cookBlend = null;
     const cookArgs = { A, B, aA, aB, bpmA, dur, end, base, durB };
-    if (djStyle === 'cook' && fx && this.ctx && A.fx !== false) {
+    if (this.cookMode && fx && this.ctx && A.fx !== false) {
       const c = this.cookPlan(cookArgs);
       if (c?.cookBlend) cookBlend = c; else if (c) return c;
     }
@@ -1912,7 +1914,7 @@ class Engine extends Emitter {
     const remaining = dur - t;
     // the next song + its mix are worked out early (10 s into a song), so the mix point is known — and
     // marked on the scrubber — long before it comes, and scrubbing to just before it always works
-    if (!this.upcoming && (remaining < 90 || t > 10)) this.prepareNext();
+    if (!this.upcoming && (remaining < 90 || (this.cookMode && t > 10))) this.prepareNext();
     if (this.lateSeek) {
       if (remaining < 1.6 && !this._lateGo) {
         this._lateGo = true;

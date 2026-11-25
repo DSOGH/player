@@ -161,7 +161,7 @@ export function renderBooth(box) {
     <div class="q-head"><b>DJ Booth</b>
       <span class="q-tools">
         <button class="pill-sm${mode === 'smart' ? ' on' : ''}" data-np="mode">${mode === 'smart' ? 'DJ Mix' : mode === 'crossfade' ? 'Crossfade' : 'Gapless'}</button>
-        ${mode === 'smart' ? html`<button class="pill-sm" data-np="dj-style">${STYLE_NAME[style]}</button>` : ''}
+        ${mode === 'smart' ? html`<button class="pill-sm" data-np="dj-style">${engine.cookMode ? "Cook It Up" : STYLE_NAME[style]}</button>` : ''}
       </span></div>
     ${deck(t, 'Now playing', engine.cur.el.playbackRate || 1)}
     ${trans}

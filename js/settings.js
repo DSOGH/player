@@ -6,7 +6,7 @@ export const DEFAULTS = {
   transition: 'smart',        // 'off' | 'crossfade' | 'smart' (DJ Mix)
   crossfadeSec: 8,
   djEffects: true,            // bass swaps, filter sweeps, echo outs in DJ Mix
-  djStyle: 'beats',           // 'beats' | 'auto' | 'wordplay' | 'cook'
+  djStyle: 'beats',           // 'beats' | 'auto' | 'wordplay' (DJ Cook It Up is its own mode)
   djPrevStyle: 'beats',
   cookLevel: 'smooth',        // DJ Cook It Up: 'smooth' | 'hype' | 'wild'
   harmonicMix: true,          // use musical key (Camelot) to choose blend length
@@ -17,7 +17,7 @@ export const DEFAULTS = {
   beatMatch: true,            // align mixes to the beat when BPMs are known
   tempoMatch: true,           // nudge incoming tempo during the mix
   tempoMatchMax: 5,           // percent: the most a song is sped up / slowed down to match (beyond that: a different kind of mix)
-  sv: 6,                      // settings schema version
+  sv: 7,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
   onlineBpm: true,
@@ -136,6 +136,7 @@ class Settings extends Emitter {
     if (saved.sv < 4) { saved.skipFade = false; saved.sv = 4; } // v1.11: skipping is an instant cut
     if (saved.sv < 5) { if (saved.deskWidth === 'comfortable') saved.deskWidth = 'auto'; saved.sv = 5; }
     if (saved.sv < 6) { if (!saved.tempoMatchMax || saved.tempoMatchMax >= 12) saved.tempoMatchMax = 5; saved.sv = 6; } // v1.17.1: subtler tempo changes
+    if (saved.sv < 7) { if (saved.djStyle === 'cook') saved.djStyle = saved.djPrevStyle && saved.djPrevStyle !== 'cook' ? saved.djPrevStyle : 'beats'; saved.sv = 7; } // v1.22.1: Cook It Up is its own mode, not a DJ style
     this.v = { ...DEFAULTS, ...saved };
   }
   get(k) { return this.v[k]; }

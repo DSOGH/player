@@ -195,10 +195,10 @@ async function act(a, el) {
     case 'idle-shuffle': { const all = [...library.tracks.values()].filter((x) => library.visible(x)); if (all.length) engine.playTracks(all, -1, { shuffle: true, context: { type: 'library', name: 'All songs' } }); break; }
     case 'hear-mix': { const p = engine.plan; if (p) { engine.seek(Math.max(0, p.mixStart - 6)); haptic(10); toast('6 seconds before the mix'); } break; }
     case 'dj-style': {
-      const order = ['beats', 'auto', 'wordplay', 'cook'];
+      const order = ['beats', 'auto', 'wordplay'];
       const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % order.length];
       settings.set('djStyle', nx);
-      toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play', cook: 'DJ style: Cook It Up 🔥' }[nx]);
+      toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play' }[nx]);
       if (engine.upcoming) engine.computePlan();
       renderBooth($('#np .np-booth'));
       break;

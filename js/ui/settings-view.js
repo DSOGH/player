@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.22.0';
+export const APP_VERSION = '1.22.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -257,8 +257,8 @@ function playback() {
       ${tm === 'smart' ? html`
         ${button('cook-it-up', 'sparkle', 'DJ Cook It Up', { sub: 'Play your whole library at random with DJ tricks' })}
       ${seg('cookLevel', 'Cook It Up energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'Mostly clean beat-matched blends, with the odd echo throw or cut — near the end of songs.', hype: 'More tricks: loop rolls, brakes, spin-backs, risers — and it leaves songs a bit earlier.', wild: 'Everything, often, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
-      ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play'], ['cook', 'Cook It Up']],
-          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', cook: 'DJ Cook It Up: goes wild — tape stops, stutter rolls, dub echoes, risers with a boom, speed-up launches, spin-outs — a different one every time, at random points in the songs, landing on the beat. Start it from Home to play your whole library at random.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
+      ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play']],
+          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
         ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
         ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}` : ''}
       ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
