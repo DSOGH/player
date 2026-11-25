@@ -279,41 +279,52 @@ export function connectSheet({ plexSignIn }) {
 
 export { accounts };
 
-// Signed in to a Plex that already has a Player account saved → offer to bring it back
-export function restoreSheet(r, { restore, fresh }) {
-  const d = r.d, sheet = $('#sheet');
-  const p = d.profile || {};
-  const a = { name: p.name || 'Your account', color: p.color ?? 1 };
-  const when = d.at ? new Date(d.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  const nPlays = Object.values(d.statsBy || {}).reduce((n, v) => n + Object.values(v.plays || {}).reduce((m, arr) => m + arr.length, 0), 0) + Object.values(d.plays || {}).reduce((m, arr) => m + arr.length, 0);
-  const nDev = Object.keys(d.statsBy || {}).length;
-  const parts = [
-    ['profile', 'Name, colour & PIN', p.name || ''],
-    ['settings', 'Settings', d.settings ? 'DJ, sound, look & everything else' : ''],
-    ['music', 'Playlists & likes', [d.playlists?.length ? `${d.playlists.length} playlist${d.playlists.length > 1 ? 's' : ''}` : '', d.likes?.length ? `${d.likes.length} likes` : ''].filter(Boolean).join(' · ')],
-    ['dj', 'BPMs & clean/explicit picks', Object.keys(d.bpm || {}).length ? `${Object.keys(d.bpm).length} tapped BPMs` : ''],
-    ['friends', 'Friends & chats', d.friends?.list?.length ? `${d.friends.list.length} friend${d.friends.list.length > 1 ? 's' : ''}${Object.keys(d.friends.chats || {}).length ? ' · recent messages' : ''}` : ''],
-    ['stats', 'Listening stats', nPlays ? `${nPlays.toLocaleString()} plays${nDev > 1 ? ` from ${nDev} devices` : ''}` : ''],
-  ].filter(([k, , sub]) => k === 'profile' || k === 'settings' ? true : !!sub);
-  const [c1, c2] = accounts.colors(a);
-  sheet.innerHTML = html`<div class="sheet-backdrop"></div>
-    <div class="sheet-panel dialog connect-sheet" style="--c1:${c1};--c2:${c2}">
-      ${avatar(a, 'big')}
-      <div class="sheet-title big">Welcome back${p.name ? `, ${p.name}` : ''}</div>
-      <p class="plex-sub">Your Player account is saved on ${r.where === 'GitHub' ? 'GitHub' : 'your Plex'}${d.device ? ` from ${d.device}` : ''}${when ? ` (${when})` : ''}. Bring it to this device?</p>
-      <div class="restore-parts">${parts.map(([k, l, sub]) => html`<label class="restore-part"><input type="checkbox" value="${k}" checked><span><b>${l}</b>${sub ? html`<small>${sub}</small>` : ''}</span></label>`)}</div>
-      <button class="btn pill primary connect-btn restore-go" data-c="restore">${icon('download')}Restore my account</button>
-      <button class="sheet-cancel" data-c="fresh">Start fresh on this device</button>
-    </div>`.toString();
+// Signed in to a Plex (or GitHub) that has Player accounts saved → pick one to bring back
+// `box` = { list: [profile data…], where, here: Set of ids already on this device, mine: this account's id }
+export function restoreSheet(box, { restore, fresh }) {
+  const sheet = $('#sheet');
+  const list = box.list || [];
+  if (!list.length) return;
+  let sel = list.find((d) => d.cid === box.mine) || list.find((d) => !box.here?.has(d.cid)) || list[0];
+  const ago = (t) => t ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const partsOf = (d) => {
+    const nPlays = Object.values(d.statsBy || {}).reduce((n, v) => n + Object.values(v.plays || {}).reduce((m, arr) => m + arr.length, 0), 0) + Object.values(d.plays || {}).reduce((m, arr) => m + arr.length, 0);
+    const nDev = Object.keys(d.statsBy || {}).length;
+    return [
+      ['profile', 'Name, colour & PIN', d.profile?.name || ''],
+      ['settings', 'Settings', d.settings ? 'DJ, sound, look & everything else' : ''],
+      ['music', 'Playlists & likes', [d.playlists?.length ? `${d.playlists.length} playlist${d.playlists.length > 1 ? 's' : ''}` : '', d.likes?.length ? `${d.likes.length} likes` : ''].filter(Boolean).join(' · ')],
+      ['dj', 'BPMs & clean/explicit picks', Object.keys(d.bpm || {}).length ? `${Object.keys(d.bpm).length} tapped BPMs` : ''],
+      ['friends', 'Friends & chats', d.friends?.list?.length ? `${d.friends.list.length} friend${d.friends.list.length > 1 ? 's' : ''}${Object.keys(d.friends.chats || {}).length ? ' · recent messages' : ''}` : ''],
+      ['stats', 'Listening stats', nPlays ? `${nPlays.toLocaleString()} plays${nDev > 1 ? ` from ${nDev} devices` : ''}` : ''],
+    ].filter(([k, , sub]) => k === 'profile' || k === 'settings' ? true : !!sub);
+  };
+  const draw = () => {
+    const p = sel.profile || {};
+    const a = { name: p.name || 'Your account', color: p.color ?? 1 };
+    const [c1, c2] = accounts.colors(a);
+    sheet.innerHTML = html`<div class="sheet-backdrop"></div>
+      <div class="sheet-panel dialog connect-sheet" style="--c1:${c1};--c2:${c2}">
+        ${list.length > 1 ? html`<div class="restore-who">${list.map((d) => { const pp = d.profile || {}, aa = { name: pp.name || 'Account', color: pp.color ?? 1 }; return html`<button class="restore-acct${d === sel ? ' on' : ''}" data-cid="${d.cid}">${avatar(aa, 'sm')}<span><b>${accounts.label(aa)}</b><small>${box.here?.has(d.cid) ? 'On this device' : d.cid === box.mine ? 'This account' : ago(d.at)}</small></span></button>`; })}</div>`
+          : avatar(a, 'big')}
+        <div class="sheet-title big">${list.length > 1 ? `${list.length} accounts saved` : `Welcome back${p.name ? `, ${p.name}` : ''}`}</div>
+        <p class="plex-sub">${list.length > 1 ? `Pick yours — each account is kept separately on ${box.where === 'GitHub' ? 'GitHub' : 'your Plex'}, nothing overwrites another. ` : `Your Player account is saved on ${box.where === 'GitHub' ? 'GitHub' : 'your Plex'}. `}<b>${accounts.label(a)}</b> was saved${sel.device ? ` from ${sel.device}` : ''}${sel.at ? ` (${ago(sel.at)})` : ''}.</p>
+        <div class="restore-parts">${partsOf(sel).map(([k, l, sub]) => html`<label class="restore-part"><input type="checkbox" value="${k}" checked><span><b>${l}</b>${sub ? html`<small>${sub}</small>` : ''}</span></label>`)}</div>
+        <button class="btn pill primary connect-btn restore-go" data-c="restore">${icon('download')}Restore ${accounts.label(a)}</button>
+        <button class="sheet-cancel" data-c="fresh">Start fresh as a new account</button>
+      </div>`.toString();
+  };
+  draw();
   requestAnimationFrame(() => sheet.classList.add('open'));
   const shut = () => { sheet.classList.remove('open'); setTimeout(() => { if (!sheet.classList.contains('open')) sheet.innerHTML = ''; }, 260); };
   sheet.onclick = async (e) => {
+    const who = e.target.closest('[data-cid]');
+    if (who) { sel = list.find((d) => d.cid === who.dataset.cid) || sel; draw(); return; }
     const c = e.target.closest('[data-c]')?.dataset.c;
     if (c === 'restore') {
-      const sel = [...sheet.querySelectorAll('.restore-part input:checked')].map((x) => x.value);
-      if (!sel.length) return;
-      e.target.closest('button').textContent = 'Restoring…'; await restore(sel); shut();
-    }
-    else if (c === 'fresh') { shut(); fresh(); }
+      const parts = [...sheet.querySelectorAll('.restore-part input:checked')].map((x) => x.value);
+      if (!parts.length) return;
+      e.target.closest('button').textContent = 'Restoring…'; await restore(sel, parts); shut();
+    } else if (c === 'fresh') { shut(); fresh(); }
   };
 }

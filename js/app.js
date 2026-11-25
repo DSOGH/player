@@ -552,8 +552,8 @@ async function doAction(a, el, e) {
     }
     case 'cloud-restore': {
       const r = await cloud.fetchRemote();
-      if (!r) { toast('Nothing saved in the cloud yet'); break; }
-      restoreSheet(r, { restore: async (parts) => { await cloud.apply(r.d, { full: true, parts }); applyTheme(); paintAccountChip(); toast('Restored'); render({ keepScroll: true }); }, fresh: () => {} });
+      if (!cloud.listProfiles(r).length) { toast('Nothing saved in the cloud yet'); break; }
+      offerRestore(r, { manual: true });
       break;
     }
     case 'cloud-github': {
@@ -561,7 +561,7 @@ async function doAction(a, el, e) {
       if (tok == null || tok === '••••••') break;
       try {
         await cloud.setGithub(tok); cloud.firstOk = true;
-        if (tok.trim()) { const r = await cloud.ghRead().catch(() => null); toast('GitHub connected'); if (r && !cloud.state.at) restoreSheet({ d: r, where: 'GitHub' }, { restore: async (parts) => { await cloud.apply(r, { full: true, parts }); applyTheme(); render({ keepScroll: true }); }, fresh: () => cloud.push() }); else cloud.push(); }
+        if (tok.trim()) { const r = await cloud.fetchRemote().catch(() => null); toast('GitHub connected'); if (cloud.listProfiles(r).length && !cloud.state.at) offerRestore(r); else cloud.push(); }
         else toast('GitHub backup removed');
       } catch (e) { toast(e.message || 'GitHub didn’t accept that token'); await cloud.setGithub('').catch(() => {}); }
       render({ keepScroll: true });
@@ -1150,6 +1150,27 @@ function warmAllCovers() {
 
 // ---------- boot ----------
 let cloudAsked = false;
+// the accounts saved in the cloud: pick one to bring onto this device's account (or start a new one).
+// Each account has its own id there, so restoring or saving one never overwrites another.
+function offerRestore(r, { manual = false } = {}) {
+  const here = new Set(accounts.all.filter((a) => a.id !== accounts.activeId && a.cid).map((a) => a.cid));
+  restoreSheet({ list: cloud.listProfiles(r), where: r.where, here, mine: accounts.active?.cid }, {
+    restore: async (d, parts) => {
+      cloud.firstOk = true;
+      await cloud.apply(d, { full: true, parts });
+      // copied from an account that's also on this device: this one becomes its own account (own id)
+      if (here.has(d.cid)) { accounts.update(accounts.activeId, { cid: '' }); cloud.remoteStats = null; }
+      applyTheme(); paintAccountChip();
+      toast(manual ? `Restored ${d.profile?.name || 'account'}` : `Welcome back${d.profile?.name ? ', ' + d.profile.name : ''} — your Player account is restored`);
+      rerender(); cloud.schedule(4000);
+    },
+    fresh: () => {
+      // a brand-new id: this account is saved next to the others, never on top of them
+      if (!manual || here.has(accounts.active?.cid)) accounts.update(accounts.activeId, { cid: '' });
+      cloud.firstOk = true; cloud.remoteStats = null; cloud.schedule(3000);
+    },
+  });
+}
 async function checkCloud() {
   if (!cloud.enabled || (!plex.connected && !cloud.ghToken) || cloud.busy) return;
   try {
@@ -1157,10 +1178,7 @@ async function checkCloud() {
       if (cloudAsked) return;
       cloudAsked = true;
       const r = await cloud.fetchRemote();
-      if (r) restoreSheet(r, {
-        restore: async (parts) => { cloud.firstOk = true; await cloud.apply(r.d, { full: true, parts }); applyTheme(); paintAccountChip(); toast(`Welcome back${r.d.profile?.name ? ', ' + r.d.profile.name : ''} — your Player account is restored`); rerender(); cloud.schedule(4000); },
-        fresh: () => { cloud.firstOk = true; cloud.schedule(3000); },
-      });
+      if (cloud.listProfiles(r).length) offerRestore(r);
       else { cloud.firstOk = true; cloud.schedule(30000); }
       return;
     }
