@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.17.0';
+export const APP_VERSION = '1.17.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -228,7 +228,7 @@ function playback() {
       ${toggle('vocalAware', 'Keep vocals apart', 'Places each blend where only one song is singing (uses synced lyrics)')}
       ${toggle('vocalStrip', 'Cut vocals when they’d clash', 'If both songs would still be singing, the outgoing one drops its vocals and only its music & beat blend in')}
       ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back (pitch preserved)')}
-      ${slider('tempoMatchMax', 'Max tempo change per song', 1, 16, 1, '%', 'Both songs meet in the middle, so tempos up to twice this far apart still mix on the beat')}
+      ${slider('tempoMatchMax', 'Max tempo change', 1, 12, 1, '%', 'How much a song may be sped up or slowed down to match the beat. Small = you never notice it; songs further apart get a different kind of mix. The song goes back to normal speed as soon as the old one is gone.')}
       ${toggle('preferBpmTag', 'Prefer BPM tags', 'Use the BPM from your file tags when present')}
       ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
     `)}

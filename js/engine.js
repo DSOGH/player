@@ -1162,7 +1162,7 @@ class Engine extends Emitter {
     // tempo sync: the incoming song matches the outgoing one; for bigger gaps both meet in the middle
     const maxEach = (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
     // iPhone: every speed change of a playing song can click, so only the incoming song changes speed (once, before it's heard)
-    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 2.02 + 0.005) && end > 20) {
+    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 1.6 + 0.005) && end > 20) {
       let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
       if (!IOS && s.tempoMatch && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
@@ -1412,7 +1412,9 @@ class Engine extends Emitter {
     this.transitionTimer = setTimeout(() => { if (A.token === tok) this.finishTransition(); }, total + 120);
     if (Math.abs((p.rate || 1) - 1) > 0.001) {
       const tokB = B.token;
-      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, 10); }, D * 1000);
+      // back to the song's real speed as soon as the old song is basically gone (not seconds later)
+      const back = IOS ? D * 0.85 : D * 0.7;
+      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, IOS ? 0 : Math.min(3, D * 0.3)); }, back * 1000);
     }
     this.afterTrackChange(p);
   }
@@ -1422,13 +1424,14 @@ class Engine extends Emitter {
     clearInterval(this.lockTimer);
     const rb = p.rate || 1;
     const started = performance.now();
-    const until = started + (p.overlap || 8) * 1000;
+    // keep the beats locked only while both songs are clearly audible; then the new song is let go
+    // (and returns to its own speed) — the lock must never pull it back to the mixing speed
+    const until = started + (p.overlap || 8) * (IOS ? 0.83 : 0.68) * 1000;
     const tokA = A.token, tokB = B.token;
     let lastChange = 0;
     this.lockTimer = setInterval(() => {
       if (performance.now() > until || A.token !== tokA || B.token !== tokB || A.el.paused || B.el.paused) {
         clearInterval(this.lockTimer);
-        if (B.token === tokB) B.el.playbackRate = rb;
         return;
       }
       const ra = A.el.playbackRate || 1;

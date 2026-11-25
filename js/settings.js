@@ -14,8 +14,8 @@ export const DEFAULTS = {
   skipSilence: true,          // trim leading/trailing silence
   beatMatch: true,            // align mixes to the beat when BPMs are known
   tempoMatch: true,           // nudge incoming tempo during the mix
-  tempoMatchMax: 12,          // percent (each song); songs meet in the middle for bigger gaps
-  sv: 5,                      // settings schema version
+  tempoMatchMax: 5,           // percent: the most a song is sped up / slowed down to match (beyond that: a different kind of mix)
+  sv: 6,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
   analysisNetwork: 'any',     // 'any' | 'wifi'
@@ -127,6 +127,7 @@ class Settings extends Emitter {
     if (saved.sv < 3) { saved.djStyle = 'beats'; saved.sv = 3; } // v1.7: beat match is the default DJ style
     if (saved.sv < 4) { saved.skipFade = false; saved.sv = 4; } // v1.11: skipping is an instant cut
     if (saved.sv < 5) { if (saved.deskWidth === 'comfortable') saved.deskWidth = 'auto'; saved.sv = 5; }
+    if (saved.sv < 6) { if (!saved.tempoMatchMax || saved.tempoMatchMax >= 12) saved.tempoMatchMax = 5; saved.sv = 6; } // v1.17.1: subtler tempo changes
     this.v = { ...DEFAULTS, ...saved };
   }
   get(k) { return this.v[k]; }
