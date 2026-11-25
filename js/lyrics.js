@@ -36,6 +36,16 @@ function fromPlexXml(text) {
 function fromText(text, source) {
   if (!text || !String(text).trim()) return null;
   if (/^\s*<\?xml|^\s*<MediaContainer/i.test(text)) return fromPlexXml(text);
+  if (/^\s*\{/.test(text)) {
+    // Plex answering in JSON: { MediaContainer: { Lyrics: [{ Line: [{ startOffset, Span: [{ text }] }] }] } }
+    try {
+      const j = JSON.parse(text);
+      const L = (j.MediaContainer?.Lyrics?.[0]?.Line || []).map((l) => ({ t: l.startOffset != null ? l.startOffset / 1000 : NaN, text: (l.Span || []).map((x) => x.text || '').join('').trim() }));
+      if (!L.length) return null;
+      const synced = L.every((l) => isFinite(l.t));
+      return { synced, lines: synced ? L : L.map((l) => ({ t: 0, text: l.text })), source };
+    } catch (e) { return null; }
+  }
   // drop LRC metadata lines ([ar:..], [ti:..], [offset:..]) but honour the offset
   const off = /\[offset:\s*([+-]?\d+)\]/i.exec(text);
   if (off) {
@@ -102,21 +112,27 @@ export async function getLyrics(t, { online = settings.get('onlineLyrics'), fres
     if (t.lrc) {
       try { const r = await fetch(nasUrl(t.lrc)); if (r.ok) take(fromText(await r.text(), 'Lyrics file')); } catch (e) { netErr = true; }
     }
-    if (!out && t.plex && plex.signedIn) {
-      try { take(fromText(await plex.lyrics(t), 'Plex')); } catch (e) { netErr = true; }
-    }
-    if (!out && t.lyrics) take(fromText(t.lyrics, 'Embedded'));
-    // only plain (unsynced) words so far → look online for a time-synced version
-    if (!out && online && !t.demo) {
+    // Plex and the online lookup run side by side (a slow Plex connection can't hold the lyrics up);
+    // Plex wins if it answers quickly with synced lyrics, otherwise whichever synced version arrives first
+    const timeout = (ms) => new Promise((r) => setTimeout(() => r('timeout'), ms));
+    const plexP = !out && t.plex && plex.signedIn
+      ? plex.lyrics(t).then((x) => fromText(x, 'Plex')).catch(() => { netErr = true; return null; }) : Promise.resolve(null);
+    const onlineP = !out && online && !t.demo ? (async () => {
       const key = KEY + t.id;
       const c = fresh ? null : await db.kv.get(key);
-      if (c && (c.found || Date.now() - c.at < MISS_TTL)) take(c.found ? c.data : null);
-      else {
-        const res = await lrclib(t);
-        if (res === undefined) netErr = true;
-        else await db.kv.set(key, { found: !!res, data: res, at: Date.now() });
-        take(res);
-      }
+      if (c && (c.found || Date.now() - c.at < MISS_TTL)) return c.found ? c.data : null;
+      const res = await lrclib(t);
+      if (res === undefined) { netErr = true; return null; }
+      await db.kv.set(key, { found: !!res, data: res, at: Date.now() });
+      return res;
+    })().catch(() => null) : Promise.resolve(null);
+    if (!out) {
+      const first = await Promise.race([plexP, timeout(3500)]);
+      if (first !== 'timeout') take(first);
+      if (!out && t.lyrics) take(fromText(t.lyrics, 'Embedded'));
+      if (!out) take(await Promise.race([onlineP, timeout(9000)]).then((x) => (x === 'timeout' ? null : x)));
+      // Plex was slow but may still bring synced lyrics
+      if (!out && first === 'timeout') take(await Promise.race([plexP, timeout(6000)]).then((x) => (x === 'timeout' ? null : x)));
     }
     out = out || plain;
     // a network hiccup isn't "no lyrics": try again next time instead of remembering the miss

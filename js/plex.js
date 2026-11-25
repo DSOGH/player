@@ -534,7 +534,7 @@ class Plex extends Emitter {
     try { await this.enrich(t); } catch (e) { return null; }
     if (!t.plexLyrics?.key) return null;
     try {
-      const r = await fetch(`${this.cfg.base}${t.plexLyrics.key}?${this.q()}`, { headers: { Accept: 'text/plain' } });
+      const r = await fetch(`${this.cfg.base}${t.plexLyrics.key}?${this.q()}`, { headers: { Accept: 'text/plain' }, signal: withTimeout(8000) });
       if (!r.ok) return null;
       return await r.text();
     } catch (e) { return null; }
