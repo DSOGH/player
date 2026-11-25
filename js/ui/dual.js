@@ -53,7 +53,11 @@ export function detect() {
   const body = document.body;
   const root = document.documentElement;
   const pref = settings.get('dualScreen');
-  const W = innerWidth, H = innerHeight;
+  // ultrawide monitors: optionally keep the whole app in a centered frame
+  const frame = isDesktop() && settings.get('deskFrame') === 'centered' ? Math.min(innerWidth, 2560) : innerWidth;
+  document.documentElement.style.setProperty('--frame-w', frame + 'px');
+  document.body.classList.toggle('frame-centered', frame < innerWidth);
+  const W = frame, H = innerHeight;
   let mode = 'single', device = '', leftW = 0, hinge = 0, topH = 0;
   const segs0 = segments();
   if (pref !== 'off' || (isDesktop() && !segs0)) {
@@ -63,7 +67,8 @@ export function detect() {
       // computer: sidebar + library in the middle + a player column on the right
       mode = 'wide'; device = 'Desktop';
       const pw = { narrow: [340, 0.24, 400], normal: [380, 0.3, 480], wide: [460, 0.36, 620] }[settings.get('deskPlayerW')] || [380, 0.3, 480];
-      leftW = Math.round(W - Math.min(pw[2], Math.max(pw[0], W * pw[1])));
+      const uw = W / H >= 2.1 ? 1.2 : 1; // ultrawide: player column a little wider
+      leftW = Math.round(W - Math.min(pw[2] * uw, Math.max(pw[0] * uw, W * pw[1])));
     } else if (segs) {
       const [a, b] = segs;
       device = 'Dual screen';
@@ -115,7 +120,7 @@ export function detect() {
   body.classList.toggle('desk', device === 'Desktop');
   body.classList.toggle('desk-side', device === 'Desktop' && settings.get('deskSidebar') !== false);
   body.dataset.deskWidth = settings.get('deskWidth') || 'comfortable';
-  body.classList.toggle('ultrawide', W >= 2000 || W / H >= 2.1);
+  body.classList.toggle('ultrawide', innerWidth >= 2000 || innerWidth / H >= 2.1);
   body.classList.toggle('dual-duo', /Duo/.test(device));
   body.classList.toggle('dual-swap', mode !== 'single' && !!settings.get('dualSwap'));
   if (leftW) root.style.setProperty('--seg-w', leftW + 'px'); else root.style.removeProperty('--seg-w');

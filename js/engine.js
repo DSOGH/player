@@ -1357,13 +1357,15 @@ class Engine extends Emitter {
     if (p.style !== 'gapless') library.addMix(p.style);
     this.notePlayed(A);
     const total = (p.style === 'echo' ? 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
-    this.transition = { from: A, to: B, plan: p };
+    this.transition = { from: A, to: B, plan: p, at: performance.now(), total: 0 };
+    queueMicrotask(() => this.emit('transition', true));
     this.ai = 1 - this.ai;
     this.index = nx.index;
     this.upcoming = null;
     this.plan = null;
     this.emit('plan', null);
     const tok = A.token;
+    if (this.transition) this.transition.total = total;
     this.transitionTimer = setTimeout(() => { if (A.token === tok) this.finishTransition(); }, total + 120);
     if (Math.abs((p.rate || 1) - 1) > 0.001) {
       const tokB = B.token;
@@ -1470,7 +1472,8 @@ class Engine extends Emitter {
     }, 150);
     this.notePlayed(A);
     library.addMix('acapella');
-    this.transition = { from: A, to: B, plan: p };
+    this.transition = { from: A, to: B, plan: p, at: performance.now(), total: 0 };
+    queueMicrotask(() => this.emit('transition', true));
     this.ai = 1 - this.ai;
     this.index = nx.index;
     this.upcoming = null;
@@ -1486,6 +1489,7 @@ class Engine extends Emitter {
     clearTimeout(this.transitionTimer);
     const { from, to } = this.transition;
     this.transition = null;
+    this.emit('transition', false);
     if (from !== this.cur) { this.resetFx(from); from.unload(); this.reassertNowPlaying(); }
     if (to?.fx && this.ctx) {
       this.voxActive(to, false);

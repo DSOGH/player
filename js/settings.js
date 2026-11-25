@@ -15,7 +15,7 @@ export const DEFAULTS = {
   beatMatch: true,            // align mixes to the beat when BPMs are known
   tempoMatch: true,           // nudge incoming tempo during the mix
   tempoMatchMax: 12,          // percent (each song); songs meet in the middle for bigger gaps
-  sv: 4,                      // settings schema version
+  sv: 5,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
   analysisNetwork: 'any',     // 'any' | 'wifi'
@@ -84,7 +84,8 @@ export const DEFAULTS = {
   vocalStrip: true, // if two vocals would still overlap, blend only the outgoing song's music & beat
   vocalAware: true, // DJ blends avoid two vocals singing at once (uses synced lyrics)
   layoutMode: 'auto', // 'auto' | 'desktop' | 'mobile'
-  deskWidth: 'comfortable', // computer: content max width
+  deskWidth: 'auto', // computer: content width ('auto' = album grids use the width, text pages stay readable)
+  deskFrame: 'full', // computer: 'full' | 'centered' (ultrawide: app in a centered 2560 px frame)
   deskPlayerW: 'normal', // computer: player column width
   deskSidebar: true, // computer: sidebar navigation
   rowSwipe: true, // swipe a song right to queue it, left to add it to a playlist
@@ -124,6 +125,7 @@ class Settings extends Emitter {
     }
     if (saved.sv < 3) { saved.djStyle = 'beats'; saved.sv = 3; } // v1.7: beat match is the default DJ style
     if (saved.sv < 4) { saved.skipFade = false; saved.sv = 4; } // v1.11: skipping is an instant cut
+    if (saved.sv < 5) { if (saved.deskWidth === 'comfortable') saved.deskWidth = 'auto'; saved.sv = 5; }
     this.v = { ...DEFAULTS, ...saved };
   }
   get(k) { return this.v[k]; }

@@ -115,7 +115,7 @@ export function renderBooth(box) {
   const mode = settings.get('transition');
   let trans;
   if (tr) {
-    trans = html`<div class="dj-trans live">${icon(STYLE_ICON[tr.plan.style] || 'smart')}<div><b>Mixing now</b><span>${tr.plan.label}</span></div></div>`;
+    trans = html`<div class="dj-trans live">${icon(STYLE_ICON[tr.plan.style] || 'smart')}<div><b>Mixing now → ${tr.to.track?.title || ''}</b><span>${tr.plan.label}</span><div class="dj-mixbar"><i data-dj-mixbar></i></div></div></div>`;
   } else if (p && nx) {
     const steps = explain(p, t, nx);
     trans = html`<div class="dj-trans">
@@ -158,6 +158,10 @@ export function renderBooth(box) {
 }
 
 export function tickBooth(box) {
+  const tr = engine.transition, bar = box.querySelector('[data-dj-mixbar]');
+  if (tr && bar) bar.style.transform = `scaleX(${tr.total ? Math.min(1, (performance.now() - tr.at) / tr.total) : 0})`;
+  // the booth still shows a finished mix (or a new plan arrived): redraw
+  if ((!tr && bar) || (tr && box.querySelector('[data-dj-when]'))) { renderBooth(box); return; }
   const p = engine.plan;
   const el = box.querySelector('[data-dj-when]');
   if (!p || !el) return;

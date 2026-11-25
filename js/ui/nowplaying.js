@@ -107,6 +107,8 @@ export function initNowPlaying(h) {
   engine.on('plan', () => { preloadArt(engine.upcoming?.track?.artId, [200, 360, 640]); });
   engine.on('plan', () => { renderHint(); renderWaveMarks(); if (mode === 'booth') renderBooth($('#np .np-booth')); if (mode === 'lyrics' && lyrics) markCue(); });
   engine.on('queue', () => { if (mode === 'booth') renderBooth($('#np .np-booth')); });
+  // a mix starting / finishing: the booth card and the "Next" line follow it live
+  engine.on('transition', () => { renderHint(); if (mode === 'booth') renderBooth($('#np .np-booth')); });
   engine.on('analysis', (id) => {
     if (id === engine.track?.id) { renderChips(); drawWave(); }
     if (mode === 'booth') renderBooth($('#np .np-booth'));
@@ -424,7 +426,15 @@ function renderChips() {
 function renderHint() {
   const el = $('#np .np-next-hint');
   if (!el) return;
-  const p = engine.plan, nx = engine.upcoming;
+  const p = engine.plan, nx = engine.upcoming, tr = engine.transition;
+  if (settings.get('showNextTransition') && tr) {
+    // mixing right now: say so, with a live progress readout
+    el.dataset.mix = '';
+    el.innerHTML = html`${icon('smart')}<span>Mixing into <b>${tr.to.track?.title || ''}</b> · ${tr.plan.label}</span><em class="mixing"></em>`;
+    el.classList.add('show', 'live');
+    return;
+  }
+  el.classList.remove('live');
   if (!settings.get('showNextTransition') || !p || !nx) { el.classList.remove('show'); return; }
   el.dataset.mix = p.mixStart;
   el.innerHTML = html`${icon(p.style === 'gapless' ? 'gapless' : p.style === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>`;
@@ -455,8 +465,14 @@ function renderTime() {
   if (mode === 'booth') tickBooth(np.querySelector('.np-booth'));
   const hint = np.querySelector('.np-next-hint.show em');
   if (hint) {
-    const left = (+np.querySelector('.np-next-hint').dataset.mix || 0) - t;
-    hint.textContent = left > 0 && left < 60 ? `in ${fmtTime(left)}` : '';
+    const tr = engine.transition;
+    if (tr) {
+      const k = tr.total ? clamp((performance.now() - tr.at) / tr.total, 0, 1) : 0;
+      hint.textContent = `${Math.round(k * 100)}%`;
+    } else {
+      const left = (+np.querySelector('.np-next-hint').dataset.mix || 0) - t;
+      hint.textContent = left > 0 && left < 60 ? `in ${fmtTime(left)}` : '';
+    }
   }
   if (mode === 'lyrics' && lyrics?.synced) {
     let idx = -1;
