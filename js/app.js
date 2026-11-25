@@ -678,7 +678,7 @@ async function doAction(a, el, e) {
         toast('Message notifications on — even when Player is closed');
       } catch (er) {
         console.warn('push', er);
-        toast(er.message === 'relay-no-push' ? 'Your message relay doesn’t support push — notifications only while Player is open' : 'Couldn’t turn on push — notifications only while Player is open');
+        toast(er.message === 'relay-no-push' ? 'Your message relay doesn’t support push — notifications only while Player is open' : `Couldn’t turn on push: ${er.message || er}`, { ms: 9000 });
       }
       render({ keepScroll: true });
       break;

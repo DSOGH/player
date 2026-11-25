@@ -1174,32 +1174,39 @@ class Engine extends Emitter {
       // finish the blend as the outgoing song's outro begins (or at its end)
       const mixEnd = outroLen > 4 ? Math.min(end, aA.fadeOutStart + outroLen * 0.5) : end;
       const off = aA.beatOffset || 0;
-      const bS = aB.beatOffset || bStart;
-      // Vocal-aware placement: try the latest phrase first, then earlier phrases and shorter blends, and
-      // pick the one where the two songs' singing overlaps least (from the synced lyrics).
+      // The next song starts at its very first sound — snapped onto its own beat grid (never skipping
+      // more than a fraction of a beat of near-silence), so its intro is never cut.
+      const beatB = 60 / aB.bpm, offB = aB.beatOffset || 0, leadB = aB.leadIn || 0;
+      // the grid point at or just before the first sound; if that's before the file starts, the song
+      // starts at 0 and the mix point moves by the same fraction of a beat (beats stay locked)
+      let bS = offB - Math.ceil(Math.max(0, offB - leadB) / beatB - 1e-6) * beatB, msShift = 0;
+      if (bS < 0) { msShift = -bS * (60 / bpmA) / beatB; bS = 0; }
       const vOn = s.vocalAware !== false;
       const vA = vOn ? vocalSpans(cachedLyrics(A)) : null, vB = vOn ? vocalSpans(cachedLyrics(B)) : null;
-      const tries = [];
+      // The old song plays all the way to its end; the blend sits on its outro and finishes exactly as
+      // it runs out (phrase-aligned) — never cut early.
       const drop = s.dropAlign !== false ? findDrop(aB, aB.bpm) : null;
-      const beatB = 60 / aB.bpm;
-      const firstVocalB = vB ? vB[0][0] : Infinity;
+      // loudness around a point (0..100), from the analysis loudness map (2 points per second)
+      const loudAt = (an, t0, t1) => { const L = an?.loud; if (!L) return null; let sum = 0, c = 0; for (let i = Math.max(0, Math.floor(t0 * 2)); i < Math.min(L.length, Math.ceil(t1 * 2)); i++) { sum += L[i]; c++; } return c ? sum / c : null; };
+      const tries = [];
       for (let bt = beats; bt >= 16; bt -= 8) {
         const ovT = bt * beat;
-        const last = off + Math.floor((mixEnd - ovT - off) / bar) * bar;
-        // the incoming song's intro runs under the blend and its drop lands as the old song leaves —
-        // only if that skips at most ~40 s of intro and no singing
-        let bSc = bS, dropOn = false;
-        if (drop) {
-          const st = drop - bt * beatB;
-          if (st >= (aB.beatOffset || 0) - 0.02 && st <= 40 && st < firstVocalB - 0.5) { bSc = Math.max(0, st); dropOn = true; }
-        }
-        for (let k = 0; k < 4; k++) {
-          const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
-          if (ms <= 1 || ms < dur * 0.5) break;
-          const ov = ovT / aRate;
-          const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, bSc, bRate, ov) : 0;
-          // prefer: no clash, then the drop landing on the mix, then the natural (latest) spot, then longer blends
-          tries.push({ bt, ms, ov, clash, bS: bSc, dropOn, score: clash * 10 + (dropOn ? -2 : 0) + k * 1.2 + (beats - bt) * 0.08 });
+        const last = off + Math.floor((end - ovT - off - msShift) / bar) * bar + msShift;
+        // where the next song comes in: from its first beat, or timed so its drop lands as the blend ends
+        const starts = [{ bS, dropOn: false }];
+        if (drop) { const st = drop - bt * beatB; if (st > bS + beatB && st <= 75) starts.push({ bS: Math.max(0, st), dropOn: true }); }
+        for (const st of starts) {
+          for (let k = 0; k < 4; k++) {
+            const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
+            if (ms <= 1 || ms < dur * 0.4) break;
+            const ov = ovT / aRate;
+            const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, st.bS, bRate, ov) : 0;
+            // seamless = both songs at a similar energy where they overlap
+            const eA = loudAt(aA, ms, ms + ovT), eB = loudAt(aB, st.bS, st.bS + ov * bRate);
+            const eGap = eA != null && eB != null ? Math.abs(eA - eB) / 20 : 0;
+            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
+              score: clash * 6 + eGap + (st.dropOn ? -2 : 0) + k * 0.7 + (beats - bt) * 0.06 });
+          }
         }
       }
       tries.sort((x, y) => x.score - y.score);
@@ -1413,8 +1420,8 @@ class Engine extends Emitter {
     if (Math.abs((p.rate || 1) - 1) > 0.001) {
       const tokB = B.token;
       // back to the song's real speed as soon as the old song is basically gone (not seconds later)
-      const back = IOS ? D * 0.85 : D * 0.7;
-      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, IOS ? 0 : Math.min(3, D * 0.3)); }, back * 1000);
+      // the moment the old song is gone, the new one goes back to its real speed (quickly, no hanging)
+      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, IOS ? 0 : 2); }, D * 1000);
     }
     this.afterTrackChange(p);
   }
@@ -1426,7 +1433,7 @@ class Engine extends Emitter {
     const started = performance.now();
     // keep the beats locked only while both songs are clearly audible; then the new song is let go
     // (and returns to its own speed) — the lock must never pull it back to the mixing speed
-    const until = started + (p.overlap || 8) * (IOS ? 0.83 : 0.68) * 1000;
+    const until = started + (p.overlap || 8) * 0.97 * 1000;
     const tokA = A.token, tokB = B.token;
     let lastChange = 0;
     this.lockTimer = setInterval(() => {

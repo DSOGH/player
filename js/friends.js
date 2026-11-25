@@ -233,8 +233,14 @@ class Friends extends Emitter {
   async enablePush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('unsupported');
     const reg = await navigator.serviceWorker.ready;
-    const txt = await (await fetch(`${relay()}/config.js`, { cache: 'no-store' })).text();
-    const key = (txt.match(/web_push_public_key["']?\s*:\s*["']([A-Za-z0-9_-]{40,})["']/) || [])[1];
+    // the relay's push key: built in for ntfy.sh (its config file may not be readable from another site)
+    const KNOWN = { 'https://ntfy.sh': 'BEMjM0sNxh41x0a6Lz3YaqkJ7AUhZefxsOQgw-at69i0fM1CybVBcj7-QQXf4N_tPCgFnOXdRbQ5jrSrr9Yg9Lc' };
+    let key = null;
+    try {
+      const txt = await (await fetch(`${relay()}/config.js`, { cache: 'no-store' })).text();
+      key = (txt.match(/web_push_public_key["']?\s*:\s*["']([A-Za-z0-9_-]{40,})["']/) || [])[1] || null;
+    } catch (e) { /* not readable from here */ }
+    key = key || KNOWN[relay()];
     if (!key) throw new Error('relay-no-push');
     const appKey = unb64u(key);
     let sub = await reg.pushManager.getSubscription();
@@ -242,13 +248,19 @@ class Friends extends Emitter {
       const cur = sub.options?.applicationServerKey ? b64u(sub.options.applicationServerKey) : null;
       if (cur && cur !== key) { await sub.unsubscribe(); sub = null; }
     }
-    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+    if (!sub) {
+      try { sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey }); }
+      catch (e) { throw new Error(`iPhone refused the push subscription (${e.name || e.message})`); }
+    }
     const j = sub.toJSON();
-    const r = await fetch(`${relay()}/v1/webpush`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint: j.endpoint, auth: j.keys.auth, p256dh: j.keys.p256dh, topics: [topic(this.me.id)] }),
-    });
-    if (!r.ok) throw new Error('relay ' + r.status);
+    let r;
+    try {
+      r = await fetch(`${relay()}/v1/webpush`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: j.endpoint, auth: j.keys.auth, p256dh: j.keys.p256dh, topics: [topic(this.me.id)] }),
+      });
+    } catch (e) { throw new Error('couldn’t reach the relay to register'); }
+    if (!r.ok) { let m = ''; try { m = (await r.json()).error || ''; } catch (e) { /* */ } throw new Error(`relay said ${r.status}${m ? ' – ' + m : ''}`); }
     this.me.pushAt = Date.now();
     await db.kv.set('friends:me', this.me);
     this.emit('change');
