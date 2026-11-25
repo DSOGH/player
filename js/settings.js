@@ -81,6 +81,7 @@ export const DEFAULTS = {
   friendNotify: false, // notifications for messages while the app runs in the background
   friendsShareNp: false, // let friends see what you're listening to
   friendRelay: 'https://ntfy.sh', // message relay (ntfy) — can be your own
+  dropAlign: true, // time blends so the next song's drop lands as the old one leaves
   vocalStrip: true, // if two vocals would still overlap, blend only the outgoing song's music & beat
   vocalAware: true, // DJ blends avoid two vocals singing at once (uses synced lyrics)
   layoutMode: 'auto', // 'auto' | 'desktop' | 'mobile'

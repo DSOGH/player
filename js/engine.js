@@ -17,6 +17,28 @@ const SILENT = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQ
 
 const dbToLin = (db) => Math.pow(10, db / 20);
 
+// Where the next song "drops" (first big, lasting jump in loudness in its first half), snapped to
+// its bar grid — so a blend can finish exactly as the drop hits, like a DJ would time it
+function findDrop(a, bpm) {
+  const L = a?.loud;
+  if (!L || !bpm || L.length < 40) return null;
+  const bar = 240 / bpm, perBar = bar * 2; // envelope has 2 points per second
+  const mean = (i0, i1) => { let s = 0, c = 0; for (let i = Math.max(0, Math.floor(i0)); i < Math.min(L.length, Math.ceil(i1)); i++) { s += L[i]; c++; } return c ? s / c : 0; };
+  let mx = 0; for (const v of L) if (v > mx) mx = v;
+  const limit = Math.min(L.length * 0.5, 240);
+  for (let i = Math.ceil(perBar * 4); i < limit; i++) {
+    const before = mean(i - perBar * 8, i), after = mean(i, i + perBar * 4);
+    if (after >= before * 1.4 && after >= mx * 0.6 && after - before >= 12) {
+      // the exact spot: the steepest rise within the next few bars
+      let j = i, best = -1;
+      for (let k = i; k < Math.min(L.length - 1, i + perBar * 4); k++) { const r = L[k + 1] - L[k]; if (r > best) { best = r; j = k + 1; } }
+      const off = a.beatOffset || 0;
+      const t = off + Math.round((j / 2 - off) / bar) * bar;
+      return t > 6 ? t : null;
+    }
+  }
+  return null;
+}
 // Where the singing is, from synced lyrics: [[start, end], …] in track seconds (each line lasts until the
 // next one, at most 6 s)
 function vocalSpans(lyr) {
@@ -242,7 +264,8 @@ class Engine extends Emitter {
     d.lat = ctx.createDelay(0.2); d.lat.delayTime.value = 2048 / ctx.sampleRate;
     // dry = the normal signal; during a vocal-free blend it hands over to the instrumental from the isolator
     d.dry = ctx.createGain();
-    d.node.connect(d.rg).connect(d.lat).connect(d.dry).connect(d.bass).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
+    d.mid = ctx.createBiquadFilter(); d.mid.type = 'peaking'; d.mid.frequency.value = 1100; d.mid.Q.value = 0.7; d.mid.gain.value = 0;
+    d.node.connect(d.rg).connect(d.lat).connect(d.dry).connect(d.bass).connect(d.mid).connect(d.hp).connect(d.lp).connect(d.fade).connect(this.input);
     d.fade.connect(d.send).connect(this.echoIn);
     // "karaoke" underlay: side signal (L-R removes centered vocals) + the low end, cheap native nodes
     d.instGain = ctx.createGain(); d.instGain.gain.value = 0;
@@ -297,7 +320,7 @@ class Engine extends Emitter {
     if (!d.node || !this.ctx) return;
     const now = this.ctx.currentTime;
     for (const [p, v] of [[d.bass.gain, 0], [d.hp.frequency, HP_OFF], [d.lp.frequency, LP_OFF], [d.send.gain, 0],
-      [d.instGain.gain, 0], ...(d.dry ? [[d.dry.gain, 1]] : []), ...(d.vox ? [[d.voxGain.gain, 0], [d.voxSend.gain, 0], ...(d.instV ? [[d.instV.gain, 0]] : [])] : [])]) {
+      [d.instGain.gain, 0], ...(d.dry ? [[d.dry.gain, 1]] : []), ...(d.mid ? [[d.mid.gain, 0]] : []), ...(d.vox ? [[d.voxGain.gain, 0], [d.voxSend.gain, 0], ...(d.instV ? [[d.instV.gain, 0]] : [])] : [])]) {
       p.cancelScheduledValues(0);
       p.setValueAtTime(v, now);
     }
@@ -973,8 +996,12 @@ class Engine extends Emitter {
     this.loadDeck(d, t, this.plan?.bStart || 0);
     this.applyDeckGain(d);
     this.setFade(d, 0);
-    if (this.wantsAnalysis()) analyze(t).then(() => this.computePlan());
-    else prefetchTrack(t);
+    if (this.wantsAnalysis()) {
+      // songs measured by an older version have no loudness map yet: refresh them so the drop can be found
+      const a = library.analysis.get(t.id);
+      const refresh = a && !a.loud && settings.get('transition') === 'smart' && settings.get('dropAlign') !== false;
+      analyze(t, refresh ? { force: true } : undefined).then(() => { if (this.upcoming?.track === t && !this.transition) this.computePlan(); });
+    } else prefetchTrack(t);
     const st = settings.v;
     // lyrics tell the DJ where the singing is: word play needs them, and beat-match blends use them so
     // two vocals never sing over each other
@@ -1153,22 +1180,33 @@ class Engine extends Emitter {
       const vOn = s.vocalAware !== false;
       const vA = vOn ? vocalSpans(cachedLyrics(A)) : null, vB = vOn ? vocalSpans(cachedLyrics(B)) : null;
       const tries = [];
+      const drop = s.dropAlign !== false ? findDrop(aB, aB.bpm) : null;
+      const beatB = 60 / aB.bpm;
+      const firstVocalB = vB ? vB[0][0] : Infinity;
       for (let bt = beats; bt >= 16; bt -= 8) {
         const ovT = bt * beat;
         const last = off + Math.floor((mixEnd - ovT - off) / bar) * bar;
+        // the incoming song's intro runs under the blend and its drop lands as the old song leaves —
+        // only if that skips at most ~40 s of intro and no singing
+        let bSc = bS, dropOn = false;
+        if (drop) {
+          const st = drop - bt * beatB;
+          if (st >= (aB.beatOffset || 0) - 0.02 && st <= 40 && st < firstVocalB - 0.5) { bSc = Math.max(0, st); dropOn = true; }
+        }
         for (let k = 0; k < 4; k++) {
           const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
           if (ms <= 1 || ms < dur * 0.5) break;
           const ov = ovT / aRate;
-          const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, bS, bRate, ov) : 0;
-          // prefer: no clash, then the natural (latest) spot, then the longer blend
-          tries.push({ bt, ms, ov, clash, score: clash * 10 + k * 1.2 + (beats - bt) * 0.08 });
+          const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, bSc, bRate, ov) : 0;
+          // prefer: no clash, then the drop landing on the mix, then the natural (latest) spot, then longer blends
+          tries.push({ bt, ms, ov, clash, bS: bSc, dropOn, score: clash * 10 + (dropOn ? -2 : 0) + k * 1.2 + (beats - bt) * 0.08 });
         }
       }
       tries.sort((x, y) => x.score - y.score);
       const pick = tries[0];
       if (pick) {
         const { ms, ov: overlapR, bt } = pick;
+        const dropTxt = pick.dropOn ? ' · drop on the mix' : '';
         const T = bpmA * aRate;
         const tempoTxt = Math.abs(aRate - 1) > 0.002 ? `${Math.round(bpmA)}→${Math.round(T)}←${Math.round(aB.bpm)} BPM` : `${Math.round(bpmA)} BPM`;
         // still two voices at once? take the outgoing song's vocals out and blend just its music and beat
@@ -1176,9 +1214,9 @@ class Engine extends Emitter {
         const vocalTxt = vA && vB ? (stripA ? ' · vocals out, beat in' : pick.clash < 0.5 ? ' · vocals clear' : '') : '';
         return {
           ...base, type: 'beatmatch', style: 'blend', fx,
-          label: `Beat match · ${tempoTxt}${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : ''}${vocalTxt} · ${bt} beats`,
+          label: `Beat match · ${tempoTxt}${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : ''}${vocalTxt}${dropTxt} · ${bt} beats`,
           mixStart: ms, overlap: overlapR, inDur: overlapR * 0.5, outDur: overlapR * 0.62, outDelay: overlapR * 0.38,
-          bStart: bS, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate, vocalClash: pick.clash, stripA,
+          bStart: pick.bS, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate, vocalClash: pick.clash, stripA, dropAt: pick.dropOn ? drop : null,
         };
       }
     }
@@ -1314,6 +1352,11 @@ class Engine extends Emitter {
           const swap = t0 + D * 0.5, swapLen = Math.min(0.5, (p.beat || 0.5));
           this.hold(B.bass.gain, t0); B.bass.gain.setValueAtTime(BASS_CUT, swap); B.bass.gain.linearRampToValueAtTime(0, swap + swapLen);
           this.hold(A.bass.gain, t0); A.bass.gain.setValueAtTime(0, swap); A.bass.gain.linearRampToValueAtTime(BASS_CUT, swap + swapLen);
+          // three-band mixing: the incoming song's mids sit back too, and swap with the bass on the same beat
+          if (B.mid && A.mid) {
+            this.hold(B.mid.gain, t0); B.mid.gain.setValueAtTime(-7, t0); B.mid.gain.setValueAtTime(-7, swap); B.mid.gain.linearRampToValueAtTime(0, swap + swapLen * 2);
+            this.hold(A.mid.gain, t0); A.mid.gain.setValueAtTime(0, swap); A.mid.gain.linearRampToValueAtTime(-6, swap + swapLen * 2);
+          }
           this.hold(A.hp.frequency, t0); A.hp.frequency.setValueAtTime(HP_OFF, t0 + D * 0.55); A.hp.frequency.exponentialRampToValueAtTime(380, t0 + D);
           // incoming highs open up over the first ~40% (hats and vocals don't pile on top of the outgoing song)
           this.hold(B.lp.frequency, t0); B.lp.frequency.setValueAtTime(2600, t0); B.lp.frequency.exponentialRampToValueAtTime(LP_OFF, t0 + D * 0.42);
@@ -1499,7 +1542,7 @@ class Engine extends Emitter {
     // make sure the new song ends up with clean filters even if the mix was interrupted
     if (to === this.cur && to.fx && this.ctx) {
       const now = this.ctx.currentTime;
-      for (const [prm, v] of [[to.bass.gain, 0], [to.hp.frequency, HP_OFF], [to.lp.frequency, LP_OFF]]) {
+      for (const [prm, v] of [[to.bass.gain, 0], [to.hp.frequency, HP_OFF], [to.lp.frequency, LP_OFF], ...(to.mid ? [[to.mid.gain, 0]] : [])]) {
         if (Math.abs(prm.value - v) > 0.5) { this.hold(prm, now); prm.setTargetAtTime(v, now, 0.15); }
       }
       this.hold(to.fade.gain, now); to.fade.gain.setTargetAtTime(1, now, 0.1);

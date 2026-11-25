@@ -230,7 +230,7 @@ export function albumView(id) {
       ${art(a.artId, 'hero-art', a.title)}
       <h1 class="hero-title">${a.title}${a.edition === 'explicit' ? html`<span class="ebadge big">E</span>` : ''}</h1>
       <a class="hero-sub accent" href="#/artist/${a.artistId}">${a.artist}</a>
-      ${a.editions?.length > 1 ? html`<div class="seg edition-switch">${a.editions.map((e, i) => html`<a class="${e.id === a.id ? 'on' : ''}" href="#/album/${e.id}">${e.edition === 'explicit' ? 'Explicit' : e.edition === 'clean' ? 'Clean' : `Version ${i + 1}`}</a>`)}</div>` : ''}
+      ${a.editions?.length > 1 ? html`<div class="seg edition-switch">${a.editions.map((e, i) => html`<a class="${e.id === a.id ? 'on' : ''}" href="#/album/${e.id}" data-replace>${e.edition === 'explicit' ? 'Explicit' : e.edition === 'clean' ? 'Clean' : `Version ${i + 1}`}</a>`)}</div>` : ''}
       <div class="hero-meta">${[a.genre, a.year || ''].filter(Boolean).join(' · ')} ${badges(first, { compact: true })}</div>
       ${playButtons(key, { extra: html`<button class="icon-btn round-btn${allOff ? ' on' : ''}" data-a="download-album" data-id="${a.id}" aria-label="Download">${icon(allOff ? 'downloaded' : 'download')}</button>` })}
     </div>

@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.16.3';
+export const APP_VERSION = '1.17.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -224,6 +224,7 @@ function playback() {
     ${group('Tempo', html`
       ${seg('bpmDetect', 'BPM detection', [['auto', 'Automatic'], ['manual', 'On demand'], ['off', 'Off']], 'Automatic analyses each song as it comes up. On demand: use “Detect BPM” in the player menu.')}
       ${toggle('beatMatch', 'Beat-matched mixing', 'In Smart mode, line mixes up on the beat when two songs have similar tempos')}
+      ${toggle('dropAlign', 'Land the drop', 'Starts the next song early so its drop or chorus hits right as the old one finishes')}
       ${toggle('vocalAware', 'Keep vocals apart', 'Places each blend where only one song is singing (uses synced lyrics)')}
       ${toggle('vocalStrip', 'Cut vocals when they’d clash', 'If both songs would still be singing, the outgoing one drops its vocals and only its music & beat blend in')}
       ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back (pitch preserved)')}

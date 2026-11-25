@@ -141,8 +141,18 @@ export function computeAnalysis({ channels, lp, SR, duration }) {
     wave[k] = m; if (m > wmax) wmax = m;
   }
   for (let k = 0; k < WAVE; k++) wave[k] = Math.round(Math.sqrt(wave[k] / wmax) * 100);
+  // loudness envelope (RMS every 0.5 s, 0..100) — lets the DJ find drops / choruses
+  const EH = Math.round(SR / 2), envN = Math.floor(n / EH), lenv = new Array(envN);
+  let emax = 1e-9;
+  for (let k = 0; k < envN; k++) {
+    let sum = 0;
+    const o = k * EH;
+    for (let i = 0; i < EH; i += 2) { const v = mono[o + i] || 0; sum += v * v; }
+    lenv[k] = Math.sqrt(sum / (EH / 2)); if (lenv[k] > emax) emax = lenv[k];
+  }
+  for (let k = 0; k < envN; k++) lenv[k] = Math.round((lenv[k] / emax) * 100);
   return {
-    wave,
+    wave, loud: lenv,
     key: key?.name || '', camelot: key?.camelot || '', keyConf: key ? Math.round(key.conf * 100) / 100 : 0,
     energy: Math.round(energy * 100) / 100,
     bpm: Math.round(bpm * 10) / 10,

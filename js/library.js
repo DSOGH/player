@@ -42,10 +42,13 @@ class Library extends Emitter {
   }
 
   async load() {
-    const [tracks, pls, an, likes, stats, rs, listen, mixes] = await Promise.all([
+    const [tracks, pls, an, likes, stats, rs, listen, mixes, edSet, edGuess] = await Promise.all([
       db.all('tracks'), db.all('playlists'), db.all('analysis'),
       db.kv.get('likes'), db.kv.get('stats'), db.kv.get('recentSearches'), db.kv.get('listen'), db.kv.get('mixes'),
+      db.kv.get('editionSet'), db.kv.get('editionGuess'),
     ]);
+    this.editionSet = edSet || {};     // your own choice per album (always wins)
+    this.editionGuess = edGuess || {}; // worked out from lyrics / audio
     this.listen = listen || {};
     this.mixesDone = mixes || {};
     this.tracks = new Map(tracks.map((t) => [t.id, t]));
@@ -161,7 +164,8 @@ class Library extends Emitter {
       a.rawTitle = a.rawTitle || a.title;
       const counts = { explicit: 0, clean: 0 };
       for (const t of a.tracks) { const e = trackEdition(t); t.edition = e; if (e) counts[e]++; }
-      a.edition = markerEdition(a.rawTitle) || (counts.explicit > counts.clean ? 'explicit' : counts.clean > counts.explicit ? 'clean' : '');
+      a.edition = this.editionSet?.[a.id] || markerEdition(a.rawTitle) || (counts.explicit > counts.clean ? 'explicit' : counts.clean > counts.explicit ? 'clean' : '') || this.editionGuess?.[a.id] || '';
+      if (this.editionSet?.[a.id]) for (const t of a.tracks) t.edition = a.edition;
       if (a.edition) for (const t of a.tracks) if (!t.edition) t.edition = a.edition;
       a.title = stripEdition(a.rawTitle);
       const k = norm(a.title) + '|' + norm(a.artist);
@@ -190,6 +194,64 @@ class Library extends Emitter {
     }
   }
   visible(t) { return !this.hiddenTracks?.has(t.id); }
+
+  // You know best: mark an album as the clean or explicit version
+  async setEdition(albumId, ed) {
+    if (ed) this.editionSet[albumId] = ed; else delete this.editionSet[albumId];
+    await db.kv.set('editionSet', this.editionSet);
+    this.build();
+    this.emit('change');
+  }
+  // Two versions of an album and nothing says which is which: work it out from each version's own
+  // lyrics (swear words vs. censored ones) and, failing that, from the audio (clean edits drop out
+  // where words were removed).
+  async resolveEditions({ lyricsOf } = {}) {
+    const PROF = /\b(fuck\w*|motherf\w*|shit\w*|bitch\w*|nigga\w*|pussy|dick|cunt|whore)\b/i;
+    const CENS = /\b[a-z]+\*+[a-z]*\b|\b\*+[a-z]+|\b[a-z]\*\*\*/i;
+    const groups = new Map();
+    for (const a of this.albums.values()) {
+      if (!a.editions || a.editions.length !== 2) continue;
+      const k = a.editions.map((e) => e.id).sort().join('|');
+      if (!groups.has(k)) groups.set(k, a.editions.map((e) => this.albums.get(e.id)).filter(Boolean));
+    }
+    let changed = false;
+    for (const g of groups.values()) {
+      if (g.length !== 2 || g.some((a) => this.editionSet[a.id]) || (g[0].edition && g[1].edition && g[0].edition !== g[1].edition && !this.editionGuess[g[0].id])) continue;
+      // 1) lyrics that belong to each file
+      const score = [0, 0];
+      if (lyricsOf) {
+        for (let i = 0; i < 2; i++) {
+          for (const t of g[i].tracks.slice(0, 6)) {
+            let txt = '';
+            try { txt = (await lyricsOf(t)) || ''; } catch (e) { /* */ }
+            if (PROF.test(txt)) score[i] += 2;
+            if (CENS.test(txt)) score[i] -= 2;
+          }
+        }
+      }
+      // 2) audio: matching songs in both versions, where one version suddenly drops in loudness
+      if (score[0] === score[1]) {
+        for (const t0 of g[0].tracks) {
+          const t1 = g[1].tracks.find((x) => norm(x.title) === norm(t0.title));
+          const A = this.analysis.get(t0.id)?.loud, B = t1 && this.analysis.get(t1.id)?.loud;
+          if (!A || !B || Math.abs(A.length - B.length) > 6) continue;
+          let dA = 0, dB = 0;
+          for (let i = 1; i < Math.min(A.length, B.length) - 1; i++) {
+            if (B[i] - A[i] > 22 && B[i - 1] - A[i - 1] < 10) dA++; // short dip in version 0
+            if (A[i] - B[i] > 22 && A[i - 1] - B[i - 1] < 10) dB++;
+          }
+          if (dA >= 2 && dA > dB * 2) score[0] -= 1; else if (dB >= 2 && dB > dA * 2) score[1] -= 1;
+        }
+      }
+      if (score[0] === score[1]) continue;
+      const ex = score[0] > score[1] ? 0 : 1;
+      this.editionGuess[g[ex].id] = 'explicit';
+      this.editionGuess[g[1 - ex].id] = 'clean';
+      changed = true;
+    }
+    if (changed) { await db.kv.set('editionGuess', this.editionGuess); this.build(); this.emit('change'); }
+    return changed;
+  }
 
   // ---- accessors ----
   track(id) { return this.tracks.get(id); }

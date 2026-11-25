@@ -400,6 +400,8 @@ async function albumMenu(a) {
       { icon: 'artist', label: 'Go to Artist', value: 'artist' },
       { icon: 'mix', label: 'Play as DJ Set', value: 'djset', sub: 'Reorder by tempo, key & energy' },
       { icon: 'bpm', label: 'Analyze Album', value: 'analyze', sub: 'BPM, key, silences, loudness' },
+      { sep: true },
+      { icon: 'info', label: a.edition === 'clean' ? 'Marked: Clean version' : a.edition === 'explicit' ? 'Marked: Explicit version' : 'Clean or Explicit?', value: 'edition', sub: library.editionSet?.[a.id] ? 'Set by you — tap to change' : 'Tap to set it yourself if it’s wrong' },
     ],
   });
   if (v === 'next') { engine.playNext(a.tracks); toast('Playing next'); }
@@ -408,6 +410,22 @@ async function albumMenu(a) {
   if (v === 'download') toggleDownload(a.tracks);
   if (v === 'artist') location.hash = `#/artist/${a.artistId}`;
   if (v === 'djset') djSet(a.tracks, { context: { type: 'album', id: a.id, name: a.title } });
+  if (v === 'edition') {
+    const e = await actionSheet({ header: html`<div class="sheet-track"><div><b>${a.title}</b><span>Which version is this?</span></div></div>`, items: [
+      { icon: 'info', label: 'Explicit', value: 'explicit' },
+      { icon: 'info', label: 'Clean', value: 'clean' },
+      { icon: 'refresh', label: 'Work it out automatically', value: 'auto' },
+    ] });
+    if (e) {
+      await library.setEdition(a.id, e === 'auto' ? null : e);
+      // the other version of this album is the opposite
+      const other = a.editions?.find((x) => x.id !== a.id);
+      if (other && e !== 'auto') await library.setEdition(other.id, e === 'clean' ? 'explicit' : 'clean');
+      if (other && e === 'auto') await library.setEdition(other.id, null);
+      toast(e === 'auto' ? 'Back to automatic' : `Marked as ${e}`);
+      rerender();
+    }
+  }
   if (v === 'analyze') {
     const { analyze } = await import('./analysis.js');
     toast(`Analyzing ${a.tracks.length} songs…`);
@@ -746,6 +764,14 @@ async function doAction(a, el, e) {
 }
 
 function wireGlobal() {
+  // switching between versions of an album replaces the page, so Back goes to where you came from
+  document.addEventListener('click', (e) => {
+    const rep = e.target.closest?.('a[data-replace]');
+    if (!rep || e.metaKey || e.ctrlKey) return;
+    e.preventDefault(); e.stopPropagation();
+    if (rep.classList.contains('on')) return;
+    location.replace(rep.getAttribute('href'));
+  }, true);
   document.addEventListener('click', (e) => {
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
     const el = e.target.closest('[data-a]');
@@ -1006,6 +1032,7 @@ function wireScanner() {
     render({ keepScroll: true });
     if (p.added || p.removed) toast(`Plex synced · ${p.added} new${p.removed ? `, ${p.removed} removed` : ''}`);
     warmAllCovers();
+    setTimeout(resolveEditions, 3000);
   });
   plex.on('error', (e) => {
     toast(e.message || 'Plex sync failed', { action: { label: 'Plex', run: () => { location.hash = '#/settings/plex'; } }, ms: 6000 });
@@ -1022,6 +1049,17 @@ function wireScanner() {
     toast(e.message || 'Scan failed', { action: { label: 'Settings', run: () => { location.hash = '#/settings/source'; } }, ms: 6000 });
     render({ keepScroll: true });
   });
+}
+
+// clean vs explicit when nothing in the files/Plex says so: each version's own lyrics, then its audio
+async function resolveEditions() {
+  const lyricsOf = async (t) => {
+    if (t.lyrics) return t.lyrics;
+    if (t.plex && plex.connected) return plex.lyrics(t);
+    if (t.lrc) { const r = await fetch(nasUrl(t.lrc)); return r.ok ? r.text() : ''; }
+    return '';
+  };
+  try { if (await library.resolveEditions({ lyricsOf })) rerender(); } catch (e) { console.warn('editions', e); }
 }
 
 function warmAllCovers() {
