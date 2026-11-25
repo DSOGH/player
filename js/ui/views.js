@@ -375,3 +375,85 @@ export function notFound() {
 }
 
 export { scanBanner };
+
+// ---------- downloads ----------
+// Sizes of what's stored on this device, read straight from the browser's caches.
+async function cacheSizes(name) {
+  const out = new Map();
+  try {
+    const c = await caches.open(name);
+    for (const req of await c.keys()) {
+      const r = await c.match(req);
+      let n = +(r?.headers.get('Content-Length') || 0);
+      if (!n && r && name !== 'plexart-v1') { try { n = (await r.clone().blob()).size; } catch (e) { /* */ } }
+      out.set(req.url, n || (name === 'plexart-v1' ? 60e3 : 0));
+    }
+  } catch (e) { /* */ }
+  return out;
+}
+const mb = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b > 0 ? `${Math.max(1, Math.round(b / 1e3))} KB` : '0 MB';
+
+export async function downloadsView({ tab = false } = {}) {
+  const [dl, pre, covers] = await Promise.all([cacheSizes('offline-tracks'), cacheSizes('prefetch'), cacheSizes('plexart-v1')]);
+  let usage = 0, quota = 0, persisted = false;
+  try { const e = await navigator.storage.estimate(); usage = e.usage || 0; quota = e.quota || 0; persisted = await navigator.storage.persisted?.(); } catch (e) { /* */ }
+  const sum = (m) => [...m.values()].reduce((s, v) => s + v, 0);
+  const dlB = sum(dl), preB = sum(pre), covB = sum(covers), other = Math.max(0, usage - dlB - preB - covB);
+  const total = Math.max(usage, dlB + preB + covB, 1);
+  const pct = (v) => `${Math.max(v > 0 ? 0.8 : 0, (v / total) * 100).toFixed(2)}%`;
+  const songs = [...library.tracks.values()].filter((t) => library.isOffline(t));
+  // grouped by album, biggest first
+  const byAlbum = new Map();
+  for (const t of songs) {
+    const k = t.albumId || 'singles';
+    if (!byAlbum.has(k)) byAlbum.set(k, { a: library.album(t.albumId), tracks: [], bytes: 0 });
+    const g = byAlbum.get(k); g.tracks.push(t); g.bytes += dl.get(library.cacheKey(t)) || t.size || 0;
+  }
+  const groups = [...byAlbum.values()].sort((p, q) => q.bytes - p.bytes);
+  const key = regList(songs, { type: 'downloaded', name: 'Downloaded' });
+  const chips = tab ? html`<div class="chips">${TABS.map(([k, l]) => html`<a class="chip${k === 'downloaded' ? ' on' : ''}" href="#/library/${k}">${l}</a>`)}</div>` : '';
+  const pre6 = settings.get('prefetch');
+  return {
+    title: 'Downloads',
+    html: html`${pageHeader(tab ? 'Library' : 'Downloads', { back: !tab && location.hash.includes('settings') })}${chips}
+    <section class="dl-hero">
+      <div class="dl-big"><b>${mb(dlB)}</b><span>${songs.length ? `${songs.length} song${songs.length > 1 ? 's' : ''} downloaded` : 'Nothing downloaded yet'}</span></div>
+      <div class="dl-bar" role="img" aria-label="Storage used">
+        <i class="k-dl" style="width:${pct(dlB)}"></i><i class="k-pre" style="width:${pct(preB)}"></i><i class="k-cov" style="width:${pct(covB)}"></i><i class="k-oth" style="width:${pct(other)}"></i>
+      </div>
+      <div class="dl-keys">
+        <span><i class="k-dl"></i>Downloads <b>${mb(dlB)}</b></span>
+        <span><i class="k-pre"></i>Preloaded <b>${mb(preB)}</b></span>
+        <span><i class="k-cov"></i>Covers <b>${mb(covB)}</b></span>
+        <span><i class="k-oth"></i>Library &amp; app <b>${mb(other)}</b></span>
+      </div>
+      <p class="dl-quota">${mb(usage)} used of ${quota ? mb(quota) : '—'} this app may use${persisted ? ' · protected from automatic cleanup' : ''}</p>
+      ${songs.length ? html`${playButtons(key)}` : ''}
+    </section>
+    <details class="dl-explain"${songs.length ? '' : ' open'}>
+      <summary>${icon('info')}How downloads work</summary>
+      <div class="dl-ex-grid">
+        <div><span class="dl-ex-ic k-dl">${icon('download')}</span><b>Downloads</b><p>Tap ${icon('download')} on an album or playlist (or “Download” in a song’s menu). The whole file is saved on this device, so it plays with no internet, with your NAS or Plex off — car, flights, dead zones. Downloads also start instantly and mix perfectly.</p></div>
+        <div><span class="dl-ex-ic k-pre">${icon('next')}</span><b>Preloaded</b><p>The next song in your queue is fetched ahead of time so skips are instant (${pre6 === 'off' ? 'off right now' : pre6 === 'wifi' ? 'on Wi-Fi' : 'always on'}). Only the last 6 are kept and they clean themselves up — they aren’t downloads.</p></div>
+        <div><span class="dl-ex-ic k-cov">${icon('album')}</span><b>Covers</b><p>Album art is kept after it loads once, so pages appear instantly. It’s small; clearing it just means covers load from the server again.</p></div>
+        <div><span class="dl-ex-ic k-oth">${icon('trash')}</span><b>Removing</b><p>Removing a download deletes the file from this device straight away and frees the space (the phone’s storage number can take a minute to update). The song stays in your library and streams again. Downloads are shared by all accounts on this device.</p></div>
+      </div>
+      ${persisted ? '' : html`<p class="dl-note">Your browser can clear downloads when the phone is very low on space. <button class="link-btn" data-a="persist">Keep downloads safe</button></p>`}
+    </details>
+    ${groups.length ? html`<h3 class="dl-h">Downloaded <small>${groups.length} album${groups.length > 1 ? 's' : ''}</small></h3>
+    <div class="rows dl-list">${groups.map((g) => {
+      const a = g.a, all = a ? a.tracks.length : g.tracks.length;
+      return html`<div class="row dl-row">
+        ${a ? html`<a class="dl-open" href="#/album/${a.id}">${art(a.artId, 'sm')}<div class="meta"><div class="t1">${a.title}</div><div class="t2">${a.artist} · ${g.tracks.length === all ? 'all' : `${g.tracks.length} of ${all}`} songs · ${mb(g.bytes)}</div></div></a>`
+          : html`<div class="dl-open"><div class="art sm add-art">${icon('note')}</div><div class="meta"><div class="t1">Songs</div><div class="t2">${g.tracks.length} songs · ${mb(g.bytes)}</div></div></div>`}
+        <button class="dl-x" data-a="dl-remove" data-ids="${g.tracks.map((t) => t.id).join(',')}" aria-label="Remove download">${icon('x')}</button>
+      </div>`;
+    })}</div>` : empty('download', 'Nothing downloaded', 'Download an album or playlist with the ↓ button to play it anywhere — even with no connection.')}
+    <section class="set-group dl-actions"><div class="set-card">
+      ${songs.length ? html`<button class="set-row link danger" data-a="clear-downloads"><span class="set-ic">${icon('trash')}</span><div class="set-text"><span>Remove all downloads</span><small>Deletes ${mb(dlB)} of song files from this device</small></div></button>` : ''}
+      <button class="set-row link" data-a="clear-preload"><span class="set-ic" style="background:#0a84ff">${icon('next')}</span><div class="set-text"><span>Clear preloaded songs</span><small>${mb(preB)} · refills as you listen</small></div></button>
+      <button class="set-row link" data-a="clear-covers"><span class="set-ic" style="background:#bf5af2">${icon('album')}</span><div class="set-text"><span>Clear cover cache</span><small>${mb(covB)} · covers load from the server again</small></div></button>
+    </div></section>
+    <div class="bottom-pad"></div>`,
+  };
+}

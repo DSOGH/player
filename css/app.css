@@ -1325,3 +1325,44 @@ body.desk .album-hero .edition-switch { margin: 8px 0 4px; }
 .connect-btn .plex-logo, .connect-btn .ic { width: 18px; height: 18px; }
 .connect-sheet .connect-btn.primary { background: #e5a00d; color: #111; }
 @media (prefers-reduced-motion: reduce) { .login-bg i, .login-grid.managing .acct-av, .acct { animation: none !important; } }
+
+/* ---------- v1.18.1: downloads page ---------- */
+.dl-hero { margin: 4px var(--pad) 14px; padding: 18px; border-radius: 20px; background: linear-gradient(160deg, color-mix(in srgb, #30d158 16%, var(--card)), var(--card) 70%); }
+.dl-big { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.dl-big b { font-size: 34px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.dl-big span { color: var(--text2); font-size: 14px; }
+.dl-bar { display: flex; height: 12px; border-radius: 99px; overflow: hidden; background: var(--card2); gap: 2px; }
+.dl-bar i { display: block; height: 100%; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+.k-dl { background: #30d158; } .k-pre { background: #0a84ff; } .k-cov { background: #bf5af2; } .k-oth { background: #8e8e93; }
+.dl-keys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin-top: 12px; font-size: 13px; color: var(--text2); }
+.dl-keys span { display: flex; align-items: center; gap: 7px; } .dl-keys b { margin-left: auto; color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+.dl-keys i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.dl-quota { margin: 12px 0 0; font-size: 12px; color: var(--text3); }
+.dl-hero .play-btns { margin: 14px 0 0; padding: 0; }
+.dl-explain { margin: 0 var(--pad) 18px; border-radius: 16px; background: var(--card); overflow: hidden; }
+.dl-explain summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-weight: 650; }
+.dl-explain summary::-webkit-details-marker { display: none; }
+.dl-explain summary::after { content: '›'; margin-left: auto; font-size: 22px; color: var(--text3); transition: transform .2s; }
+.dl-explain[open] summary::after { transform: rotate(90deg); }
+.dl-explain summary .ic { width: 18px; height: 18px; color: var(--accent); }
+.dl-ex-grid { display: grid; gap: 14px; padding: 0 16px 16px; }
+.dl-ex-grid > div { display: grid; grid-template-columns: 32px 1fr; column-gap: 12px; }
+.dl-ex-ic { grid-row: span 2; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: #fff; }
+.dl-ex-ic .ic { width: 17px; height: 17px; }
+.dl-ex-grid b { font-size: 15px; } .dl-ex-grid p { margin: 3px 0 0; font-size: 13.5px; line-height: 1.45; color: var(--text2); }
+.dl-ex-grid p .ic { width: 13px; height: 13px; vertical-align: -2px; }
+.dl-note { margin: 0; padding: 12px 16px 16px; font-size: 13px; color: var(--text2); border-top: .5px solid var(--sep); }
+.link-btn { all: unset; cursor: pointer; color: var(--accent); font-weight: 650; }
+.dl-h { margin: 6px var(--pad) 8px; font-size: 20px; font-weight: 750; } .dl-h small { font-size: 13px; color: var(--text3); font-weight: 500; margin-left: 6px; }
+.dl-row { padding-right: 8px; }
+.dl-open { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.dl-x { all: unset; cursor: pointer; flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--text2); background: var(--card2); transition: background .15s, color .15s, transform .15s; }
+.dl-x:hover { background: #ff453a; color: #fff; } .dl-x:active { transform: scale(.9); }
+.dl-x .ic { width: 15px; height: 15px; }
+.dl-actions { margin-top: 18px; }
+@media (min-width: 900px) { .dl-ex-grid { grid-template-columns: 1fr 1fr; gap: 18px 24px; } .dl-keys { grid-template-columns: repeat(4, auto); justify-content: start; } .dl-keys b { margin-left: 4px; } }
+.restore-bits { margin: 0; font-size: 13px; color: var(--text2); }
+.connect-sheet .restore-go { background: linear-gradient(140deg, var(--c1), var(--c2)) !important; color: #fff !important; }
+.cloud-status { display: flex; align-items: center; gap: 8px; }
+.cloud-dot { width: 8px; height: 8px; border-radius: 50%; background: #30d158; box-shadow: 0 0 8px #30d158; flex: none; }
+.cloud-dot.off { background: var(--text3); box-shadow: none; } .cloud-dot.err { background: #ff453a; box-shadow: 0 0 8px #ff453a; }

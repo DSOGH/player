@@ -189,8 +189,13 @@ class Library extends Emitter {
         for (const t of a.tracks) if (!t.edition && a.edition) t.edition = a.edition;
       }
       if (pref === 'both') continue;
-      const keep = g.find((a) => a.edition === pref) || g.find((a) => a.edition && a.edition !== (pref === 'clean' ? 'explicit' : 'clean')) || g[0];
-      for (const a of g) if (a !== keep && a.edition !== keep.edition) { this.hiddenAlbums.add(a.id); a.tracks.forEach((t) => this.hiddenTracks.add(t.id)); }
+      // one copy in your library; the album page has the switch. Until it's known which is which, the one
+      // without censored (**) titles is shown (the explicit one, usually), or the most complete one
+      const other = pref === 'clean' ? 'explicit' : 'clean';
+      const stars = (a) => a.tracks.filter((t) => /\*/.test(t.title)).length;
+      let keep = g.find((a) => a.edition === pref);
+      if (!keep) keep = [...g].filter((a) => a.edition !== other).sort((p, q) => (pref === 'clean' ? stars(q) - stars(p) : stars(p) - stars(q)) || q.tracks.length - p.tracks.length)[0] || g[0];
+      for (const a of g) if (a !== keep) { this.hiddenAlbums.add(a.id); a.tracks.forEach((t) => this.hiddenTracks.add(t.id)); }
     }
   }
   visible(t) { return !this.hiddenTracks?.has(t.id); }
@@ -205,7 +210,7 @@ class Library extends Emitter {
   // Two versions of an album and nothing says which is which: work it out from each version's own
   // lyrics (swear words vs. censored ones) and, failing that, from the audio (clean edits drop out
   // where words were removed).
-  async resolveEditions({ lyricsOf } = {}) {
+  async resolveEditions({ lyricsOf, compareAudio, only = null, max = 4, signal } = {}) {
     const PROF = /\b(fuck\w*|motherf\w*|shit\w*|bitch\w*|nigga\w*|pussy|dick|cunt|whore)\b/i;
     const CENS = /\b[a-z]+\*+[a-z]*\b|\b\*+[a-z]+|\b[a-z]\*\*\*/i;
     const groups = new Map();
@@ -214,9 +219,12 @@ class Library extends Emitter {
       const k = a.editions.map((e) => e.id).sort().join('|');
       if (!groups.has(k)) groups.set(k, a.editions.map((e) => this.albums.get(e.id)).filter(Boolean));
     }
-    let changed = false;
-    for (const g of groups.values()) {
+    let changed = false, heard = 0;
+    this.editionTried ||= (await db.kv.get('editionTried')) || {};
+    for (const [key, g] of groups) {
+      if (only && !g.some((a) => a.id === only)) continue;
       if (g.length !== 2 || g.some((a) => this.editionSet[a.id]) || (g[0].edition && g[1].edition && g[0].edition !== g[1].edition && !this.editionGuess[g[0].id])) continue;
+      if (this.editionGuess[g[0].id] && this.editionGuess[g[1].id]) continue;
       // 1) lyrics that belong to each file
       const score = [0, 0];
       if (lyricsOf) {
@@ -242,6 +250,30 @@ class Library extends Emitter {
           }
           if (dA >= 2 && dA > dB * 2) score[0] -= 1; else if (dB >= 2 && dB > dA * 2) score[1] -= 1;
         }
+      }
+      // 3) listen: line up the same song in both versions and find where one goes silent (muted words)
+      if (score[0] === score[1] && compareAudio && !this.editionTried[key] && heard < max && !signal?.aborted) {
+        heard++;
+        const pairs = [];
+        for (const t0 of g[0].tracks) {
+          const t1 = g[1].tracks.find((x) => norm(stripEdition(x.title)) === norm(stripEdition(t0.title)) && Math.abs((x.duration || 0) - (t0.duration || 0)) < 8);
+          if (t1) pairs.push([t0, t1]);
+        }
+        // songs most likely to have swearing first: the longer, wordier middle of the album
+        pairs.sort((p, q) => (q[0].duration || 0) - (p[0].duration || 0));
+        let dA = 0, dB = 0, same = 0, tried = 0;
+        for (const [t0, t1] of pairs.slice(0, 3)) {
+          let r = null;
+          try { r = await compareAudio(t0, t1, signal); } catch (e) { if (e?.name === 'AbortError') break; }
+          if (!r) continue;
+          tried++; dA += r.dropsA; dB += r.dropsB; if (r.same) same++;
+          if (Math.abs(dA - dB) >= 4) break;   // clear enough already
+        }
+        if (tried) { this.editionTried[key] = Date.now(); await db.kv.set('editionTried', this.editionTried); }
+        if (tried && same === tried) {          // the same recording twice: not a clean/explicit pair
+          this.editionGuess[g[0].id] = this.editionGuess[g[1].id] = 'same'; changed = true; continue;
+        }
+        if (dA >= 2 && dA >= dB * 2) score[0] -= 3; else if (dB >= 2 && dB >= dA * 2) score[1] -= 3;
       }
       if (score[0] === score[1]) continue;
       const ex = score[0] > score[1] ? 0 : 1;
@@ -482,10 +514,13 @@ class Library extends Emitter {
     return p;
   }
   async deletePlaylist(id) {
+    // remembered so your other devices delete it too (cloud sync)
+    if (!this.playlists.get(id)?.source) { const d = (await db.kv.get('plDeleted')) || {}; d[id] = Date.now(); await db.kv.set('plDeleted', d); }
     this.playlists.delete(id);
     await db.del('playlists', id);
     this.emit('playlists');
   }
+  plexAnyKey() { for (const t of this.tracks.values()) if (t.plex?.key) return t.plex.key; return null; }
   playlistTracks(p) { return p.trackIds.map((id) => this.tracks.get(id)).filter(Boolean); }
 
   // ---- analysis ----

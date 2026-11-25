@@ -18,7 +18,12 @@ export const DEFAULTS = {
   sv: 6,                      // settings schema version
   bpmDetect: 'auto',          // 'off' | 'manual' | 'auto'
   preferBpmTag: true,
-  onlineBpm: true,            // look tempos up online (Deezer) once and keep them
+  onlineBpm: true,
+  cloudSync: true,            // keep this Player account on your Plex (and GitHub) for your other devices
+  cloudStats: false,          // also combine listening stats from all devices
+  pulseMode: 'both',          // cover pulse: 'bpm' grid | 'beat' real kick drum | 'both'
+  pulseAmount: 'normal',      // 'subtle' | 'normal' | 'strong'
+  editionAudio: true,         // compare clean/explicit versions by ear            // look tempos up online (Deezer) once and keep them
   analysisNetwork: 'any',     // 'any' | 'wifi'
   skipFade: false,            // quick crossfade when you press next/prev (off = instant cut)
   skipFadeSec: 1.2,
@@ -139,6 +144,7 @@ class Settings extends Emitter {
     this.emit('change', k, val);
     this.emit(`change:${k}`, val);
   }
+  save() { return kv.set('settings', this.v); }
   reset() {
     this.v = { ...DEFAULTS };
     kv.set('settings', this.v);

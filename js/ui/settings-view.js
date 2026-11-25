@@ -6,6 +6,7 @@ import { engine } from '../engine.js';
 import { scanner } from '../scanner.js';
 import { analyze, isAnalyzed, verifyBpm } from '../analysis.js';
 import { accounts } from '../accounts.js';
+import { cloud } from '../cloud.js';
 import { saveSource, loadSource, testSource } from '../sources.js';
 import * as db from '../db.js';
 import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
@@ -13,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.18.0';
+export const APP_VERSION = '1.19.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -60,7 +61,23 @@ function accountsGroup() {
   </div><div class="set-card">
     ${button('accounts', 'switch', list.length > 1 ? 'Switch account' : 'Add another account', { sub: list.length > 1 ? `${list.length} accounts on this device · each keeps its own Plex, likes, stats and friends` : 'Someone else’s Plex, or a second library — each one stays signed in' })}
     ${accounts.hasPin(cur) ? button('lock-account', 'lock', 'Lock now', { sub: 'Shows the login screen; your PIN opens it again' }) : ''}
-  </div></section>`;
+  </div></section>
+  ${cloudGroup()}`;
+}
+
+function cloudGroup() {
+  const st = cloud.state || {};
+  const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`; };
+  const where = [plex.connected ? 'your Plex' : '', cloud.ghToken ? 'GitHub' : ''].filter(Boolean).join(' and ');
+  const status = !settings.get('cloudSync') ? 'Off' : st.error ? `Couldn’t save: ${st.error}` : st.at ? `Saved to ${st.where || where} ${ago(st.at)}` : where ? 'Not saved yet' : 'Sign in to Plex (or add GitHub) to turn this on';
+  return group('Account cloud', html`
+    <div class="set-row"><div class="set-text"><span class="cloud-status"><i class="cloud-dot${!settings.get('cloudSync') || !where ? ' off' : st.error ? ' err' : ''}"></i>${status}</span><small>Your account, settings, playlists, likes, clean/explicit picks and tapped BPMs follow you: sign in to the same Plex on another phone or computer and Player offers to bring them back.</small></div></div>
+    ${toggle('cloudSync', 'Save my account to the cloud', 'Kept on your own Plex server (a playlist called “Player sync”) — nothing goes anywhere else')}
+    ${toggle('cloudStats', 'Combine stats from all devices', 'Off: Stats only count this device')}
+    ${where ? button('cloud-save', 'refresh', 'Sync now', { sub: st.pulled ? `Last brought in changes from ${st.from || 'another device'} ${ago(st.pulled)}` : 'Save this device and pick up changes from the others' }) : ''}
+    ${where ? button('cloud-restore', 'download', 'Restore from cloud…', { sub: 'Replace this device’s Player account with the saved one' }) : ''}
+    ${button('cloud-github', 'server', cloud.ghToken ? 'GitHub backup: on' : 'Also back up to GitHub', { sub: cloud.ghToken ? 'A private Gist on your GitHub · tap to change or remove' : 'Optional — a private Gist. Works even without Plex (needs a GitHub token)' })}
+  `);
 }
 
 function profileCard() {
@@ -96,7 +113,8 @@ async function root() {
       ${link('#/settings/appearance', 'palette', 'Appearance')}
       ${link('#/settings/extras', 'sparkle', 'Extras', 'Gestures, Car Mode & more')}
       ${link('#/stats', 'bpm', 'Your Stats', 'Top songs, artists, minutes')}
-      ${link('#/settings/storage', 'storage', 'Downloads & Storage')}
+      ${link('#/downloads', 'download', 'Downloads', `${library.offline?.size || 0} songs`)}
+      ${link('#/settings/storage', 'storage', 'Storage & Backup')}
       ${link('#/settings/about', 'info', 'About & Help')}`)}
     ${group('', html`${button('rescan', 'refresh', scanner.running ? 'Scanning…' : 'Scan for New Music', { sub: await lastScanText() })}`)}
     ${group('', html`${button('force-refresh', 'refresh', 'Refresh App', { sub: `Load the newest version (v${APP_VERSION} now) — you stay signed in, nothing is lost` })}`)}
@@ -351,6 +369,8 @@ function appearance() {
       ${seg('npBackground', 'Player background', [['animated', 'Animated'], ['static', 'Artwork'], ['plain', 'Plain']])}
       ${toggle('artShrinkOnPause', 'Shrink artwork when paused')}
       ${toggle('reactiveArt', 'Reactive artwork', 'Artwork pulses gently with the beat')}
+      ${seg('pulseMode', 'Pulse follows', [['bpm', 'BPM'], ['beat', 'Real beat'], ['both', 'Both']], 'BPM: a steady hit on every beat of the song’s tempo. Real beat: reacts to the kick drum you actually hear. Both: on the tempo, but only as hard as the drums are hitting — calm in quiet parts.')}
+      ${seg('pulseAmount', 'Pulse strength', [['subtle', 'Subtle'], ['normal', 'Normal'], ['strong', 'Strong']])}
       ${toggle('artSwipe', 'Swipe artwork to skip', 'Swipe the album art left or right in the player')}
       ${seg('visualizer', 'Visualizer', [['bars', 'Spectrum'], ['off', 'Off']], 'Live frequency bars behind the player controls')}
       ${toggle('waveform', 'Waveform scrubber', 'Shows the song’s waveform with the DJ’s mix point and lyric cue marked')}
@@ -399,6 +419,7 @@ async function storage() {
   return {
     title: 'Storage',
     html: html`${pageHeader('Downloads & Storage', { back: true })}
+    ${group('', html`<a class="set-row link" href="#/downloads"><span class="set-ic" style="background:#30d158">${icon('downloaded')}</span><div class="set-text"><span>Manage downloads</span><small>See what’s saved, what it takes up, how it works — and remove it</small></div>${icon('right', 'chev')}</a>`)}
     ${group('Storage', html`
       <div class="stats"><div><b>${dl.length}</b><span>Downloaded</span></div><div><b>${fmtBytes(dlSize)}</b><span>Downloads</span></div><div><b>${fmtBytes(usage)}</b><span>Total used</span></div></div>
       <div class="meter"><i style="width:${quota ? Math.min(100, (usage / quota) * 100) : 0}%"></i></div>
@@ -410,7 +431,8 @@ async function storage() {
     `)}
     ${group('', html`
       ${button('clear-downloads', 'trash', 'Remove all downloads', { danger: true })}
-      ${button('clear-cache', 'trash', 'Clear preload & artwork cache')}
+      ${button('clear-preload', 'trash', 'Clear preloaded songs')}
+      ${button('clear-covers', 'trash', 'Clear cover cache')}
       ${button('clear-analysis', 'trash', 'Clear song analysis', { sub: 'BPM, silences and loudness will be measured again' })}
     `)}
     ${group('Backup', html`

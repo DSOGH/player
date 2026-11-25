@@ -21,7 +21,9 @@ import { statsView, setStatsRange } from './ui/stats-view.js';
 import { friends } from './friends.js';
 import { friendsView, chatView, acceptView, drafts } from './ui/friends-view.js';
 import { accounts, writeMeta } from './accounts.js';
-import { showLogin, noteAccount, connectSheet } from './ui/accounts-view.js';
+import { compareVersions } from './editions.js';
+import { cloud } from './cloud.js';
+import { showLogin, noteAccount, connectSheet, restoreSheet } from './ui/accounts-view.js';
 
 const main = () => $('#main');
 const view = () => $('#view');
@@ -125,8 +127,9 @@ async function route(path) {
   const [p, a, b] = path.split('/');
   switch (p) {
     case 'home': return V.home();
-    case 'library': return V.libraryView(a || 'albums');
-    case 'album': return V.albumView(a);
+    case 'library': return a === 'downloaded' ? V.downloadsView({ tab: true }) : V.libraryView(a || 'albums');
+    case 'downloads': return V.downloadsView();
+    case 'album': checkAlbumEditions(a); return V.albumView(a);
     case 'artist': return V.artistView(a);
     case 'playlist': return V.playlistView(a);
     case 'liked': return V.likedView();
@@ -141,7 +144,7 @@ async function route(path) {
     default: return V.home();
   }
 }
-const TAB_OF = { friends: 'friends', chat: 'friends', friend: 'friends', stats: 'stats', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
+const TAB_OF = { downloads: 'downloads', friends: 'friends', chat: 'friends', friend: 'friends', stats: 'stats', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
 
 async function render({ keepScroll = false } = {}) {
   const path = parseHash();
@@ -256,6 +259,7 @@ function onScroll() {
 }
 
 // ---------- downloads ----------
+async function usedBytes() { try { return (await navigator.storage.estimate()).usage || 0; } catch (e) { return 0; } }
 let downloading = false;
 async function toggleDownload(tracks) {
   tracks = tracks.filter((t) => !t.demo);
@@ -534,6 +538,29 @@ async function doAction(a, el, e) {
     }
     case 'demo': await toggleDemo(true); break;
     case 'plex-signin': plexSignIn(); break;
+    case 'cloud-save': {
+      toast('Syncing…');
+      const r = await cloud.syncNow();
+      toast(cloud.state.error ? `Couldn’t sync: ${cloud.state.error}` : r ? 'Synced with your other devices' : 'Saved'); render({ keepScroll: true });
+      break;
+    }
+    case 'cloud-restore': {
+      const r = await cloud.fetchRemote();
+      if (!r) { toast('Nothing saved in the cloud yet'); break; }
+      restoreSheet(r, { restore: async () => { await cloud.apply(r.d, { full: true }); applyTheme(); paintAccountChip(); toast('Account restored'); render({ keepScroll: true }); }, fresh: () => {} });
+      break;
+    }
+    case 'cloud-github': {
+      const tok = await prompt({ title: 'GitHub token', placeholder: 'github_pat_… (Gists: read & write) — empty to remove', value: cloud.ghToken ? '••••••' : '', ok: 'Save' });
+      if (tok == null || tok === '••••••') break;
+      try {
+        await cloud.setGithub(tok);
+        if (tok.trim()) { const r = await cloud.ghRead().catch(() => null); toast('GitHub connected'); if (r && !cloud.state.at) restoreSheet({ d: r, where: 'GitHub' }, { restore: async () => { await cloud.apply(r, { full: true }); applyTheme(); render({ keepScroll: true }); }, fresh: () => cloud.push() }); else cloud.push(); }
+        else toast('GitHub backup removed');
+      } catch (e) { toast(e.message || 'GitHub didn’t accept that token'); await cloud.setGithub('').catch(() => {}); }
+      render({ keepScroll: true });
+      break;
+    }
     case 'accounts': try { await engine.saveNow(); } catch (e) { /* */ } showLogin(); break;
     case 'add-account': try { await engine.saveNow(); } catch (e) { /* */ } showLogin().then(() => document.querySelector('#login [data-l="add"]')?.click()); break;
     case 'lock-account': {
@@ -581,12 +608,27 @@ async function doAction(a, el, e) {
       render({ keepScroll: true });
       break;
     }
-    case 'clear-downloads':
-      if (await confirmSheet('Remove all downloaded songs from this device?', 'Remove Downloads', true)) {
-        await caches.delete('offline-tracks'); await library.refreshOffline(); toast('Downloads removed'); render({ keepScroll: true });
+    case 'clear-downloads': {
+      const n = library.offline.size;
+      if (!n) { toast('Nothing is downloaded'); break; }
+      if (await confirmSheet(`Remove all ${n} downloaded song${n > 1 ? 's' : ''} from this device? They stay in your library and stream again.`, 'Remove Downloads', true)) {
+        const before = await usedBytes();
+        // really delete the files (not just hide them): the whole cache goes, plus the preloaded copies
+        await caches.delete('offline-tracks'); await caches.delete('prefetch');
+        navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' });
+        await library.refreshOffline();
+        const freed = Math.max(0, before - await usedBytes());
+        toast(freed > 1e6 ? `Downloads removed · ${fmtBytes(freed)} freed` : 'Downloads removed · space frees up in a moment'); render({ keepScroll: true });
       }
       break;
-    case 'clear-cache': await caches.delete('prefetch'); toast('Cache cleared'); render({ keepScroll: true }); break;
+    }
+    case 'dl-remove': {
+      const ts = (el.dataset.ids || '').split(',').map((id) => library.track(id)).filter((t) => t && library.isOffline(t));
+      if (ts.length) { haptic(10); await toggleDownload(ts); }
+      break;
+    }
+    case 'clear-preload': case 'clear-cache': await caches.delete('prefetch'); navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' }); toast('Preloaded songs cleared'); render({ keepScroll: true }); break;
+    case 'clear-covers': await caches.delete('plexart-v1'); toast('Cover cache cleared'); render({ keepScroll: true }); break;
     case 'clear-analysis':
       if (await confirmSheet('Clear BPM & transition analysis for all songs?', 'Clear Analysis', true)) {
         await db.clear('analysis'); library.analysis.clear(); toast('Analysis cleared');
@@ -1074,14 +1116,24 @@ function wireScanner() {
 }
 
 // clean vs explicit when nothing in the files/Plex says so: each version's own lyrics, then its audio
-async function resolveEditions() {
+async function resolveEditions(only = null) {
   const lyricsOf = async (t) => {
     if (t.lyrics) return t.lyrics;
     if (t.plex && plex.connected) return plex.lyrics(t);
     if (t.lrc) { const r = await fetch(nasUrl(t.lrc)); return r.ok ? r.text() : ''; }
     return '';
   };
-  try { if (await library.resolveEditions({ lyricsOf })) rerender(); } catch (e) { console.warn('editions', e); }
+  const cellular = navigator.connection?.type === 'cellular' || navigator.connection?.saveData;
+  const compareAudio = settings.get('editionAudio') && !(cellular && settings.get('analysisNetwork') === 'wifi') ? compareVersions : null;
+  try { if (await library.resolveEditions({ lyricsOf, compareAudio, only, max: only ? 1 : 4 })) rerender(); } catch (e) { console.warn('editions', e); }
+}
+// opening an album whose two versions aren't told apart yet → listen to them right away
+const edChecked = new Set();
+function checkAlbumEditions(id) {
+  const a = library.album(id);
+  if (!a?.editions || a.editions.length !== 2 || a.editions.every((e) => e.edition !== 'version') || edChecked.has(id)) return;
+  a.editions.forEach((e) => edChecked.add(e.id));
+  setTimeout(() => resolveEditions(id), 1200);
 }
 
 function warmAllCovers() {
@@ -1091,6 +1143,26 @@ function warmAllCovers() {
 }
 
 // ---------- boot ----------
+let cloudAsked = false;
+async function checkCloud() {
+  if (!cloud.enabled || (!plex.connected && !cloud.ghToken) || cloud.busy) return;
+  try {
+    if (!cloud.state.at) {
+      if (cloudAsked) return;
+      cloudAsked = true;
+      const r = await cloud.fetchRemote();
+      if (r) restoreSheet(r, {
+        restore: async () => { await cloud.apply(r.d, { full: true }); applyTheme(); paintAccountChip(); toast(`Welcome back${r.d.profile?.name ? ', ' + r.d.profile.name : ''} — your Player account is restored`); rerender(); cloud.schedule(4000); },
+        fresh: () => cloud.schedule(3000),
+      });
+      else cloud.schedule(30000);
+      return;
+    }
+    const r = await cloud.syncNow();
+    if (r) { paintAccountChip(); rerender(); }
+  } catch (e) { console.warn('cloud', e); }
+}
+
 // sidebar (computer) account button: avatar + name, opens the login screen
 function paintAccountChip() {
   const tabs = $('#tabs');
@@ -1135,6 +1207,7 @@ async function boot() {
   await loadKnown();
   await library.load();
   await plex.load();
+  await cloud.load().catch(() => {});
   friends.load().catch(() => {});
   library.loadPlayLog().catch(() => {}); // stats history must be loaded before new listens are saved
   // save listening stats whenever the app is closed or sent to the background
@@ -1161,6 +1234,10 @@ async function boot() {
   db.kv.get('source').then((v) => { nasSrc = v; note(); });
   plex.on('auth', note);
   plex.on('done', note);
+  // your Player account in the cloud: restore it on a new device, keep devices in step afterwards
+  plex.on('connection', () => setTimeout(checkCloud, 1500));
+  plex.on('done', () => cloud.schedule(5000));
+  if (plex.connected || cloud.ghToken) setTimeout(checkCloud, 5000);
   if (sessionStorage.getItem('afterSwitch') === 'connect') {
     sessionStorage.removeItem('afterSwitch');
     if (!plex.signedIn && !library.size) setTimeout(() => connectSheet({ plexSignIn }), 500);

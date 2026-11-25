@@ -482,6 +482,7 @@ class Plex extends Emitter {
     try { mc = await this.api('/playlists', { playlistType: 'audio' }); } catch (e) { return; }
     const keep = new Set();
     for (const pl of mc.Metadata || []) {
+      if (pl.title === 'Player sync') continue; // where your Player account is kept (cloud.js), not music
       try {
         const items = await this.pageAll(`/playlists/${pl.ratingKey}/items`, {});
         const ids = items.map((it) => 'px' + hash(server.id + ':' + it.ratingKey));

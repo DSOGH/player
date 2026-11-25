@@ -697,11 +697,13 @@ function wireSwipe() {
 
 // Artwork that breathes with the kick drum + optional spectrum visualizer.
 // Only transforms/opacity change per frame (GPU-composited), capped at 30 fps, and it sleeps when hidden.
+const PULSE_AMT = { subtle: 0.6, normal: 1, strong: 1.6 };
 function startPulse() {
   const np = $('#np');
   const viz = np.querySelector('.np-viz');
   const vctx = viz.getContext('2d');
   let avg = 0, level = 0, buf = null, lastT = 0, lastLevel = -1;
+  let fluxAvg = 0, lastHit = 0, realAt = -1e9, heardAt = -1e9; const hits = [];
   const loop = (now) => {
     requestAnimationFrame(loop);
     if (now - lastT < (settings.get('reactiveArt') && mode === 'art' && open ? 15 : 33)) return; // smooth beat pulse while the cover is showing
@@ -730,22 +732,31 @@ function startPulse() {
       avg = avg * 0.92 + bass * 0.08;
       const t = engine.track, a = t && library.analysis.get(t.id);
       const bpm = t && library.bpmOf(t);
-      if (bpm && a) {
+      const pm = settings.get('pulseMode') || 'both';
+      const ctx = engine.ctx;
+      const lat = (ctx.outputLatency || 0) + (ctx.baseLatency || 0) + 2048 / ctx.sampleRate;
+      // the real kick drum: a jump in bass energy above the song's own recent level. It's heard `lat`
+      // seconds after the analyser sees it, so the hit is queued and shown when it reaches your ears.
+      const flux = Math.max(0, bass - (loop._pb || 0)); loop._pb = bass;
+      fluxAvg = fluxAvg * 0.95 + flux * 0.05;
+      if (bass > 0.002) heardAt = now;
+      if (flux > fluxAvg * 2.2 + 0.025 && now - lastHit > 140) { lastHit = now; hits.push({ at: now + lat * 1000, v: Math.min(1, 0.35 + flux * 5 + bass * 0.6) }); }
+      let real = 0;
+      while (hits.length && hits[0].at <= now) { real = Math.max(real, hits.shift().v); realAt = now; }
+      const silentAn = now - heardAt > 1500; // raw (non-Web Audio) playback: the analyser hears nothing
+      if (bpm && a && pm !== 'beat' || (pm === 'beat' && silentAn && bpm && a)) {
         // locked to the song's beat grid: a sharp hit exactly on every beat (bigger on the downbeat),
         // timed to when you *hear* it (the clock runs a little ahead of the speakers)
-        const ctx = engine.ctx;
-        const lat = (ctx.outputLatency || 0) + (ctx.baseLatency || 0) + 2048 / ctx.sampleRate;
         const th = engine.currentTime - lat * (engine.cur.el.playbackRate || 1);
         const beats = (th - (a.beatOffset || 0)) * (bpm / 60);
         const ph = beats - Math.floor(beats);
         const down = ((Math.floor(beats) % 4) + 4) % 4 === 0;
-        const amp = (0.35 + 0.65 * Math.min(1, avg * 3.2)) * (down ? 1 : 0.62);
+        // "both": on the grid, but only as strong as the drums really are right now (quiet in breakdowns)
+        const drive = pm === 'both' && !silentAn ? Math.min(1, avg * 3.2) * (now - realAt < 900 ? 1 : 0.35) : Math.min(1, avg * 3.2);
+        const amp = (pm === 'both' && !silentAn ? 0.15 + 0.85 * drive : 0.35 + 0.65 * drive) * (down ? 1 : 0.62);
         level = beats < 0 ? level * 0.8 : Math.exp(-ph * 7) * amp;
-      } else {
-        // no tempo yet: follow the kick drum
-        const hit = Math.max(0, bass - avg * 1.08) * 4.5;
-        level = Math.max(level * 0.8, Math.min(1, hit));
-      }
+      } else if (real) level = Math.max(level, real);
+      else level *= 0.82;
       apply(art, glow);
     }
     if (vizOn) drawViz(buf);
@@ -754,8 +765,9 @@ function startPulse() {
   function apply(art, glow) {
     if (Math.abs(level - lastLevel) < 0.01) return;
     lastLevel = level;
-    if (art) art.style.transform = `scale(${(1 + level * 0.03).toFixed(4)})`;
-    if (glow) glow.style.opacity = (level * 0.9).toFixed(3);
+    const k = PULSE_AMT[settings.get('pulseAmount')] ?? 1;
+    if (art) art.style.transform = `scale(${(1 + level * 0.03 * k).toFixed(4)})`;
+    if (glow) glow.style.opacity = Math.min(1, level * 0.9 * Math.min(1.3, k)).toFixed(3);
   }
   function drawViz(b) {
     const dpr = Math.min(2, devicePixelRatio || 1);

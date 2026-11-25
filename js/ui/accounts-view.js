@@ -262,7 +262,7 @@ export function connectSheet({ plexSignIn }) {
     <div class="sheet-panel dialog connect-sheet" style="--c1:${c1};--c2:${c2}">
       ${avatar(a, 'big')}
       <div class="sheet-title big">Welcome, ${accounts.label(a)}</div>
-      <p class="plex-sub">Connect this account’s music. Your other accounts stay signed in — switch any time from Settings.</p>
+      <p class="plex-sub">Connect this account’s music. Already use Player on another device? Sign in with the same Plex and your account — playlists, BPMs, settings — comes right back.</p>
       <button class="btn pill primary connect-btn" data-c="plex"><svg class="plex-logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 2h5.3l7.7 10-7.7 10H5.5l7.7-10z" fill="currentColor"/></svg>Sign in with Plex</button>
       <button class="btn pill ghost connect-btn" data-c="nas">${icon('server')}Use a NAS folder</button>
       <button class="sheet-cancel" data-x>Later</button>
@@ -278,3 +278,34 @@ export function connectSheet({ plexSignIn }) {
 }
 
 export { accounts };
+
+// Signed in to a Plex that already has a Player account saved → offer to bring it back
+export function restoreSheet(r, { restore, fresh }) {
+  const d = r.d, sheet = $('#sheet');
+  const p = d.profile || {};
+  const a = { name: p.name || 'Your account', color: p.color ?? 1 };
+  const when = d.at ? new Date(d.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const bits = [
+    d.playlists?.length ? `${d.playlists.length} playlist${d.playlists.length > 1 ? 's' : ''}` : '',
+    d.likes?.length ? `${d.likes.length} liked songs` : '',
+    Object.keys(d.bpm || {}).length ? `${Object.keys(d.bpm).length} tapped BPMs` : '',
+    d.settings ? 'your settings' : '',
+  ].filter(Boolean);
+  const [c1, c2] = accounts.colors(a);
+  sheet.innerHTML = html`<div class="sheet-backdrop"></div>
+    <div class="sheet-panel dialog connect-sheet" style="--c1:${c1};--c2:${c2}">
+      ${avatar(a, 'big')}
+      <div class="sheet-title big">Welcome back${p.name ? `, ${p.name}` : ''}</div>
+      <p class="plex-sub">Your Player account is saved on ${r.where === 'GitHub' ? 'GitHub' : 'your Plex'}${d.device ? ` from ${d.device}` : ''}${when ? ` (${when})` : ''}. Bring it to this device?</p>
+      ${bits.length ? html`<p class="restore-bits">${bits.join(' · ')}</p>` : ''}
+      <button class="btn pill primary connect-btn restore-go" data-c="restore">${icon('download')}Restore my account</button>
+      <button class="sheet-cancel" data-c="fresh">Start fresh on this device</button>
+    </div>`.toString();
+  requestAnimationFrame(() => sheet.classList.add('open'));
+  const shut = () => { sheet.classList.remove('open'); setTimeout(() => { if (!sheet.classList.contains('open')) sheet.innerHTML = ''; }, 260); };
+  sheet.onclick = async (e) => {
+    const c = e.target.closest('[data-c]')?.dataset.c;
+    if (c === 'restore') { e.target.closest('button').textContent = 'Restoring…'; await restore(); shut(); }
+    else if (c === 'fresh') { shut(); fresh(); }
+  };
+}

@@ -33,7 +33,7 @@ function networkOk() {
 }
 
 // Download a track fully and keep it in the "prefetch" cache so playback starts instantly.
-export async function fetchTrackBuffer(t, signal) {
+export async function fetchTrackBuffer(t, signal, { store = true } = {}) {
   const key = library.cacheKey(t);
   for (const name of ['offline-tracks', 'prefetch']) {
     const c = await caches.open(name);
@@ -43,7 +43,7 @@ export async function fetchTrackBuffer(t, signal) {
   const r = await fetch(trackSrc(t), signal ? { signal } : undefined);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const blob = await r.blob();
-  if (!t.demo) {
+  if (!t.demo && store) {
     try {
       const c = await caches.open('prefetch');
       await c.put(key, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Content-Length': String(blob.size) } }));
