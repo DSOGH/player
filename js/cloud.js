@@ -1,5 +1,5 @@
 // Player account in the cloud. Your account (name, colour, PIN), settings, playlists, likes, clean /
-// explicit choices and BPMs are saved where all your devices can reach them, so signing in to the same
+// explicit choices, BPMs, listening stats and friends (with their chat keys and recent chats) are saved where all your devices can reach them, so signing in to the same
 // Plex on another phone or computer brings your Player account with it.
 //  • Plex (automatic): stored on your own Plex server, in a playlist called "Player sync" that only your
 //    Plex user sees — nothing leaves your server, and it follows your Plex account.
@@ -10,6 +10,7 @@ import { library } from './library.js';
 import { plex, deviceName } from './plex.js';
 import { accounts } from './accounts.js';
 import { Emitter } from './util.js';
+import { friends } from './friends.js';
 
 export const SYNC_TITLE = 'Player sync';
 const MAGIC = 'PLAYERSYNC1:';
@@ -46,6 +47,7 @@ class Cloud extends Emitter {
     const later = () => this.schedule();
     library.on('likes', later); library.on('playlists', later);
     library.on('played', () => this.schedule(90000)); // stats are backed up automatically too
+    friends.on('change', later); friends.on('message', () => this.schedule(60000));
     library.on('analysis', (id) => { if (library.analysis.get(id)?.tapped) later(); });
     settings.on('change', (k) => { if (!LOCAL_ONLY.has(k)) later(); });
     addEventListener('pagehide', () => { if (this._t) this.push(); });
@@ -68,6 +70,7 @@ class Cloud extends Emitter {
       likes: [...library.likes],
       editionSet: library.editionSet || {},
       bpm,
+      friends: await friends.exportData().catch(() => null),
     };
     // listening stats: always backed up, one entry per device (so restoring never mixes them up)
     await library.loadPlayLog();
@@ -101,7 +104,8 @@ class Cloud extends Emitter {
     }
     // Plex keeps it in the playlist's description; if the server refuses a long one, keep the essentials
     const recent = (by, months) => Object.fromEntries(Object.entries(by || {}).map(([k, v]) => [k, { ...v, plays: Object.fromEntries(Object.entries(v.plays || {}).sort().slice(-months)) }]));
-    const tries = [data, { ...data, statsBy: recent(data.statsBy, 6), trimmed: true }, { ...data, statsBy: recent(data.statsBy, 2), trimmed: true }, { ...data, statsBy: undefined, trimmed: true }, { ...data, statsBy: undefined, bpm: {}, plDeleted: {}, trimmed: true }, { v: 1, at: data.at, device: data.device, profile: data.profile, settings: data.settings, playlists: [], likes: [], editionSet: data.editionSet }];
+    const lite = (f) => f && { ...f, chats: Object.fromEntries(Object.entries(f.chats || {}).map(([k, v]) => [k, v.slice(-30)])) };
+    const tries = [data, { ...data, friends: lite(data.friends), statsBy: recent(data.statsBy, 6), trimmed: true }, { ...data, statsBy: recent(data.statsBy, 2), trimmed: true }, { ...data, statsBy: undefined, trimmed: true }, { ...data, statsBy: undefined, bpm: {}, plDeleted: {}, trimmed: true }, { v: 1, at: data.at, device: data.device, profile: data.profile, settings: data.settings, playlists: [], likes: [], editionSet: data.editionSet }];
     let last;
     for (const d of tries) {
       const body = MAGIC + await gz(JSON.stringify(d));
@@ -162,6 +166,9 @@ class Cloud extends Emitter {
   async push() {
     clearTimeout(this._t); this._t = null;
     if (!this.enabled || this.busy || !this.available) return false;
+    // a device that has never saved waits until you've chosen "restore" or "start fresh" (or there was
+    // nothing to restore) — so a new phone never overwrites your account with blank settings
+    if (!this.state.at && !this.firstOk) return false;
     this.busy = true;
     try {
       if (!this.remoteStats) { try { const r = await this.fetchRemote(); this.remoteStats = r?.d?.statsBy || {}; } catch (e) { this.remoteStats = {}; } }
@@ -218,6 +225,7 @@ class Cloud extends Emitter {
         if (add.length) { library.playLog[m] = [...(library.playLog[m] || []), ...add].sort((a, b) => a[1] - b[1]); await db.kv.set('plays:' + m, library.playLog[m]); }
       }
     }
+    if (d.friends && (want('friends') && full || friends.me?.id === d.friends.me?.id)) await friends.importData(d.friends).catch(() => {});
     library.build();
     library.emit('playlists'); library.emit('likes'); library.emit('change');
     this.state = { ...this.state, pulled: Date.now(), from: d.device };

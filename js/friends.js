@@ -212,6 +212,39 @@ class Friends extends Emitter {
       this.emit('message', f.id, msg, true);
     }
   }
+  // ---------- account cloud: your friends identity, friends, nicknames and recent chats ----------
+  async exportData() {
+    if (!this.me && !this.list.length) return null;
+    const chats = {};
+    for (const f of this.list) { const h = await this.history(f.id); if (h.length) chats[f.id] = h.slice(-200).map(({ state, ...m }) => (state === 'failed' ? { ...m, state } : m)); }
+    const { pushAt, ...me } = this.me || {};
+    return { me: this.me ? me : null, list: this.list, pending: this.pending, chats };
+  }
+  async importData(d) {
+    if (!d) return false;
+    let changed = false;
+    // same identity on every device of this account → every device gets your messages
+    if (d.me && (!this.me || this.me.id !== d.me.id)) {
+      if (!this.me || !this.list.length) { this.me = { ...d.me, last: this.me?.last || d.me.last || '12h' }; changed = true; }
+    }
+    for (const f of d.list || []) {
+      const mine = this.list.find((x) => x.id === f.id);
+      if (!mine) { this.list.push(f); changed = true; }
+      else if (!mine.nick && f.nick) { mine.nick = f.nick; changed = true; }
+    }
+    for (const p of d.pending || []) if (!this.pending.some((x) => x.kid === p.kid) && !this.list.some((x) => x.kid === p.kid)) { this.pending.push(p); changed = true; }
+    for (const f of [...this.list, ...this.pending]) if (!this.keys.has(f.kid)) this.keys.set(f.kid, await importKey(unb64u(f.key)));
+    for (const [id, msgs] of Object.entries(d.chats || {})) for (const m of msgs) if (await this.store(id, m)) changed = true;
+    if (changed) {
+      await db.kv.set('friends:me', this.me);
+      await this.save();
+      try { this.es?.close(); } catch (e) { /* */ }
+      this.es = null;
+      if (this.me) { this.connect(); this.refreshPush(); }
+    }
+    return changed;
+  }
+
   _saveLast() { clearTimeout(this._lt); this._lt = setTimeout(() => db.kv.set('friends:me', this.me), 800); }
 
   // live connection to my inbox (plus a catch-up poll when the app comes back)

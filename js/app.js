@@ -545,7 +545,7 @@ async function doAction(a, el, e) {
       break;
     }
     case 'cloud-save': {
-      toast('Syncing…');
+      toast('Syncing…'); cloud.firstOk = true;
       const r = await cloud.syncNow();
       toast(cloud.state.error ? `Couldn’t sync: ${cloud.state.error}` : r ? 'Synced with your other devices' : 'Saved'); render({ keepScroll: true });
       break;
@@ -560,7 +560,7 @@ async function doAction(a, el, e) {
       const tok = await prompt({ title: 'GitHub token', placeholder: 'github_pat_… (Gists: read & write) — empty to remove', value: cloud.ghToken ? '••••••' : '', ok: 'Save' });
       if (tok == null || tok === '••••••') break;
       try {
-        await cloud.setGithub(tok);
+        await cloud.setGithub(tok); cloud.firstOk = true;
         if (tok.trim()) { const r = await cloud.ghRead().catch(() => null); toast('GitHub connected'); if (r && !cloud.state.at) restoreSheet({ d: r, where: 'GitHub' }, { restore: async (parts) => { await cloud.apply(r, { full: true, parts }); applyTheme(); render({ keepScroll: true }); }, fresh: () => cloud.push() }); else cloud.push(); }
         else toast('GitHub backup removed');
       } catch (e) { toast(e.message || 'GitHub didn’t accept that token'); await cloud.setGithub('').catch(() => {}); }
@@ -1158,10 +1158,10 @@ async function checkCloud() {
       cloudAsked = true;
       const r = await cloud.fetchRemote();
       if (r) restoreSheet(r, {
-        restore: async (parts) => { await cloud.apply(r.d, { full: true, parts }); applyTheme(); paintAccountChip(); toast(`Welcome back${r.d.profile?.name ? ', ' + r.d.profile.name : ''} — your Player account is restored`); rerender(); cloud.schedule(4000); },
-        fresh: () => cloud.schedule(3000),
+        restore: async (parts) => { cloud.firstOk = true; await cloud.apply(r.d, { full: true, parts }); applyTheme(); paintAccountChip(); toast(`Welcome back${r.d.profile?.name ? ', ' + r.d.profile.name : ''} — your Player account is restored`); rerender(); cloud.schedule(4000); },
+        fresh: () => { cloud.firstOk = true; cloud.schedule(3000); },
       });
-      else cloud.schedule(30000);
+      else { cloud.firstOk = true; cloud.schedule(30000); }
       return;
     }
     const r = await cloud.syncNow();

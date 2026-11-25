@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.20.0';
+export const APP_VERSION = '1.20.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -71,7 +71,7 @@ function cloudGroup() {
   const where = [plex.connected ? 'your Plex' : '', cloud.ghToken ? 'GitHub' : ''].filter(Boolean).join(' and ');
   const status = !settings.get('cloudSync') ? 'Off' : st.error ? `Couldn’t save: ${st.error}` : st.at ? `Saved to ${st.where || where} ${ago(st.at)}` : where ? 'Not saved yet' : 'Sign in to Plex (or add GitHub) to turn this on';
   return group('Account cloud', html`
-    <div class="set-row"><div class="set-text"><span class="cloud-status"><i class="cloud-dot${!settings.get('cloudSync') || !where ? ' off' : st.error ? ' err' : ''}"></i>${status}</span><small>Your account, settings, playlists, likes, listening stats, clean/explicit picks and tapped BPMs are backed up automatically. Sign in to the same Plex on another phone or computer — or tap Restore — and pick what to bring back.${cloud.trimmed ? ' Your full stats history is too big for Plex, so it keeps the latest months; add GitHub for all of it.' : ''}</small></div></div>
+    <div class="set-row"><div class="set-text"><span class="cloud-status"><i class="cloud-dot${!settings.get('cloudSync') || !where ? ' off' : st.error ? ' err' : ''}"></i>${status}</span><small>Your account, settings, playlists, likes, friends and chats, listening stats, clean/explicit picks and tapped BPMs are backed up automatically. Sign in to the same Plex on another phone or computer — or tap Restore — and pick what to bring back.${cloud.trimmed ? ' Your full stats history is too big for Plex, so it keeps the latest months; add GitHub for all of it.' : ''}</small></div></div>
     ${toggle('cloudSync', 'Save my account to the cloud', 'Kept on your own Plex server (a playlist called “Player sync”) — nothing goes anywhere else')}
     ${toggle('cloudStats', 'Combine stats from all devices', 'Off: Stats count this device (still backed up, and restorable). On: every device’s listening adds up')}
     ${where ? button('cloud-save', 'refresh', 'Sync now', { sub: st.pulled ? `Last brought in changes from ${st.from || 'another device'} ${ago(st.pulled)}` : 'Save this device and pick up changes from the others' }) : ''}
