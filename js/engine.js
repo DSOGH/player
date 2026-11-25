@@ -4,6 +4,7 @@
 import { settings, EQ_FREQS, EQ_PRESETS } from './settings.js';
 import { library } from './library.js';
 import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm, fetchTrackBuffer } from './analysis.js';
+import { onlineBpm, onlineBpmCached } from './bpm-online.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
 import { artUrl, lockScreenArtwork } from './art.js';
@@ -590,7 +591,7 @@ class Engine extends Emitter {
     // Cook It Up only applies to this queue: your normal DJ settings aren't touched
     if (settings.get('transition') !== 'smart') { this._cookPrevTransition = settings.get('transition'); settings.set('transition', 'smart'); }
     this.cookSalt = Math.random().toString(36).slice(2);
-    this.cookHist = [];
+    this.cookHist = []; this._cookPicked = new Set(); this._userNext = new Set();
     this.playTracks(all.slice(0, 400), 0, { context: { type: 'cook', name: 'DJ Cook It Up' } });
     return true;
   }
@@ -651,6 +652,7 @@ class Engine extends Emitter {
     if (this.index < 0) return this.playTracks(tracks, 0);
     this.queue.splice(this.index + 1, 0, ...ids);
     if (this.origQueue) this.origQueue.push(...ids);
+    (this._userNext ||= new Set()); ids.forEach((id) => this._userNext.add(id)); // Cook It Up won't reorder your picks
     this.invalidateNext();
     this.emit('queue'); this.saveState();
   }
@@ -1010,8 +1012,41 @@ class Engine extends Emitter {
   }
   invalidateNext() { if (!this.transition) this.cancelNext(); }
 
+  // DJ Cook It Up picks what comes next like a DJ digging through a crate: from the next couple of dozen
+  // random songs, the one that mixes best with what's playing (tempo it can match, a key that fits, not
+  // the same artist again), with a bit of chance so it never plays out the same way twice
+  cookPickNext() {
+    const i = this.index + 1;
+    if (i >= this.queue.length || this.repeat === 'one' || this._userNext?.has(this.queue[i])) return;
+    const cur = this.cur.track;
+    if (!cur) return;
+    const tempo = (t) => library.bpmOf(t) || onlineBpmCached(t) || 0;
+    const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot;
+    const recentArtists = new Set(this.queue.slice(Math.max(0, this.index - 2), this.index + 1).map((id) => library.track(id)?.artist).filter(Boolean));
+    let best = -1, bestS = -Infinity;
+    const lookup = [];
+    for (let j = i; j < Math.min(this.queue.length, i + 24); j++) {
+      const t = library.track(this.queue[j]);
+      if (!t) continue;
+      let sc = Math.random() * 1.2;
+      const bB = tempo(t);
+      if (bA && bB) {
+        let r = bB / bA; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2;
+        const d = Math.abs(r - 1);
+        sc += d <= 0.03 ? 3 : d <= 0.06 ? 2.2 : d <= 0.1 ? 1 : 0;
+      } else { sc += 0.8; if (!bB && lookup.length < 6) lookup.push(t); }
+      const kB = library.analysis.get(t.id)?.camelot;
+      if (kA && kB) sc += keyCompat(kA, kB) >= 0.85 ? 1.4 : keyCompat(kA, kB) >= 0.6 ? 0.5 : -0.4;
+      if (recentArtists.has(t.artist)) sc -= 1.5;
+      if (sc > bestS) { bestS = sc; best = j; }
+    }
+    // tempos for songs nobody has measured yet are looked up online, so later picks get better
+    for (const t of lookup) onlineBpm(t).catch(() => {});
+    if (best > i) { const [id] = this.queue.splice(best, 1); this.queue.splice(i, 0, id); this.emit('queue'); }
+  }
   prepareNext() {
     if (this.upcoming || this.transition || this.sleepEndOfTrack) return;
+    if (this.cookMode && !this._cookPicked?.has(this.index)) { (this._cookPicked ||= new Set()).add(this.index); try { this.cookPickNext(); } catch (e) { /* keep the order */ } }
     const i = this.nextIndex(true);
     if (i < 0) return;
     const t = library.track(this.queue[i]);

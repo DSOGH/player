@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.22.1';
+export const APP_VERSION = '1.23.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -34,7 +34,7 @@ const text = (k, label, sub = '') => html`<div class="set-row col">
   <input class="text-input" data-text="${k}" value="${settings.get(k)}" autocomplete="off" autocapitalize="off" spellcheck="false">
 </div>`;
 // iOS-style colored icon tiles
-const TILE = { server: '#0a84ff', mix: '#ff375f', eq: '#ff9f0a', library: '#bf5af2', palette: '#5e5ce6', sparkle: '#30b0c7', bpm: '#30d158', storage: '#8e8e93', info: '#8e8e93', refresh: '#64d2ff', car: '#ff9f0a', wifi: '#ff9f0a', download: '#30d158', trash: '#ff453a', timer: '#ff9f0a', switch: '#5e5ce6', lock: '#636366' };
+const TILE = { server: '#0a84ff', mix: '#ff375f', eq: '#ff9f0a', library: '#bf5af2', palette: '#5e5ce6', sparkle: '#30b0c7', bpm: '#30d158', storage: '#8e8e93', info: '#8e8e93', refresh: '#64d2ff', car: '#ff9f0a', wifi: '#ff9f0a', download: '#30d158', trash: '#ff453a', timer: '#ff9f0a', switch: '#5e5ce6', lock: '#636366', user: '#5e5ce6' };
 const tile = (ic) => (TILE[ic] ? `style="background:${TILE[ic]}"` : '');
 const link = (href, ic, label, value = '') => html`<a class="set-row link" href="${href}">
   <span class="set-ic" ${raw(tile(ic))}>${icon(ic)}</span><div class="set-text"><span>${label}</span></div><span class="set-value">${value}</span>${icon('right', 'chev')}
@@ -47,7 +47,7 @@ function fmtNum(v) { return typeof v === 'number' ? (Number.isInteger(v) ? v : v
 
 // ---------- pages ----------
 export async function settingsView(page = '') {
-  const fn = { '': root, sources, plex: plexPage, source, playback, sound, library: libraryPage, appearance, storage, about, extras }[page] || root;
+  const fn = { '': root, sources, plex: plexPage, source, playback, sound, library: libraryPage, appearance, storage, about, extras, accounts: accountsPage }[page] || root;
   return fn();
 }
 
@@ -95,7 +95,7 @@ function profileCard() {
   const albums = library.albums?.size || 0, artists = library.artists?.size || 0;
   const w = library.weekStats?.() || { minutes: 0 };
   const where = plex.connected ? plex.cfg.server.name : 'This device';
-  return html`<a class="set-profile" href="#/stats">
+  return html`<a class="set-profile" href="#/settings/accounts">
     ${u?.thumb ? html`<img class="sp-avatar" src="${u.thumb}" alt="" referrerpolicy="no-referrer">` : html`<div class="sp-avatar" style="background:linear-gradient(140deg,${accounts.colors(accounts.active)[0]},${accounts.colors(accounts.active)[1]})">${(name[0] || '♪').toUpperCase()}</div>`}
     <div class="sp-text"><b>${name}</b><small>${library.size.toLocaleString()} songs · ${albums.toLocaleString()} albums · ${artists.toLocaleString()} artists</small>
       <span class="sp-chips"><i>${where}</i><i>${Math.floor(w.minutes / 60)}h ${w.minutes % 60}m this week</i><i>v${APP_VERSION}</i></span></div>
@@ -107,26 +107,41 @@ async function root() {
   const demo = await db.kv.get('demo');
   const srcLabel = plex.connected ? `Plex · ${plex.cfg.server.name}` : plex.signedIn ? 'Plex · choose server' : src?.url ? new URL(src.url).host : demo ? 'Demo library' : 'Not connected';
   const modeLabel = { smart: 'DJ Mix', crossfade: `Crossfade ${settings.get('crossfadeSec')}s`, off: 'Gapless' }[settings.get('transition')];
+  const st = cloud.state || {};
+  const nAcc = accounts.all.length;
   return {
     title: 'Settings',
+    // what you change most comes first (the music and how the app looks), everything else after
     html: html`${pageHeader('Settings')}
     ${profileCard()}
-    ${accountsGroup()}
     ${plex.connected && plex.cfg.connKind === 'relay' ? html`<a class="set-alert" href="#/settings/plex">
       <span class="set-alert-ic">${icon('wifi')}</span><div><b>Plex is on a slow connection</b><small>It’s using Plex Relay, so songs can start slowly. Tap to see how to fix it.</small></div>${icon('right', 'chev')}</a>` : ''}
-    ${group('', html`
-      ${link('#/settings/sources', 'server', 'Music Sources', srcLabel)}
-      ${link('#/settings/playback', 'mix', 'Playback & Transitions', modeLabel)}
+    ${group('Music & app', html`
+      ${link('#/settings/playback', 'mix', 'Playback & DJ', modeLabel)}
       ${link('#/settings/sound', 'eq', 'Sound & EQ', settings.get('eqOn') ? EQ_NAMES[settings.get('eqPreset')] : 'EQ off')}
-      ${link('#/settings/library', 'library', 'Library', `${library.size} songs`)}
-      ${link('#/settings/appearance', 'palette', 'Appearance')}
-      ${link('#/settings/extras', 'sparkle', 'Extras', 'Gestures, Car Mode & more')}
+      ${link('#/settings/appearance', 'palette', 'Appearance', 'Theme, layout, artwork')}
+      ${link('#/settings/library', 'library', 'Library', `${library.size.toLocaleString()} songs`)}
+      ${link('#/settings/sources', 'server', 'Music Sources', srcLabel)}`)}
+    ${group('You', html`
+      ${link('#/settings/accounts', 'user', 'Accounts & Cloud', `${nAcc} account${nAcc > 1 ? 's' : ''}${settings.get('cloudSync') && st.at ? ' · backed up' : ''}`)}
       ${link('#/stats', 'bpm', 'Your Stats', 'Top songs, artists, minutes')}
-      ${link('#/downloads', 'download', 'Downloads', `${library.offline?.size || 0} songs`)}
+      ${link('#/downloads', 'download', 'Downloads', `${library.offline?.size || 0} songs`)}`)}
+    ${group('More', html`
+      ${link('#/settings/extras', 'sparkle', 'Extras', 'Gestures, Car Mode & more')}
       ${link('#/settings/storage', 'storage', 'Storage & Backup')}
       ${link('#/settings/about', 'info', 'About & Help')}`)}
-    ${group('', html`${button('rescan', 'refresh', scanner.running ? 'Scanning…' : 'Scan for New Music', { sub: await lastScanText() })}`)}
-    ${group('', html`${button('force-refresh', 'refresh', 'Refresh App', { sub: `Load the newest version (v${APP_VERSION} now) — you stay signed in, nothing is lost` })}`)}
+    <div class="set-quick">
+      <button class="set-quick-btn" data-a="rescan">${icon('refresh')}<span><b>${scanner.running ? 'Scanning…' : 'Scan for new music'}</b><small>${await lastScanText()}</small></span></button>
+      <button class="set-quick-btn" data-a="force-refresh">${icon('download')}<span><b>Refresh app</b><small>v${APP_VERSION} · stays signed in</small></span></button>
+    </div>
+    <div class="bottom-pad"></div>`,
+  };
+}
+async function accountsPage() {
+  return {
+    title: 'Accounts & Cloud',
+    html: html`${pageHeader('Accounts & Cloud', { back: true })}
+    ${accountsGroup()}
     <div class="bottom-pad"></div>`,
   };
 }
@@ -248,49 +263,53 @@ async function source() {
 function playback() {
   const tm = settings.get('transition');
   return {
-    title: 'Playback',
-    html: html`${pageHeader('Playback', { back: true })}
-    ${group('Transitions', html`
-      ${seg('transition', 'Between songs', [['smart', 'DJ Mix'], ['crossfade', 'Crossfade'], ['off', 'Gapless']],
-        { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings; and the next song slides under natural fade-outs. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
+    title: 'Playback & DJ',
+    html: html`${pageHeader('Playback & DJ', { back: true })}
+    ${group('Between songs', html`
+      ${seg('transition', 'Mode', [['smart', 'DJ Mix'], ['crossfade', 'Crossfade'], ['off', 'Gapless']],
+        { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
       ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
-      ${tm === 'smart' ? html`
-        ${button('cook-it-up', 'sparkle', 'DJ Cook It Up', { sub: 'Play your whole library at random with DJ tricks' })}
-      ${seg('cookLevel', 'Cook It Up energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'Mostly clean beat-matched blends, with the odd echo throw or cut — near the end of songs.', hype: 'More tricks: loop rolls, brakes, spin-backs, risers — and it leaves songs a bit earlier.', wild: 'Everything, often, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
-      ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play']],
-          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
-        ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
-        ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}` : ''}
-      ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
-      ${toggle('gaplessAlbums', 'Gapless albums', 'Never crossfade between consecutive tracks of the same album (live albums, DJ mixes, concept albums)')}
-      ${toggle('skipSilence', 'Trim silence', 'Skip dead air at the start and end of songs')}
+      ${tm === 'smart' ? html`${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play']],
+          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs: the beat drops out, the vocal is isolated, and the next song picks up singing those exact words.' }[settings.get('djStyle')])}` : ''}
     `)}
-    ${group('Tempo', html`
-      ${seg('bpmDetect', 'BPM detection', [['auto', 'Automatic'], ['manual', 'On demand'], ['off', 'Off']], 'Automatic analyses each song as it comes up. On demand: use “Detect BPM” in the player menu.')}
-      ${toggle('beatMatch', 'Beat-matched mixing', 'In Smart mode, line mixes up on the beat when two songs have similar tempos')}
-      ${toggle('dropAlign', 'Land the drop', 'Starts the next song early so its drop or chorus hits right as the old one finishes')}
-      ${toggle('vocalAware', 'Keep vocals apart', 'Places each blend where only one song is singing (uses synced lyrics)')}
-      ${toggle('vocalStrip', 'Cut vocals when they’d clash', 'If both songs would still be singing, the outgoing one drops its vocals and only its music & beat blend in')}
-      ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back (pitch preserved)')}
-      ${slider('tempoMatchMax', 'Max tempo change', 1, 12, 1, '%', 'How much a song may be sped up or slowed down to match the beat. Small = you never notice it; songs further apart get a different kind of mix. The song goes back to normal speed as soon as the old one is gone.')}
-      ${toggle('onlineBpm', 'Look up BPM online', 'Checks each song’s tempo against Deezer’s catalogue once and saves it, so the DJ never mixes at half or double speed')}
-      ${toggle('preferBpmTag', 'Prefer BPM tags', 'Use the BPM from your file tags when present')}
-      ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
-    `)}
-    ${group('Controls', html`
+    ${tm === 'smart' ? group('DJ Cook It Up', html`
+      ${button('cook-it-up', 'sparkle', 'Start DJ Cook It Up', { sub: 'Your whole library at random — the DJ picks what fits next and mixes it with tricks' })}
+      ${seg('cookLevel', 'Energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'Mostly clean beat-matched blends, with the odd echo throw or cut — near the end of songs.', hype: 'More tricks: loop rolls, brakes, spin-backs, risers — and it leaves songs a bit earlier.', wild: 'Everything, often, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
+    `) : ''}
+    ${group('Playing', html`
       ${toggle('skipFade', 'Fade when skipping', 'Off = the next song starts instantly when you press ⏭ / ⏮')}
-      ${slider('skipFadeSec', 'Skip fade length', 0.3, 3, 0.1, 's')}
-      ${toggle('pauseFade', 'Soft pause', 'Fade out/in on pause and play')}
-      ${slider('prevRestarts', 'Previous restarts song after', 1, 10, 1, 's')}
-    `)}
-    ${group('Lyrics', html`
-      ${toggle('onlineLyrics', 'Online lyrics', 'Find synced lyrics by song title and artist (LRCLIB) when your files and Plex don’t have them')}
-    `)}
-    ${group('Queue', html`
-      ${toggle('autoplay', 'Autoplay', 'When your queue ends, keep playing similar music (genre, artist, tempo)')}
+      ${settings.get('skipFade') ? slider('skipFadeSec', 'Skip fade length', 0.3, 3, 0.1, 's') : ''}
+      ${toggle('autoplay', 'Autoplay', 'When your queue ends, keep playing similar music')}
       ${seg('shuffleMode', 'Shuffle style', [['random', 'Random'], ['flow', 'BPM flow']], 'BPM flow orders shuffled songs so tempos change smoothly')}
-      ${toggle('resumeSession', 'Resume where you left off')}
+      ${toggle('onlineLyrics', 'Online lyrics', 'Find synced lyrics (LRCLIB) when your files and Plex don’t have them')}
     `)}
+    <details class="set-more">
+      <summary><span>Fine-tuning</span><small>DJ effects, tempo, BPM detection, fades & more</small></summary>
+      ${group('DJ', html`
+        ${toggle('harmonicMix', 'Harmonic mixing', 'Long blends when keys agree, quick ones when they clash')}
+        ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}
+        ${toggle('beatMatch', 'Beat-matched mixing', 'Line mixes up on the beat when two songs have similar tempos')}
+        ${toggle('dropAlign', 'Land the drop', 'The next song’s drop or chorus hits right as the old one finishes')}
+        ${toggle('vocalAware', 'Keep vocals apart', 'Blends where only one song is singing (uses synced lyrics)')}
+        ${toggle('vocalStrip', 'Cut vocals when they’d clash', 'The outgoing song drops its vocals and only its beat blends in')}
+        ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}
+        ${toggle('gaplessAlbums', 'Gapless albums', 'Never mix between consecutive tracks of the same album')}
+        ${toggle('skipSilence', 'Trim silence', 'Skip dead air at the start and end of songs')}
+      `)}
+      ${group('Tempo & BPM', html`
+        ${toggle('tempoMatch', 'Tempo matching', 'Gently speed up or slow down the incoming song during the mix, then glide back')}
+        ${slider('tempoMatchMax', 'Max tempo change', 1, 12, 1, '%', 'Small = you never notice it; songs further apart get a different kind of mix.')}
+        ${seg('bpmDetect', 'BPM detection', [['auto', 'Automatic'], ['manual', 'On demand'], ['off', 'Off']])}
+        ${toggle('onlineBpm', 'Look up BPM online', 'Checks each song’s tempo against Deezer once and saves it')}
+        ${toggle('preferBpmTag', 'Prefer BPM tags', 'Use the BPM from your file tags when present')}
+        ${seg('analysisNetwork', 'Analyze songs on', [['any', 'Any network'], ['wifi', 'Wi-Fi only']])}
+      `)}
+      ${group('More', html`
+        ${toggle('pauseFade', 'Soft pause', 'Fade out/in on pause and play')}
+        ${slider('prevRestarts', 'Previous restarts song after', 1, 10, 1, 's')}
+        ${toggle('resumeSession', 'Resume where you left off')}
+      `)}
+    </details>
     <div class="bottom-pad"></div>`,
   };
 }
@@ -549,7 +568,7 @@ export function bindSettings(root, rerender) {
     const v = typeof DEFAULTS[k] === 'number' ? +raw : raw;
     settings.set(k, v);
     $$('button', b.parentNode).forEach((x) => x.classList.toggle('on', x === b));
-    if (k === 'transition' || k === 'djStyle' || k === 'cookLevel') rerender.page();
+    if (k === 'transition' || k === 'djStyle' || k === 'cookLevel' || k === 'skipFade') rerender.page();
   });
 }
 
