@@ -83,6 +83,9 @@ export const DEFAULTS = {
   friendRelay: 'https://ntfy.sh', // message relay (ntfy) — can be your own
   vocalStrip: true, // if two vocals would still overlap, blend only the outgoing song's music & beat
   vocalAware: true, // DJ blends avoid two vocals singing at once (uses synced lyrics)
+  deskWidth: 'comfortable', // computer: content max width
+  deskPlayerW: 'normal', // computer: player column width
+  deskSidebar: true, // computer: sidebar navigation
   rowSwipe: true, // swipe a song right to queue it, left to add it to a playlist
   likeBurst: true, // little burst animation when you like a song
 };

@@ -37,6 +37,8 @@ function duoModel(long) {
   return null;
 }
 
+// a computer: mouse/trackpad, no touch screen
+const DESK = matchMedia('(hover: hover) and (pointer: fine)').matches && !('ontouchstart' in window) && navigator.maxTouchPoints === 0;
 export function detect() {
   const body = document.body;
   const root = document.documentElement;
@@ -71,6 +73,11 @@ export function detect() {
       else if (TOUCH && W >= 740 && H >= 500 && W > H * 1.15) {
         // other foldables / tablets in landscape: split down the middle (where a fold would be)
         mode = 'h'; device = 'Foldable'; leftW = W / 2; hinge = 0;
+      } else if (DESK && W >= 1000) {
+        // computer: sidebar + library in the middle + a player column on the right
+        mode = 'wide'; device = 'Desktop';
+        const pw = { narrow: [340, 0.24, 400], normal: [380, 0.3, 480], wide: [460, 0.36, 620] }[settings.get('deskPlayerW')] || [380, 0.3, 480];
+        leftW = Math.round(W - Math.min(pw[2], Math.max(pw[0], W * pw[1])));
       } else if (W >= 900 && W > H * 1.1) {
         mode = 'wide'; device = 'Wide screen';
         leftW = Math.round(Math.min(W * 0.55, Math.max(420, W - 520)));
@@ -93,6 +100,10 @@ export function detect() {
   body.classList.toggle('dual-h', mode === 'h' || mode === 'wide');
   body.classList.toggle('dual-v', mode === 'v');
   body.classList.toggle('dual-wide', mode === 'wide');
+  body.classList.toggle('desk', device === 'Desktop');
+  body.classList.toggle('desk-side', device === 'Desktop' && settings.get('deskSidebar') !== false);
+  body.dataset.deskWidth = settings.get('deskWidth') || 'comfortable';
+  body.classList.toggle('ultrawide', W >= 2000 || W / H >= 2.1);
   body.classList.toggle('dual-duo', /Duo/.test(device));
   body.classList.toggle('dual-swap', mode !== 'single' && !!settings.get('dualSwap'));
   if (leftW) root.style.setProperty('--seg-w', leftW + 'px'); else root.style.removeProperty('--seg-w');

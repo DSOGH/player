@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.15.1';
+export const APP_VERSION = '1.16.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -344,6 +344,12 @@ function appearance() {
       ${toggle('showBpmRows', 'Show BPM & key on songs', 'Measured once and saved on this phone')}
       ${toggle('showBpm', 'Show BPM in player')}
       ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
+    `)}
+    ${group('Computer & wide screens', html`
+      ${seg('deskWidth', 'Content width', [['comfortable', 'Comfortable'], ['wide', 'Wide'], ['full', 'Full']], 'On big and ultrawide monitors, keep albums and lists at a readable width instead of stretching edge to edge')}
+      ${seg('deskPlayerW', 'Player column', [['narrow', 'Narrow'], ['normal', 'Normal'], ['wide', 'Wide']])}
+      ${toggle('dualSwap', 'Player on the left', 'Put the player column on the left side')}
+      ${toggle('deskSidebar', 'Sidebar', 'Navigation on the left instead of tabs at the bottom')}
     `)}
     ${group('Device', html`
       ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Split at hinge'], ['span', 'Span over hinge'], ['off', 'Off']], 'iPhone Duo, Surface Duo and other foldables: library on one side of the fold, player on the other. “Span over hinge” ignores the fold.')}

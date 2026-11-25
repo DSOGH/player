@@ -139,7 +139,7 @@ async function route(path) {
     default: return V.home();
   }
 }
-const TAB_OF = { friends: 'friends', chat: 'friends', friend: 'friends', stats: 'home', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
+const TAB_OF = { friends: 'friends', chat: 'friends', friend: 'friends', stats: 'stats', home: 'home', mix: 'home', library: 'library', album: 'library', artist: 'library', playlist: 'library', liked: 'library', genre: 'library', search: 'search', settings: 'settings' };
 
 async function render({ keepScroll = false } = {}) {
   const path = parseHash();
@@ -783,7 +783,45 @@ function wireGlobal() {
   document.addEventListener('pointermove', cancelLp, { passive: true });
   document.addEventListener('pointerup', cancelLp);
   document.addEventListener('pointercancel', cancelLp);
-  document.addEventListener('contextmenu', (e) => { if (e.target.closest('.row.track, .card')) e.preventDefault(); });
+  document.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.row.track, .card[href^="#/album/"]');
+    if (!row) { if (e.target.closest('.card')) e.preventDefault(); return; }
+    e.preventDefault();
+    clearTimeout(lpTimer); lpTimer = null;
+    if (e.pointerType === 'touch' || e.sourceCapabilities?.firesTouchEvents) return; // long-press already handles touch
+    if (row.dataset.tid) {
+      const t = library.track(row.dataset.tid);
+      const pl = currentPath.startsWith('playlist/') ? currentPath.split('/')[1] : null;
+      if (t) trackMenu(t, { playlist: pl });
+    } else {
+      const al = library.album(row.getAttribute('href').split('/')[2]);
+      if (al) albumMenu(al);
+    }
+  });
+  // keyboard shortcuts (computers / iPad keyboards)
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest?.('input, textarea, select, [contenteditable]') || e.altKey) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const k = e.key;
+    if (mod && k.toLowerCase() === 'f') { e.preventDefault(); location.hash = '#/search'; setTimeout(() => document.querySelector('#view input[type=search], #view .search-input, #view input')?.focus(), 80); return; }
+    if (mod) return;
+    if (k === '/') { e.preventDefault(); location.hash = '#/search'; setTimeout(() => document.querySelector('#view input')?.focus(), 80); return; }
+    if (document.querySelector('#sheet.open')) { if (k === 'Escape') closeSheet(null); return; }
+    if (!engine.track && k !== 'Escape') return;
+    const step = settings.get('seekStep') || 15;
+    switch (k) {
+      case ' ': case 'k': e.preventDefault(); engine.toggle(); break;
+      case 'ArrowRight': e.preventDefault(); if (e.shiftKey) engine.next(); else engine.seek(engine.currentTime + step); break;
+      case 'ArrowLeft': e.preventDefault(); if (e.shiftKey) engine.prev(); else engine.seek(engine.currentTime - step); break;
+      case 'n': case 'MediaTrackNext': engine.next(); break;
+      case 'p': case 'MediaTrackPrevious': engine.prev(); break;
+      case 'ArrowUp': e.preventDefault(); engine.setVolume?.(Math.min(1, (engine.volume ?? 1) + 0.05)); toast(`Volume ${Math.round((engine.volume ?? 1) * 100)}%`, { ms: 700 }); break;
+      case 'ArrowDown': e.preventDefault(); engine.setVolume?.(Math.max(0, (engine.volume ?? 1) - 0.05)); toast(`Volume ${Math.round((engine.volume ?? 1) * 100)}%`, { ms: 700 }); break;
+      case 'l': if (engine.track) { const on = library.toggleLike(engine.track.id); toast(on ? 'Added to Liked Songs' : 'Removed from Liked Songs', { ms: 1200 }); } break;
+      case 's': engine.toggleShuffle(); toast(engine.shuffle ? 'Shuffle on' : 'Shuffle off', { ms: 900 }); break;
+      case 'Escape': if (isOpen()) closeNP(); break;
+    }
+  });
 
   // Swipe a song: left → Add to Queue, right → Add to Playlist. Follows the finger 1:1 (drawn once per
   // frame), the color and icon grow with the swipe, a tap of haptics when it locks in, then a smooth glide back.
@@ -872,15 +910,6 @@ function wireGlobal() {
     if (isOpen() && !location.hash.endsWith('?np')) closeNP(true);
     render();
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.target.matches('input, textarea')) return;
-    if (e.code === 'Space') { e.preventDefault(); engine.toggle(); }
-    else if (e.key === 'ArrowRight' && e.shiftKey) engine.next();
-    else if (e.key === 'ArrowLeft' && e.shiftKey) engine.prev();
-    else if (e.key === 'ArrowRight') engine.seek(engine.currentTime + 10);
-    else if (e.key === 'ArrowLeft') engine.seek(engine.currentTime - 10);
-    else if (e.key === 'Escape') closeNP();
-  });
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTheme);
 }
 
@@ -913,7 +942,7 @@ function wireEngineEvents() {
   // friends: live chat updates, unread badge, a toast when a message arrives elsewhere in the app
   const badge = () => { const b = document.querySelector('#tabs .tab-badge'); if (!b) return; const n = friends.unread; b.hidden = !n; b.textContent = n > 9 ? '9+' : n; };
   friends.on('change', () => { badge(); if (currentPath === 'friends') rerender(); });
-  settings.on('change', (k) => { if (k === 'friendRelay') friends.reconnect(); });
+  settings.on('change', (k) => { if (k === 'friendRelay') friends.reconnect(); if (['deskWidth', 'deskPlayerW', 'deskSidebar', 'dualSwap'].includes(k)) dispatchEvent(new Event('resize')); });
   friends.on('friend', (f) => { toast(`${f.name} accepted your invite 🎉`); if (currentPath === 'friends') render({ keepScroll: true }); });
   friends.on('message', (fid, m, incoming) => {
     badge();
