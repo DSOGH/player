@@ -1207,3 +1207,4 @@ body.desk .quick-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1
 .row.track .t1 .ebadge { flex: none; }
 .row.track .t1 .bpmchip { flex: none; margin-left: 2px; padding: 2px 6px; font-size: 10.5px; border-radius: 5px; }
 body.desk .album-hero .edition-switch { margin: 8px 0 4px; }
+.fr-real { font-style: normal; font-weight: 500; color: var(--text3); font-size: 13px; }

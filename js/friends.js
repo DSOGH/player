@@ -42,8 +42,10 @@ class Friends extends Emitter {
   }
   async setup(name) {
     if (!this.me) this.me = { id: rand(18), since: Date.now(), last: 'all' };
+    const changed = this.me.name && this.me.name !== name;
     this.me.name = (name || plex.user?.name || 'Me').slice(0, 40);
     await db.kv.set('friends:me', this.me);
+    if (changed) for (const f of this.list) this.send(f, { type: 'profile', name: this.me.name }, { store: false }).catch(() => {});
     this.connect();
     this.emit('change');
   }
@@ -53,6 +55,14 @@ class Friends extends Emitter {
     this.emit('change');
   }
   friend(id) { return this.list.find((f) => f.id === id); }
+  // the name you see: your own nickname for them if you set one, otherwise the name they chose
+  nameOf(f) { return f?.nick || f?.name || 'Friend'; }
+  async rename(id, nick) {
+    const f = this.friend(id);
+    if (!f) return;
+    f.nick = String(nick || '').trim().slice(0, 40) || undefined;
+    await this.save();
+  }
   get unread() { return this.list.reduce((s, f) => s + (f.unread || 0), 0); }
 
   // ---------- invites ----------
@@ -119,7 +129,7 @@ class Friends extends Emitter {
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(msg)));
       const env = JSON.stringify({ v: 1, k: f.kid, iv: b64u(iv), c: b64u(ct) });
-      const r = await fetch(`${relay()}/${msg.type === 'np' ? npTopic(f.id) : topic(f.id)}`, { method: 'POST', body: env, headers: { 'X-Cache': 'yes' } });
+      const r = await fetch(`${relay()}/${msg.type === 'np' || msg.type === 'profile' ? npTopic(f.id) : topic(f.id)}`, { method: 'POST', body: env, headers: { 'X-Cache': 'yes' } });
       if (!r.ok) throw new Error('relay ' + r.status);
       if (store) { msg.state = 'sent'; db.kv.set('chat:' + f.id, await this.history(f.id)); this.emit('message', f.id, msg); }
     } catch (e) {
@@ -195,6 +205,7 @@ class Friends extends Emitter {
     }
     if (!f || f.kid !== env.k) return;
     if (msg.type === 'np') { f.np = { title: msg.title, artist: msg.artist }; f.npAt = msg.at; await this.save(); return; }
+    if (msg.type === 'profile') { f.name = String(msg.name || f.name).slice(0, 40); await this.save(); return; }
     delete msg.state;
     if (await this.store(f.id, msg)) {
       if (this.viewing !== f.id) { f.unread = (f.unread || 0) + 1; await this.save(); }

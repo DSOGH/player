@@ -5,7 +5,7 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.17.3';
+const VERSION = 'v1.17.4';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -296,7 +296,7 @@ async function friendNote(raw) {
   const body = m.type === 'song'
     ? `♪ ${m.song.title} — ${m.song.artist}${m.song.at ? ` (from ${fmt(m.song.at)})` : ''}${m.note ? `\n${m.note}` : ''}`
     : String(m.text || 'New message');
-  return { title: f.name, body, url: `#/chat/${f.id}`, tag: 'chat-' + f.id };
+  return { title: f.nick || f.name, body, url: `#/chat/${f.id}`, tag: 'chat-' + f.id };
 }
 self.addEventListener('push', (e) => {
   e.waitUntil((async () => {

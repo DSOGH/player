@@ -14,7 +14,7 @@ const ago = (t) => {
   if (m < 1440) return `${Math.round(m / 60)}h`;
   return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
-const avatar = (f, cls = '') => html`<span class="fr-av ${cls}" style="background:${f.color || '#5e5ce6'}">${(f.name || '?')[0].toUpperCase()}</span>`;
+const avatar = (f, cls = '') => html`<span class="fr-av ${cls}" style="background:${f.color || '#5e5ce6'}">${(friends.nameOf(f) || '?')[0].toUpperCase()}</span>`;
 export const drafts = new Map();
 function notifyText() {
   if (!('Notification' in window)) return 'Add Player to your Home Screen to get notifications';
@@ -48,7 +48,7 @@ export async function friendsView() {
     const preview = last ? (last.type === 'song' ? `♪ ${last.song.title} — ${last.song.artist}` : last.text) : 'Say hi 👋';
     rows.push(html`<a class="fr-row${f.unread ? ' unread' : ''}" href="#/chat/${f.id}">
       ${avatar(f)}
-      <div class="fr-meta"><b>${f.name}</b>
+      <div class="fr-meta"><b>${friends.nameOf(f)}</b>${f.nick && f.name && f.nick !== f.name ? html`<em class="fr-real"> · ${f.name}</em>` : ''}
         <small>${np ? html`<span class="fr-np"><i class="eqbars"><i></i><i></i><i></i></i>${np.title} · ${np.artist}</span>` : (preview || '')}</small></div>
       <div class="fr-side">${last ? html`<small>${ago(last.at)}</small>` : ''}${f.unread ? html`<span class="fr-badge">${f.unread}</span>` : ''}</div></a>`);
   }
@@ -109,10 +109,10 @@ export async function chatView(id) {
   });
   const np = f.np && Date.now() - (f.npAt || 0) < 30 * 60000 ? f.np : null;
   return {
-    title: f.name,
-    html: html`${pageHeader(f.name, { back: true, actions: html`<button class="icon-btn" data-a="fr-menu" data-fid="${id}" aria-label="More">${icon('more')}</button>` })}
+    title: friends.nameOf(f),
+    html: html`${pageHeader(friends.nameOf(f), { back: true, actions: html`<button class="icon-btn" data-a="fr-menu" data-fid="${id}" aria-label="More">${icon('more')}</button>` })}
     ${np ? html`<div class="ch-np"><i class="eqbars"><i></i><i></i><i></i></i>Listening to <b>${np.title}</b> · ${np.artist}</div>` : ''}
-    <div class="ch-list" data-chat="${id}">${out.length ? out : html`<div class="ch-empty">${avatar(f, 'big')}<p>This is the start of your chat with <b>${f.name}</b>.<br>Send a song from any moment with ♪.</p></div>`}</div>
+    <div class="ch-list" data-chat="${id}">${out.length ? out : html`<div class="ch-empty">${avatar(f, 'big')}<p>This is the start of your chat with <b>${friends.nameOf(f)}</b>.<br>Send a song from any moment with ♪.</p></div>`}</div>
     <form class="ch-compose" data-chat-form="${id}" onsubmit="return false">
       <button type="button" class="ch-attach" data-a="ch-attach" data-fid="${id}" aria-label="Send a song">${icon('note')}</button>
       <input class="ch-input" id="ch-input" placeholder="Message" autocomplete="off" enterkeyhint="send" value="${drafts.get(id) || ''}">

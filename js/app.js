@@ -366,12 +366,12 @@ async function trackMenu(t, ctx = {}) {
     case 'next': engine.playNext([t]); toast('Playing next'); break;
     case 'queue': engine.addToQueue([t]); toast('Added to queue'); break;
     case 'send': {
-      const fv = await actionSheet({ header: html`<div class="sheet-track"><div><b>Send “${t.title}”</b><span>to a friend</span></div></div>`, items: friends.list.map((f) => ({ icon: 'friends', label: f.name, value: f.id })) });
+      const fv = await actionSheet({ header: html`<div class="sheet-track"><div><b>Send “${t.title}”</b><span>to a friend</span></div></div>`, items: friends.list.map((f) => ({ icon: 'friends', label: friends.nameOf(f), value: f.id })) });
       const f = fv && friends.friend(fv);
       if (!f) break;
       const at = engine.track?.id === t.id && engine.currentTime > 3 ? engine.currentTime : 0;
       friends.sendSong(f, t, at);
-      toast(`Sent to ${f.name}${at ? ` from ${fmtTimeShort(at)}` : ''}`);
+      toast(`Sent to ${friends.nameOf(f)}${at ? ` from ${fmtTimeShort(at)}` : ''}`);
       break;
     }
     case 'playlist': addToPlaylist([t]); break;
@@ -658,12 +658,12 @@ async function doAction(a, el, e) {
     case 'fr-enter': {
       const code = await prompt({ title: 'Enter a friend code', placeholder: 'Paste the code or link', ok: 'Add' });
       if (!code) break;
-      try { const f = await friends.acceptInvite(code); toast(`You and ${f.name} are now friends`); location.hash = `#/chat/${f.id}`; } catch (er) { toast(er.message); }
+      try { const f = await friends.acceptInvite(code); toast(`You and ${friends.nameOf(f)} are now friends`); location.hash = `#/chat/${f.id}`; } catch (er) { toast(er.message); }
       break;
     }
     case 'fr-accept': {
       if (!friends.ready) await friends.setup(plex.user?.name || 'Me');
-      try { const f = await friends.acceptInvite(d.code); toast(`You and ${f.name} are now friends`); location.replace(`#/chat/${f.id}`); } catch (er) { toast(er.message); }
+      try { const f = await friends.acceptInvite(d.code); toast(`You and ${friends.nameOf(f)} are now friends`); location.replace(`#/chat/${f.id}`); } catch (er) { toast(er.message); }
       break;
     }
     case 'fr-notify': {
@@ -692,12 +692,15 @@ async function doAction(a, el, e) {
     case 'fr-menu': {
       const f = friends.friend(d.fid);
       if (!f) break;
-      const v = await actionSheet({ header: html`<div class="sheet-track"><div><b>${f.name}</b><span>Friend</span></div></div>`, items: [
+      const v = await actionSheet({ header: html`<div class="sheet-track"><div><b>${friends.nameOf(f)}</b><span>${f.nick ? `Calls themselves ${f.name}` : 'Friend'}</span></div></div>`, items: [
         { icon: 'edit', label: 'Rename', value: 'rename' },
         { icon: 'trash', label: 'Remove Friend', value: 'remove', danger: true },
       ] });
-      if (v === 'rename') { const n = await prompt({ title: 'Name', value: f.name, ok: 'Save' }); if (n) { f.name = n.slice(0, 40); await friends.save(); render({ keepScroll: true }); } }
-      if (v === 'remove' && await confirmSheet(`Remove ${f.name}? Your chat is deleted from this phone.`, 'Remove', true)) { await friends.remove(f.id); location.hash = '#/friends'; }
+      if (v === 'rename') {
+        const n = await prompt({ title: `Name for ${f.name}`, value: friends.nameOf(f), placeholder: f.name, ok: 'Save' });
+        if (n !== null && n !== undefined) { await friends.rename(f.id, n === f.name ? '' : n); toast('Saved'); render({ keepScroll: true }); }
+      }
+      if (v === 'remove' && await confirmSheet(`Remove ${friends.nameOf(f)}? Your chat is deleted from this phone.`, 'Remove', true)) { await friends.remove(f.id); location.hash = '#/friends'; }
       break;
     }
     case 'ch-send': {
@@ -724,7 +727,7 @@ async function doAction(a, el, e) {
       const recent = library.recentlyPlayed(8).filter((t) => t.id !== cur?.id).slice(0, 6);
       recent.forEach((t, i) => items.push({ icon: 'note', label: `${t.title} — ${t.artist}`, value: 'r' + i }));
       if (!items.length) { toast('Play a song first, then share it here'); break; }
-      const v = await actionSheet({ header: html`<div class="sheet-track"><div><b>Send a song</b><span>to ${f.name}</span></div></div>`, items });
+      const v = await actionSheet({ header: html`<div class="sheet-track"><div><b>Send a song</b><span>to ${friends.nameOf(f)}</span></div></div>`, items });
       if (!v) break;
       let t = cur, at = 0;
       if (v === 'curT') at = engine.currentTime;
@@ -969,7 +972,7 @@ function wireEngineEvents() {
   const badge = () => { const b = document.querySelector('#tabs .tab-badge'); if (!b) return; const n = friends.unread; b.hidden = !n; b.textContent = n > 9 ? '9+' : n; };
   friends.on('change', () => { badge(); if (currentPath === 'friends') rerender(); });
   settings.on('change', (k) => { if (k === 'friendRelay') friends.reconnect(); if (['layoutMode', 'deskFrame', 'deskWidth', 'deskPlayerW', 'deskSidebar', 'dualSwap'].includes(k)) dispatchEvent(new Event('resize')); });
-  friends.on('friend', (f) => { toast(`${f.name} accepted your invite 🎉`); if (currentPath === 'friends') render({ keepScroll: true }); });
+  friends.on('friend', (f) => { toast(`${friends.nameOf(f)} accepted your invite 🎉`); if (currentPath === 'friends') render({ keepScroll: true }); });
   friends.on('message', (fid, m, incoming) => {
     badge();
     if (currentPath === 'chat/' + fid) {
@@ -979,13 +982,13 @@ function wireEngineEvents() {
     } else if (incoming && document.hidden && !friends.pushOn && settings.get('friendNotify') && 'Notification' in window && Notification.permission === 'granted') {
       // app in the background (e.g. playing music): a real iPhone notification
       const f = friends.friend(fid);
-      navigator.serviceWorker?.ready.then((reg) => reg.showNotification(f?.name || 'Friend', {
+      navigator.serviceWorker?.ready.then((reg) => reg.showNotification(friends.nameOf(f), {
         body: m.type === 'song' ? `♪ ${m.song.title} — ${m.song.artist}${m.song.at ? ` (from ${fmtTimeShort(m.song.at)})` : ''}${m.note ? `\n${m.note}` : ''}` : m.text,
         tag: 'chat-' + fid, renotify: true, icon: './icons/icon-192.png', badge: './icons/icon-192.png', data: { url: `#/chat/${fid}` },
       })).catch(() => {});
     } else if (incoming) {
       const f = friends.friend(fid);
-      toast(`${f?.name || 'Friend'}: ${m.type === 'song' ? '♪ ' + m.song.title : m.text}`.slice(0, 90), { action: { label: 'Open', run: () => { location.hash = '#/chat/' + fid; } }, ms: 5000 });
+      toast(`${friends.nameOf(f)}: ${m.type === 'song' ? '♪ ' + m.song.title : m.text}`.slice(0, 90), { action: { label: 'Open', run: () => { location.hash = '#/chat/' + fid; } }, ms: 5000 });
     }
   });
   addEventListener('hashchange', () => { if (!location.hash.startsWith('#/chat/')) friends.viewing = null; });
