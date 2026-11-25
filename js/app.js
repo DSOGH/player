@@ -942,7 +942,7 @@ function wireEngineEvents() {
   // friends: live chat updates, unread badge, a toast when a message arrives elsewhere in the app
   const badge = () => { const b = document.querySelector('#tabs .tab-badge'); if (!b) return; const n = friends.unread; b.hidden = !n; b.textContent = n > 9 ? '9+' : n; };
   friends.on('change', () => { badge(); if (currentPath === 'friends') rerender(); });
-  settings.on('change', (k) => { if (k === 'friendRelay') friends.reconnect(); if (['deskWidth', 'deskPlayerW', 'deskSidebar', 'dualSwap'].includes(k)) dispatchEvent(new Event('resize')); });
+  settings.on('change', (k) => { if (k === 'friendRelay') friends.reconnect(); if (['layoutMode', 'deskWidth', 'deskPlayerW', 'deskSidebar', 'dualSwap'].includes(k)) dispatchEvent(new Event('resize')); });
   friends.on('friend', (f) => { toast(`${f.name} accepted your invite 🎉`); if (currentPath === 'friends') render({ keepScroll: true }); });
   friends.on('message', (fid, m, incoming) => {
     badge();

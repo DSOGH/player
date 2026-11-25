@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.16.0';
+export const APP_VERSION = '1.16.1';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -346,6 +346,7 @@ function appearance() {
       ${toggle('showNextTransition', 'Show upcoming transition', 'e.g. “Next: … · Beat-matched 124 BPM”')}
     `)}
     ${group('Computer & wide screens', html`
+      ${seg('layoutMode', 'Layout', [['auto', 'Automatic'], ['desktop', 'Computer'], ['mobile', 'Phone']], 'Automatic picks the computer layout (sidebar + player column) in desktop browsers like Chrome, Brave, Edge and Safari')}
       ${seg('deskWidth', 'Content width', [['comfortable', 'Comfortable'], ['wide', 'Wide'], ['full', 'Full']], 'On big and ultrawide monitors, keep albums and lists at a readable width instead of stretching edge to edge')}
       ${seg('deskPlayerW', 'Player column', [['narrow', 'Narrow'], ['normal', 'Normal'], ['wide', 'Wide']])}
       ${toggle('dualSwap', 'Player on the left', 'Put the player column on the left side')}

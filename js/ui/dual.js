@@ -37,17 +37,34 @@ function duoModel(long) {
   return null;
 }
 
-// a computer: mouse/trackpad, no touch screen
-const DESK = matchMedia('(hover: hover) and (pointer: fine)').matches && !('ontouchstart' in window) && navigator.maxTouchPoints === 0;
+// a computer (Chrome, Brave, Edge, Safari, Firefox — touchscreen laptops included): not a phone/tablet
+// browser, and it has a mouse or trackpad. Can be forced in Settings → Appearance.
+function isDesktop() {
+  const forced = settings.get('layoutMode');
+  if (forced === 'desktop') return true;
+  if (forced === 'mobile') return false;
+  const ua = navigator.userAgent;
+  if (navigator.userAgentData && navigator.userAgentData.mobile === false && !/Android|iPhone|iPad|iPod/i.test(ua)) return true;
+  if (/Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua)) return false;
+  if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return false; // iPad asking for the desktop site
+  return mq('(any-pointer: fine)') || mq('(hover: hover)') || !mq('(pointer: coarse)');
+}
 export function detect() {
   const body = document.body;
   const root = document.documentElement;
   const pref = settings.get('dualScreen');
   const W = innerWidth, H = innerHeight;
   let mode = 'single', device = '', leftW = 0, hinge = 0, topH = 0;
-  if (pref !== 'off') {
-    const segs = segments();
-    if (segs) {
+  const segs0 = segments();
+  if (pref !== 'off' || (isDesktop() && !segs0)) {
+    const segs = pref !== 'off' ? segs0 : null;
+    const DESK = isDesktop();
+    if (DESK && W >= 900 && !segs) {
+      // computer: sidebar + library in the middle + a player column on the right
+      mode = 'wide'; device = 'Desktop';
+      const pw = { narrow: [340, 0.24, 400], normal: [380, 0.3, 480], wide: [460, 0.36, 620] }[settings.get('deskPlayerW')] || [380, 0.3, 480];
+      leftW = Math.round(W - Math.min(pw[2], Math.max(pw[0], W * pw[1])));
+    } else if (segs) {
       const [a, b] = segs;
       device = 'Dual screen';
       if (Math.abs(a.top - b.top) < 2) { mode = 'h'; leftW = a.width; hinge = Math.max(0, b.left - (a.left + a.width)); }
@@ -73,11 +90,6 @@ export function detect() {
       else if (TOUCH && W >= 740 && H >= 500 && W > H * 1.15) {
         // other foldables / tablets in landscape: split down the middle (where a fold would be)
         mode = 'h'; device = 'Foldable'; leftW = W / 2; hinge = 0;
-      } else if (DESK && W >= 1000) {
-        // computer: sidebar + library in the middle + a player column on the right
-        mode = 'wide'; device = 'Desktop';
-        const pw = { narrow: [340, 0.24, 400], normal: [380, 0.3, 480], wide: [460, 0.36, 620] }[settings.get('deskPlayerW')] || [380, 0.3, 480];
-        leftW = Math.round(W - Math.min(pw[2], Math.max(pw[0], W * pw[1])));
       } else if (W >= 900 && W > H * 1.1) {
         mode = 'wide'; device = 'Wide screen';
         leftW = Math.round(Math.min(W * 0.55, Math.max(420, W - 520)));
