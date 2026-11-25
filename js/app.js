@@ -1265,6 +1265,7 @@ async function boot() {
   db.kv.get('source').then((v) => { nasSrc = v; note(); });
   plex.on('auth', note);
   plex.on('done', note);
+  friends.on('cloud-ping', () => setTimeout(checkCloud, 1500)); // another device of this account just saved
   // your Player account in the cloud: restore it on a new device, keep devices in step afterwards
   plex.on('connection', () => setTimeout(checkCloud, 1500));
   plex.on('done', () => cloud.schedule(5000));

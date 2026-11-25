@@ -17,6 +17,12 @@ function write(s) {
   try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* */ }
   writeMeta(dbNameOf(s.active));
 }
+// a stable id for this device (two iPhones are both just "iPhone")
+export function deviceId() {
+  let id = localStorage.getItem('playerDeviceId');
+  if (!id) { id = Math.random().toString(36).slice(2, 10); try { localStorage.setItem('playerDeviceId', id); } catch (e) { /* */ } }
+  return id;
+}
 export const dbNameOf = (id) => (!id || id === 'main' ? 'nasplayer' : 'nasplayer_' + id);
 export function activeDbName() { return dbNameOf(read().active); }
 

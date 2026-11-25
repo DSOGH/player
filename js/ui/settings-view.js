@@ -142,6 +142,7 @@ async function accountsPage() {
     title: 'Accounts & Cloud',
     html: html`${pageHeader('Accounts & Cloud', { back: true })}
     ${accountsGroup()}
+    ${group('This account', html`<div class="set-row"><div class="set-text"><span>Account ID</span><small>Every device signed in to this account (same Plex) shares this ID — friends, chats, playlists and settings follow it.</small></div><code class="acct-id">${cloud.cid()}</code></div>`)}
     <div class="bottom-pad"></div>`,
   };
 }

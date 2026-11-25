@@ -356,7 +356,7 @@ export function restoreSheet(box, { restore, fresh }) {
       ['settings', 'Settings', d.settings ? 'DJ, sound, look & everything else' : ''],
       ['music', 'Playlists & likes', [d.playlists?.length ? `${d.playlists.length} playlist${d.playlists.length > 1 ? 's' : ''}` : '', d.likes?.length ? `${d.likes.length} likes` : ''].filter(Boolean).join(' · ')],
       ['dj', 'BPMs & clean/explicit picks', Object.keys(d.bpm || {}).length ? `${Object.keys(d.bpm).length} tapped BPMs` : ''],
-      ['friends', 'Friends & chats', d.friends?.list?.length ? `${d.friends.list.length} friend${d.friends.list.length > 1 ? 's' : ''}${Object.keys(d.friends.chats || {}).length ? ' · recent messages' : ''}` : ''],
+      ['friends', 'Friends & chats', d.friends?.list?.length ? `${d.friends.list.length} friend${d.friends.list.length > 1 ? 's' : ''}${Object.keys(d.friends.chats || {}).length ? ' · recent messages' : ''}` : d.friends?.me ? 'Your friend ID (so friends reach you on every device)' : ''],
       ['stats', 'Listening stats', nPlays ? `${nPlays.toLocaleString()} plays${nDev > 1 ? ` from ${nDev} devices` : ''}` : ''],
     ].filter(([k, , sub]) => k === 'profile' || k === 'settings' ? true : !!sub);
   };

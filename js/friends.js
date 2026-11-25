@@ -7,6 +7,7 @@ import { Emitter } from './util.js';
 import { settings } from './settings.js';
 import { library } from './library.js';
 import { plex } from './plex.js';
+import { deviceId } from './accounts.js';
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -15,6 +16,9 @@ const rand = (n) => b64u(crypto.getRandomValues(new Uint8Array(n)));
 const relay = () => (localStorage.getItem('relayBase') || settings.get('friendRelay') || 'https://ntfy.sh').replace(/\/$/, '');
 const topic = (id) => `plyr_${id}`;
 const npTopic = (id) => `plyr_${id}_np`; // "listening to" status lives on its own topic (never pushes)
+// your own devices talk to each other here (sent messages, friends added/removed): encrypted with a key
+// only your account has, and never a push notification
+const selfTopic = (id) => `plyr_${id}_s`;
 const norm = (s) => String(s || '').toLowerCase().replace(/\(.*?\)|\[.*?\]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 async function importKey(raw) { return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']); }
@@ -33,21 +37,60 @@ class Friends extends Emitter {
   get ready() { return !!this.me; }
   // every inbox this account listens on: its id, plus ids it had on other devices before they were joined
   ids() { return this.me ? [this.me.id, ...(this.me.alts || [])] : []; }
-  inbox() { return this.ids().flatMap((id) => [topic(id), npTopic(id)]).join(','); }
+  inbox() { return this.ids().flatMap((id) => [topic(id), npTopic(id), selfTopic(id)]).join(','); }
+
+  // ---------- your other devices (same account) ----------
+  async ensureSelf() {
+    if (!this.me) return;
+    if (!this.me.selfKey) { this.me.selfKey = rand(32); await db.kv.set('friends:me', this.me); }
+    for (const k of [this.me.selfKey, ...(this.me.altSelf || [])]) {
+      const raw = unb64u(k), kid = await keyId(raw);
+      if (!this.keys.has(kid)) this.keys.set(kid, await importKey(raw));
+      (this.selfKids ||= new Set()).add(kid);
+    }
+  }
+  async selfSend(body) {
+    if (!this.me) return;
+    await this.ensureSelf();
+    const raw = unb64u(this.me.selfKey), kid = await keyId(raw);
+    const msg = { ...body, dev: deviceId(), at: Date.now() };
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.keys.get(kid), enc.encode(JSON.stringify(msg)));
+    await fetch(`${relay()}/${selfTopic(this.me.id)}`, { method: 'POST', body: JSON.stringify({ v: 1, k: kid, iv: b64u(iv), c: b64u(ct) }) });
+  }
+  // the friends list as your other devices should see it (no unread counts or "listening to")
+  sharedList() { return this.list.map(({ unread, np, npAt, ...f }) => f); }
+  friendsSig() { return JSON.stringify([this.sharedList().map((f) => [f.id, f.kid, f.nick || '', f.name]), this.pending.map((p) => p.kid), Object.keys(this.removed || {})]); }
+  async handleSelf(msg) {
+    if (msg.dev === deviceId()) return;
+    if (msg.type === 'sent' && msg.to && msg.m) {
+      // a message you sent from another device
+      const { state, ...m } = msg.m;
+      if (await this.store(msg.to, m)) this.emit('message', msg.to, m);
+    } else if (msg.type === 'friends') {
+      this._fromSelf = true;
+      try { await this.importData({ me: null, list: msg.list || [], pending: msg.pending || [], removed: msg.removed || {} }); } finally { this._fromSelf = false; }
+      this._sig = this.friendsSig();
+    } else if (msg.type === 'cloud') this.emit('cloud-ping');
+  }
 
   async load() {
     this.me = await db.kv.get('friends:me');
     this.list = (await db.kv.get('friends:list')) || [];
     this.pending = (await db.kv.get('friends:pending')) || [];
+    this.removed = (await db.kv.get('friends:removed')) || {};
+    await this.ensureSelf();
+    this._sig = this.friendsSig();
     for (const f of this.list) this.keys.set(f.kid, await importKey(unb64u(f.key)));
     for (const p of this.pending) this.keys.set(p.kid, await importKey(unb64u(p.key)));
     if (this.me) { this.connect(); this.refreshPush(); }
   }
   async setup(name) {
-    if (!this.me) this.me = { id: rand(18), since: Date.now(), last: 'all' };
+    if (!this.me) this.me = { id: rand(18), since: Date.now(), last: 'all', selfKey: rand(32) };
     const changed = this.me.name && this.me.name !== name;
     this.me.name = (name || plex.user?.name || 'Me').slice(0, 40);
     await db.kv.set('friends:me', this.me);
+    await this.ensureSelf();
     if (changed) for (const f of this.list) this.send(f, { type: 'profile', name: this.me.name }, { store: false }).catch(() => {});
     this.connect();
     this.emit('change');
@@ -55,7 +98,15 @@ class Friends extends Emitter {
   async save() {
     await db.kv.set('friends:list', this.list);
     await db.kv.set('friends:pending', this.pending);
+    await db.kv.set('friends:removed', this.removed || {});
     this.emit('change');
+    // friends added / renamed / removed → your other devices update right away
+    const sig = this.friendsSig();
+    if (sig !== this._sig && !this._fromSelf && this.me) {
+      this._sig = sig;
+      clearTimeout(this._selfT);
+      this._selfT = setTimeout(() => this.selfSend({ type: 'friends', list: this.sharedList(), pending: this.pending, removed: this.removed || {} }).catch(() => {}), 800);
+    }
   }
   friend(id) { return this.list.find((f) => f.id === id); }
   // the name you see: your own nickname for them if you set one, otherwise the name they chose
@@ -96,6 +147,7 @@ class Friends extends Emitter {
     if (!f) {
       f = { id: c.id, name: c.name, key: c.key, kid, color: colorFor(c.id), added: Date.now(), unread: 0, via: this.me.id };
       this.list.push(f);
+      if (this.removed) delete this.removed[c.id];
     } else Object.assign(f, { key: c.key, kid, name: c.name });
     this.keys.set(kid, await importKey(raw));
     await this.save();
@@ -104,6 +156,7 @@ class Friends extends Emitter {
     return f;
   }
   async remove(id) {
+    (this.removed ||= {})[id] = Date.now(); // so your other devices remove them too
     this.list = this.list.filter((f) => f.id !== id);
     await db.kv.set('chat:' + id, null);
     this.chats.delete(id);
@@ -135,7 +188,10 @@ class Friends extends Emitter {
       const env = JSON.stringify({ v: 1, k: f.kid, iv: b64u(iv), c: b64u(ct) });
       const r = await fetch(`${relay()}/${msg.type === 'np' || msg.type === 'profile' ? npTopic(f.id) : topic(f.id)}`, { method: 'POST', body: env, headers: { 'X-Cache': 'yes' } });
       if (!r.ok) throw new Error('relay ' + r.status);
-      if (store) { msg.state = 'sent'; db.kv.set('chat:' + f.id, await this.history(f.id)); this.emit('message', f.id, msg); }
+      if (store) {
+        msg.state = 'sent'; db.kv.set('chat:' + f.id, await this.history(f.id)); this.emit('message', f.id, msg);
+        this.selfSend({ type: 'sent', to: f.id, m: msg }).catch(() => {}); // shows up in this chat on your other devices
+      }
     } catch (e) {
       if (store) { msg.state = 'failed'; db.kv.set('chat:' + f.id, await this.history(f.id)); this.emit('message', f.id, msg); }
       else throw e;
@@ -195,6 +251,7 @@ class Friends extends Emitter {
     if (!key) return;
     let msg;
     try { msg = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64u(env.iv) }, key, unb64u(env.c)))); } catch (e) { return; }
+    if (this.selfKids?.has(env.k)) { await this.handleSelf(msg); return; }
     let f = this.list.find((x) => x.id === msg.from);
     if (msg.type === 'hello') {
       // someone accepted one of my invites
@@ -222,7 +279,7 @@ class Friends extends Emitter {
     const chats = {};
     for (const f of this.list) { const h = await this.history(f.id); if (h.length) chats[f.id] = h.slice(-200).map(({ state, ...m }) => (state === 'failed' ? { ...m, state } : m)); }
     const { pushAt, ...me } = this.me || {};
-    return { me: this.me ? me : null, list: this.list, pending: this.pending, chats };
+    return { me: this.me ? me : null, list: this.sharedList(), pending: this.pending, removed: this.removed || {}, chats };
   }
   async importData(d) {
     if (!d) return false;
@@ -230,6 +287,8 @@ class Friends extends Emitter {
     const theirId = d.me?.id;
     // the same account on two devices: join the two "you"s — one id goes first, the other is kept as an
     // extra inbox, and every friend remembers which of them they know. Nobody loses a friend or a message.
+    // the account's own-devices key: every device of the account ends up able to read every other's notes
+    if (d.me?.selfKey && this.me && d.me.selfKey !== this.me.selfKey && !(this.me.altSelf || []).includes(d.me.selfKey)) { this.me.altSelf = [...(this.me.altSelf || []), d.me.selfKey, ...(d.me.altSelf || [])]; changed = true; }
     if (d.me && !this.me) { this.me = { ...d.me, last: d.me.last || '12h' }; changed = true; }
     else if (d.me && this.me && !this.ids().includes(theirId)) {
       const all = [...new Set([...this.ids(), theirId, ...(d.me.alts || [])])];
@@ -241,12 +300,19 @@ class Friends extends Emitter {
       const all = [...new Set([...this.ids(), ...(d.me.alts || [])])].filter((x) => x !== this.me.id);
       if (all.length !== (this.me.alts || []).length) { this.me.alts = all; changed = true; }
     }
+    // removed on another device → removed here (unless re-added there later)
+    for (const [id, at] of Object.entries(d.removed || {})) {
+      if (!this.removed?.[id] || this.removed[id] < at) { (this.removed ||= {})[id] = at; changed = true; }
+      const k = this.list.findIndex((f) => f.id === id && (f.added || 0) <= at);
+      if (k >= 0) { this.list.splice(k, 1); changed = true; }
+    }
     for (const f0 of d.list || []) {
+      if (this.removed?.[f0.id] && this.removed[f0.id] >= (f0.added || 0)) continue;
       const f = { ...f0, via: f0.via || theirId };
       const mine = this.list.find((x) => x.id === f.id);
       if (!mine) { this.list.push(f); changed = true; }
       else {
-        if (!mine.nick && f.nick) { mine.nick = f.nick; changed = true; }
+        if ((f.nick || '') !== (mine.nick || '') && f.nick !== undefined) { mine.nick = f.nick; changed = true; }
         if (!mine.via && f.via) { mine.via = f.via; changed = true; }
       }
     }
@@ -255,6 +321,7 @@ class Friends extends Emitter {
     for (const [id, msgs] of Object.entries(d.chats || {})) for (const m of msgs) if (await this.store(id, m)) changed = true;
     if (changed) {
       await db.kv.set('friends:me', this.me);
+      await this.ensureSelf();
       await this.save();
       try { this.es?.close(); } catch (e) { /* */ }
       this.es = null;

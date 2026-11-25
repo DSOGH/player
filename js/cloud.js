@@ -8,19 +8,13 @@ import * as db from './db.js';
 import { settings } from './settings.js';
 import { library } from './library.js';
 import { plex, deviceName } from './plex.js';
-import { accounts } from './accounts.js';
+import { accounts, deviceId } from './accounts.js';
 import { Emitter } from './util.js';
 import { friends } from './friends.js';
 
 export const SYNC_TITLE = 'Player sync';
 const MAGIC = 'PLAYERSYNC1:';
 const GIST_FILE = 'player-sync.json';
-// a stable id for this device, so each device's listening stats are kept separately in the cloud
-function deviceId() {
-  let id = localStorage.getItem('playerDeviceId');
-  if (!id) { id = Math.random().toString(36).slice(2, 10); try { localStorage.setItem('playerDeviceId', id); } catch (e) { /* */ } }
-  return id;
-}
 // settings that describe this screen or this device rather than you
 const LOCAL_ONLY = new Set(['layoutMode', 'deskWidth', 'deskPlayerW', 'deskSidebar', 'deskFrame', 'dualSwap', 'friendRelay', 'analysisNetwork', 'prefetch']);
 
@@ -240,6 +234,7 @@ class Cloud extends Emitter {
       this.state = { ...this.state, at: data.at, where: where.join(' + '), error: '' };
       await db.kv.set('cloud', this.state);
       this.emit('saved', this.state);
+      friends.selfSend({ type: 'cloud' }).catch(() => {}); // your other devices pick it up right away
       return true;
     } catch (e) {
       this.state = { ...this.state, error: e.message || 'Couldn’t save' };
@@ -289,7 +284,9 @@ class Cloud extends Emitter {
       }
     }
     // friends always follow the account between its devices (merged, never replaced)
+    // (your friend ID always comes along with the account, even if you untick friends)
     if (d.friends && (!full || want('friends'))) await friends.importData(d.friends).catch((e) => console.warn('friends import', e));
+    else if (d.friends?.me && full) await friends.importData({ me: d.friends.me, list: [], pending: [] }).catch(() => {});
     library.build();
     library.emit('playlists'); library.emit('likes'); library.emit('change');
     this.state = { ...this.state, pulled: Date.now(), from: d.device };
