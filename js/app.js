@@ -1000,6 +1000,11 @@ async function boot() {
   await library.load();
   await plex.load();
   friends.load().catch(() => {});
+  library.loadPlayLog().catch(() => {}); // stats history must be loaded before new listens are saved
+  // save listening stats whenever the app is closed or sent to the background
+  const flushStats = () => { try { library.saveLog(); db.kv.set('listen', library.listen || {}); } catch (e) { /* */ } };
+  addEventListener('pagehide', flushStats);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flushStats(); });
   initNowPlaying({ addToPlaylist, toggleDownload, onAccent: applyAccent, djOrderQueue });
   initDual((mode) => {
     if (mode !== 'single') { closeNP(true); }

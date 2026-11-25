@@ -322,11 +322,18 @@ class Library extends Emitter {
     // persist the song in progress too, so a closed app never loses it
     const c = this._curListen;
     db.kv.set('listen:cur', c && c[2] >= 20 ? c : null);
+    // never write a month before the saved history is loaded — that would replace it with just this session
+    if (!this._logLoaded) { this.loadPlayLog().then(() => this.saveLog()); return; }
     for (const m of this._dirtyMonths || []) db.kv.set('plays:' + m, this.playLog[m]);
     this._dirtyMonths = new Set();
   }
   async loadPlayLog() {
     if (this._logLoaded) return this.playLog;
+    if (this._logLoading) return this._logLoading;
+    this._logLoading = this._loadPlayLog().finally(() => { this._logLoading = null; });
+    return this._logLoading;
+  }
+  async _loadPlayLog() {
     const keys = (await db.keys('kv')).filter((k) => String(k).startsWith('plays:'));
     const log = {};
     await Promise.all(keys.map(async (k) => { log[k.slice(6)] = (await db.kv.get(k)) || []; }));
@@ -344,6 +351,8 @@ class Library extends Emitter {
     }
     this.playLog = log;
     this._logLoaded = true;
+    for (const m of Object.keys(this.playLog)) if ((this._dirtyMonths || new Set()).has(m)) db.kv.set('plays:' + m, this.playLog[m]);
+    this._dirtyMonths = new Set();
     return log;
   }
   addMix(style) {
