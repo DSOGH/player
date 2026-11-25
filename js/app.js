@@ -538,6 +538,12 @@ async function doAction(a, el, e) {
     }
     case 'demo': await toggleDemo(true); break;
     case 'plex-signin': plexSignIn(); break;
+    case 'cook-it-up': {
+      if (!engine.cookItUp()) { toast('Add some music first'); break; }
+      haptic(25); toast('🔥 DJ Cook It Up — your whole library, wild transitions', { ms: 3500 });
+      if (settings.get('engine') !== 'enhanced' && /iPhone|iPad/.test(navigator.userAgent)) toast('Tip: turn on Enhanced audio for the full effects on iPhone', { ms: 5000 });
+      break;
+    }
     case 'cloud-save': {
       toast('Syncing…');
       const r = await cloud.syncNow();
@@ -547,7 +553,7 @@ async function doAction(a, el, e) {
     case 'cloud-restore': {
       const r = await cloud.fetchRemote();
       if (!r) { toast('Nothing saved in the cloud yet'); break; }
-      restoreSheet(r, { restore: async () => { await cloud.apply(r.d, { full: true }); applyTheme(); paintAccountChip(); toast('Account restored'); render({ keepScroll: true }); }, fresh: () => {} });
+      restoreSheet(r, { restore: async (parts) => { await cloud.apply(r.d, { full: true, parts }); applyTheme(); paintAccountChip(); toast('Restored'); render({ keepScroll: true }); }, fresh: () => {} });
       break;
     }
     case 'cloud-github': {
@@ -555,7 +561,7 @@ async function doAction(a, el, e) {
       if (tok == null || tok === '••••••') break;
       try {
         await cloud.setGithub(tok);
-        if (tok.trim()) { const r = await cloud.ghRead().catch(() => null); toast('GitHub connected'); if (r && !cloud.state.at) restoreSheet({ d: r, where: 'GitHub' }, { restore: async () => { await cloud.apply(r, { full: true }); applyTheme(); render({ keepScroll: true }); }, fresh: () => cloud.push() }); else cloud.push(); }
+        if (tok.trim()) { const r = await cloud.ghRead().catch(() => null); toast('GitHub connected'); if (r && !cloud.state.at) restoreSheet({ d: r, where: 'GitHub' }, { restore: async (parts) => { await cloud.apply(r, { full: true, parts }); applyTheme(); render({ keepScroll: true }); }, fresh: () => cloud.push() }); else cloud.push(); }
         else toast('GitHub backup removed');
       } catch (e) { toast(e.message || 'GitHub didn’t accept that token'); await cloud.setGithub('').catch(() => {}); }
       render({ keepScroll: true });
@@ -1152,7 +1158,7 @@ async function checkCloud() {
       cloudAsked = true;
       const r = await cloud.fetchRemote();
       if (r) restoreSheet(r, {
-        restore: async () => { await cloud.apply(r.d, { full: true }); applyTheme(); paintAccountChip(); toast(`Welcome back${r.d.profile?.name ? ', ' + r.d.profile.name : ''} — your Player account is restored`); rerender(); cloud.schedule(4000); },
+        restore: async (parts) => { await cloud.apply(r.d, { full: true, parts }); applyTheme(); paintAccountChip(); toast(`Welcome back${r.d.profile?.name ? ', ' + r.d.profile.name : ''} — your Player account is restored`); rerender(); cloud.schedule(4000); },
         fresh: () => cloud.schedule(3000),
       });
       else cloud.schedule(30000);

@@ -14,6 +14,12 @@ import { Emitter } from './util.js';
 export const SYNC_TITLE = 'Player sync';
 const MAGIC = 'PLAYERSYNC1:';
 const GIST_FILE = 'player-sync.json';
+// a stable id for this device, so each device's listening stats are kept separately in the cloud
+function deviceId() {
+  let id = localStorage.getItem('playerDeviceId');
+  if (!id) { id = Math.random().toString(36).slice(2, 10); try { localStorage.setItem('playerDeviceId', id); } catch (e) { /* */ } }
+  return id;
+}
 // settings that describe this screen or this device rather than you
 const LOCAL_ONLY = new Set(['layoutMode', 'deskWidth', 'deskPlayerW', 'deskSidebar', 'deskFrame', 'dualSwap', 'friendRelay', 'analysisNetwork', 'prefetch']);
 
@@ -39,6 +45,7 @@ class Cloud extends Emitter {
     // anything you change is saved to the cloud a little later (and when the app closes)
     const later = () => this.schedule();
     library.on('likes', later); library.on('playlists', later);
+    library.on('played', () => this.schedule(90000)); // stats are backed up automatically too
     library.on('analysis', (id) => { if (library.analysis.get(id)?.tapped) later(); });
     settings.on('change', (k) => { if (!LOCAL_ONLY.has(k)) later(); });
     addEventListener('pagehide', () => { if (this._t) this.push(); });
@@ -62,7 +69,9 @@ class Cloud extends Emitter {
       editionSet: library.editionSet || {},
       bpm,
     };
-    if (settings.get('cloudStats')) { await library.loadPlayLog(); out.plays = library.playLog; }
+    // listening stats: always backed up, one entry per device (so restoring never mixes them up)
+    await library.loadPlayLog();
+    out.statsBy = { ...(this.remoteStats || {}), [deviceId()]: { name: deviceName(), at: Date.now(), plays: library.playLog } };
     return out;
   }
 
@@ -91,12 +100,14 @@ class Cloud extends Emitter {
       if (!pl) throw new Error('Plex didn’t create the sync playlist');
     }
     // Plex keeps it in the playlist's description; if the server refuses a long one, keep the essentials
-    const tries = [data, { ...data, plays: undefined }, { ...data, plays: undefined, bpm: {}, plDeleted: {} }, { v: 1, at: data.at, device: data.device, profile: data.profile, settings: data.settings, playlists: [], likes: [], editionSet: data.editionSet }];
+    const recent = (by, months) => Object.fromEntries(Object.entries(by || {}).map(([k, v]) => [k, { ...v, plays: Object.fromEntries(Object.entries(v.plays || {}).sort().slice(-months)) }]));
+    const tries = [data, { ...data, statsBy: recent(data.statsBy, 6), trimmed: true }, { ...data, statsBy: recent(data.statsBy, 2), trimmed: true }, { ...data, statsBy: undefined, trimmed: true }, { ...data, statsBy: undefined, bpm: {}, plDeleted: {}, trimmed: true }, { v: 1, at: data.at, device: data.device, profile: data.profile, settings: data.settings, playlists: [], likes: [], editionSet: data.editionSet }];
     let last;
     for (const d of tries) {
       const body = MAGIC + await gz(JSON.stringify(d));
       try {
         await plex.api(`/playlists/${pl.ratingKey}`, { summary: `Saved by Player on ${data.device} — keeps your Player account on all your devices. Please don’t delete.\n\n${body}` }, 'PUT');
+        this.trimmed = d !== data;
         return d === data ? 'full' : 'trimmed';
       } catch (e) { last = e; }
     }
@@ -153,6 +164,7 @@ class Cloud extends Emitter {
     if (!this.enabled || this.busy || !this.available) return false;
     this.busy = true;
     try {
+      if (!this.remoteStats) { try { const r = await this.fetchRemote(); this.remoteStats = r?.d?.statsBy || {}; } catch (e) { this.remoteStats = {}; } }
       const data = await this.snapshot();
       const where = [];
       if (plex.connected && library.plexAnyKey()) { await this.plexWrite(data); where.push('Plex'); }
@@ -170,10 +182,13 @@ class Cloud extends Emitter {
 
   // ---------- bring it back ----------
   // merge the cloud copy into this device: nothing local is thrown away; newer wins per playlist
-  async apply(d, { full = false } = {}) {
+  async apply(d, { full = false, parts = null } = {}) {
     if (!d) return;
-    if (full || !accounts.active?.name) accounts.update(accounts.activeId, { name: d.profile?.name || accounts.active?.name || '', color: d.profile?.color ?? accounts.active?.color, pin: d.profile?.pin || '' });
-    if (full && d.settings) { for (const [k, v] of Object.entries(d.settings)) if (!LOCAL_ONLY.has(k) && k !== 'sv') settings.v[k] = v; await settings.save?.(); settings.emit('change', '*'); }
+    const want = (k) => !parts || parts.includes(k);
+    if (d.statsBy) this.remoteStats = { ...d.statsBy, ...(this.remoteStats || {}) };
+    if ((full && want('profile')) || !accounts.active?.name) accounts.update(accounts.activeId, { name: d.profile?.name || accounts.active?.name || '', color: d.profile?.color ?? accounts.active?.color, pin: d.profile?.pin || '' });
+    if (full && want('settings') && d.settings) { for (const [k, v] of Object.entries(d.settings)) if (!LOCAL_ONLY.has(k) && k !== 'sv') settings.v[k] = v; await settings.save?.(); settings.emit('change', '*'); }
+    if (want('music')) {
     const dead = { ...((await db.kv.get('plDeleted')) || {}), ...(d.plDeleted || {}) };
     for (const p of d.playlists || []) {
       if (dead[p.id] && dead[p.id] >= (p.updated || 0)) continue;
@@ -185,14 +200,19 @@ class Cloud extends Emitter {
     let likes = false;
     for (const id of d.likes || []) if (!library.likes.has(id)) { library.likes.add(id); likes = true; }
     if (likes) await db.kv.set('likes', [...library.likes]);
-    if (d.editionSet) { library.editionSet = { ...d.editionSet, ...(library.editionSet || {}) }; await db.kv.set('editionSet', library.editionSet); }
-    for (const [id, [bpm, off]] of Object.entries(d.bpm || {})) {
+    }
+    if (want('dj') && d.editionSet) { library.editionSet = { ...d.editionSet, ...(library.editionSet || {}) }; await db.kv.set('editionSet', library.editionSet); }
+    if (want('dj')) for (const [id, [bpm, off]] of Object.entries(d.bpm || {})) {
       const an = library.analysis.get(id);
       if (!an?.tapped) library.setAnalysis({ ...(an || { id, v: 4 }), bpm, beatOffset: an?.beatOffset ?? off, bpmConf: 1, tapped: true });
     }
-    if (d.plays && settings.get('cloudStats')) {
-      await library.loadPlayLog();
-      for (const [m, arr] of Object.entries(d.plays)) {
+    // stats: brought back on a restore (every device's history for this account), and kept combined
+    // afterwards if "Combine stats from all devices" is on
+    const statSrc = (full && want('stats')) || settings.get('cloudStats') ? Object.entries(d.statsBy || {}).filter(([k]) => k !== deviceId() || full).map(([, v]) => v.plays || {}) : [];
+    if (d.plays && (full || settings.get('cloudStats'))) statSrc.push(d.plays);
+    if (statSrc.length) await library.loadPlayLog();
+    for (const plays of statSrc) {
+      for (const [m, arr] of Object.entries(plays)) {
         const have = new Set((library.playLog[m] || []).map((e) => e[0] + ':' + e[1]));
         const add = arr.filter((e) => !have.has(e[0] + ':' + e[1]));
         if (add.length) { library.playLog[m] = [...(library.playLog[m] || []), ...add].sort((a, b) => a[1] - b[1]); await db.kv.set('plays:' + m, library.playLog[m]); }

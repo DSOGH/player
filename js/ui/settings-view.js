@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.19.0';
+export const APP_VERSION = '1.20.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -71,11 +71,11 @@ function cloudGroup() {
   const where = [plex.connected ? 'your Plex' : '', cloud.ghToken ? 'GitHub' : ''].filter(Boolean).join(' and ');
   const status = !settings.get('cloudSync') ? 'Off' : st.error ? `Couldn’t save: ${st.error}` : st.at ? `Saved to ${st.where || where} ${ago(st.at)}` : where ? 'Not saved yet' : 'Sign in to Plex (or add GitHub) to turn this on';
   return group('Account cloud', html`
-    <div class="set-row"><div class="set-text"><span class="cloud-status"><i class="cloud-dot${!settings.get('cloudSync') || !where ? ' off' : st.error ? ' err' : ''}"></i>${status}</span><small>Your account, settings, playlists, likes, clean/explicit picks and tapped BPMs follow you: sign in to the same Plex on another phone or computer and Player offers to bring them back.</small></div></div>
+    <div class="set-row"><div class="set-text"><span class="cloud-status"><i class="cloud-dot${!settings.get('cloudSync') || !where ? ' off' : st.error ? ' err' : ''}"></i>${status}</span><small>Your account, settings, playlists, likes, listening stats, clean/explicit picks and tapped BPMs are backed up automatically. Sign in to the same Plex on another phone or computer — or tap Restore — and pick what to bring back.${cloud.trimmed ? ' Your full stats history is too big for Plex, so it keeps the latest months; add GitHub for all of it.' : ''}</small></div></div>
     ${toggle('cloudSync', 'Save my account to the cloud', 'Kept on your own Plex server (a playlist called “Player sync”) — nothing goes anywhere else')}
-    ${toggle('cloudStats', 'Combine stats from all devices', 'Off: Stats only count this device')}
+    ${toggle('cloudStats', 'Combine stats from all devices', 'Off: Stats count this device (still backed up, and restorable). On: every device’s listening adds up')}
     ${where ? button('cloud-save', 'refresh', 'Sync now', { sub: st.pulled ? `Last brought in changes from ${st.from || 'another device'} ${ago(st.pulled)}` : 'Save this device and pick up changes from the others' }) : ''}
-    ${where ? button('cloud-restore', 'download', 'Restore from cloud…', { sub: 'Replace this device’s Player account with the saved one' }) : ''}
+    ${where ? button('cloud-restore', 'download', 'Restore from cloud…', { sub: 'Choose what to bring back: settings, playlists & likes, stats, BPMs' }) : ''}
     ${button('cloud-github', 'server', cloud.ghToken ? 'GitHub backup: on' : 'Also back up to GitHub', { sub: cloud.ghToken ? 'A private Gist on your GitHub · tap to change or remove' : 'Optional — a private Gist. Works even without Plex (needs a GitHub token)' })}
   `);
 }
@@ -246,8 +246,9 @@ function playback() {
         { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings; and the next song slides under natural fade-outs. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
       ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
       ${tm === 'smart' ? html`
-        ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play']],
-          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
+        ${button('cook-it-up', 'sparkle', 'DJ Cook It Up', { sub: 'Play your whole library at random with crazy transitions' })}
+      ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play'], ['cook', 'Cook It Up']],
+          { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', cook: 'DJ Cook It Up: goes wild — tape stops, stutter rolls, dub echoes, risers with a boom, speed-up launches, spin-outs — a different one every time, at random points in the songs, landing on the beat. Start it from Home to play your whole library at random.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
         ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
         ${toggle('djEffects', 'DJ effects', 'Bass swaps, filter sweeps and echo outs (needs the Enhanced audio engine)')}` : ''}
       ${seg('fadeCurve', 'Fade curve', [['equalpower', 'Equal power'], ['scurve', 'S-curve'], ['linear', 'Linear']])}

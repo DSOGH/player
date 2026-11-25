@@ -1366,3 +1366,28 @@ body.desk .album-hero .edition-switch { margin: 8px 0 4px; }
 .cloud-status { display: flex; align-items: center; gap: 8px; }
 .cloud-dot { width: 8px; height: 8px; border-radius: 50%; background: #30d158; box-shadow: 0 0 8px #30d158; flex: none; }
 .cloud-dot.off { background: var(--text3); box-shadow: none; } .cloud-dot.err { background: #ff453a; box-shadow: 0 0 8px #ff453a; }
+
+/* ---------- v1.20: DJ Cook It Up ---------- */
+.cook-card { all: unset; box-sizing: border-box; cursor: pointer; position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px; margin: 4px var(--pad) 18px; width: calc(100% - var(--pad) * 2); padding: 16px 16px; border-radius: 20px; color: #fff; isolation: isolate;
+  background: #1a0a06; box-shadow: 0 14px 34px -14px rgba(255,90,20,.6); transition: transform .18s; -webkit-tap-highlight-color: transparent; }
+.cook-card:active { transform: scale(.98); }
+.cook-bg { position: absolute; inset: 0; z-index: -1; filter: blur(22px) saturate(1.4); }
+.cook-bg i { position: absolute; width: 70%; height: 180%; top: -40%; border-radius: 50%; animation: cook-flame 6s ease-in-out infinite alternate; }
+.cook-bg i:nth-child(1) { left: -15%; background: radial-gradient(circle, #ff3d00 0, transparent 65%); }
+.cook-bg i:nth-child(2) { left: 30%; background: radial-gradient(circle, #ffb300 0, transparent 60%); animation-duration: 4.5s; animation-delay: -2s; }
+.cook-bg i:nth-child(3) { right: -20%; background: radial-gradient(circle, #ff1f6b 0, transparent 62%); animation-duration: 7s; animation-delay: -4s; }
+@keyframes cook-flame { 0% { transform: translate(0, 6%) scale(1); } 50% { transform: translate(8%, -6%) scale(1.15); } 100% { transform: translate(-6%, 2%) scale(.95); } }
+.cook-ic { flex: none; width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: rgba(255,255,255,.18); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.cook-ic .ic { width: 24px; height: 24px; }
+.cook-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.cook-txt b { font-size: 18px; font-weight: 800; letter-spacing: -.01em; }
+.cook-txt small { font-size: 12.5px; opacity: .85; line-height: 1.3; }
+.cook-go { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #ff3d00; box-shadow: 0 6px 16px rgba(0,0,0,.3); }
+.cook-go .ic { width: 18px; height: 18px; margin-left: 2px; }
+body.desk .cook-card:hover { transform: translateY(-2px); }
+@media (prefers-reduced-motion: reduce) { .cook-bg i { animation: none; } }
+.restore-parts { width: 100%; display: flex; flex-direction: column; gap: 6px; margin: 2px 0 6px; text-align: left; }
+.restore-part { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: var(--card2); cursor: pointer; }
+.restore-part input { width: 20px; height: 20px; accent-color: var(--c1); flex: none; }
+.restore-part span { display: flex; flex-direction: column; min-width: 0; }
+.restore-part b { font-size: 14.5px; } .restore-part small { font-size: 12px; color: var(--text2); }

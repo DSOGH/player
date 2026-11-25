@@ -582,6 +582,19 @@ class Engine extends Emitter {
     });
   }
   // ---------- queue ----------
+  // DJ Cook It Up: your whole library in random order, mixed with a different wild transition each time
+  cookItUp(pool = null) {
+    const all = (pool || [...library.tracks.values()].filter((t) => library.visible(t))).filter((t) => (t.duration || 200) > 45);
+    if (!all.length) return false;
+    for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+    if (settings.get('djStyle') !== 'cook') settings.set('djPrevStyle', settings.get('djStyle'));
+    settings.set('transition', 'smart');
+    settings.set('djStyle', 'cook');
+    this.cookSalt = Math.random().toString(36).slice(2);
+    this.cookHist = [];
+    this.playTracks(all.slice(0, 400), 0, { context: { type: 'cook', name: 'DJ Cook It Up' } });
+    return true;
+  }
   playTracks(tracks, start = 0, { context = null, shuffle = null } = {}) {
     if (!tracks.length) return;
     this.queue = tracks.map((t) => t.id);
@@ -1012,7 +1025,7 @@ class Engine extends Emitter {
   }
 
   computePlan() {
-    if (!this.upcoming || this.transition) return;
+    if (!this.upcoming || this.transition || this.cooking) return;
     const A = this.cur.track, B = this.upcoming.track;
     if (!A || !B) return;
     const p = this.makePlan(A, B, this.durationOf(this.cur));
@@ -1087,6 +1100,11 @@ class Engine extends Emitter {
     const tol = Math.max(0.02, s.tempoMatch ? s.tempoMatchMax / 100 : 0.02);
 
     const djStyle = s.djStyle || 'auto';
+    // DJ Cook It Up: wild, different-every-time transitions at random points in the song
+    if (djStyle === 'cook' && fx && this.ctx && A.fx !== false) {
+      const c = this.cookPlan({ A, B, aA, aB, bpmA, dur, end, base, durB });
+      if (c) return c;
+    }
     // 0) word play: the outgoing song sings the next song's title → echo that line out and drop the next song on its own title
     if (djStyle !== 'beats') {
       // 0a) shared words: A sings them near its end, B sings them early → hand the vocal over
@@ -1247,6 +1265,179 @@ class Engine extends Emitter {
     const overlap = Math.min(Math.max(D, 4), Math.max(1.5, end * 0.3));
     return { ...base, type: 'smart', style: 'filter', fx, label: 'DJ mix · filter sweep', mixStart: Math.max(0, end - overlap), overlap, inDur: overlap * 0.6, outDur: overlap * 0.7, outDelay: overlap * 0.3, bStart };
   }
+
+  // ---------- DJ Cook It Up ----------
+  // Picks one of several "crazy" transitions — never one of the last two used — with its own random
+  // lengths, echo times and entry style, and leaves the outgoing song at a random phrase (not always the
+  // end), always on a bar line. The pick is stable for a given pair of songs until it's actually played.
+  cookPlan({ A, B, aA, aB, bpmA, dur, end, base, durB }) {
+    if (!this.cookSalt) this.cookSalt = Math.random().toString(36).slice(2);
+    let seed = 2166136261;
+    for (const ch of A.id + '|' + B.id + '|' + this.cookSalt + '|' + (this.cookHist || []).join()) { seed ^= ch.charCodeAt(0); seed = Math.imul(seed, 16777619); }
+    const rnd = () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const pickOf = (arr) => arr[Math.floor(rnd() * arr.length)];
+    const beat = bpmA ? 60 / bpmA : 0.5, bar = beat * 4, off = aA?.beatOffset || 0;
+    const KINDS = {
+      tapestop: { name: 'Tape stop', beats: () => pickOf([2, 2, 4]) },
+      gateroll: { name: 'Stutter roll', beats: () => pickOf([4, 8, 8]) },
+      dubecho: { name: 'Dub echo', beats: () => pickOf([2, 4]) },
+      washout: { name: 'Filter washout', beats: () => pickOf([8, 8, 16]) },
+      riser: { name: 'Riser & drop', beats: () => pickOf([8, 16]) },
+      launch: { name: 'Speed-up launch', beats: () => pickOf([4, 8]) },
+      chop: { name: 'Chop cut', beats: () => pickOf([1, 2]) },
+      spin: { name: 'Spin-out', beats: () => pickOf([2, 4]) },
+    };
+    const recent = this.cookHist || [];
+    const kinds = Object.keys(KINDS).filter((k) => !recent.includes(k));
+    const kind = pickOf(kinds.length ? kinds : Object.keys(KINDS));
+    const L = KINDS[kind].beats() * beat;
+    // where A goes out: a random phrase between 55% and 85% of the song (long songs), on a bar line
+    let C = end;
+    if (end > 100) {
+      const target = end * (0.55 + rnd() * 0.3);
+      C = bpmA ? off + Math.round((target - off) / (bar * 4)) * bar * 4 : target;
+      if (C > end - 1 || C < L + 20) C = bpmA ? off + Math.floor((end - 0.5 - off) / bar) * bar : end;
+    }
+    C = Math.min(C, end);
+    if (C - L < 1) return null;
+    // where B comes in: on its drop (slams) or its first beat
+    const drop = aB?.bpm ? findDrop(aB, aB.bpm) : null;
+    let bS = aB?.leadIn || 0;
+    const useDrop = drop && drop < (durB || 240) * 0.5 && rnd() < 0.6;
+    if (useDrop) bS = drop;
+    else if (aB?.bpm && aB.beatOffset != null) { const bb = 60 / aB.bpm; bS = Math.max(0, aB.beatOffset - Math.ceil(Math.max(0, aB.beatOffset - (aB.leadIn || 0)) / bb - 1e-6) * bb); }
+    const entry = kind === 'washout' ? 'rise' : pickOf(['slam', 'slam', 'rise', 'stutter']);
+    const echoTime = beat * pickOf([0.5, 0.75, 1.5]);
+    const tail = kind === 'dubecho' ? 3.2 : kind === 'washout' ? bar : kind === 'riser' ? 1.2 : 0.4;
+    const entryTxt = useDrop ? 'straight into the drop' : entry === 'rise' ? 'opens up' : entry === 'stutter' ? 'stutters in' : 'slams in';
+    return {
+      ...base, type: 'cook', style: 'cook', cook: kind, fx: true, entry, echoTime, beat, bar,
+      label: `Cook It Up · ${KINDS[kind].name} · next ${entryTxt}`,
+      mixStart: C - L, cutAt: C, build: L, overlap: tail, inDur: 0.02, outDur: tail, outDelay: 0, bStart: bS, rate: 1,
+    };
+  }
+  // the outgoing song's build-up (runs before the next song is heard); resolves false if interrupted
+  async cookBuild(A, B, p) {
+    const ctx = this.ctx, t0 = ctx.currentTime + 0.01, tokA = A.token;
+    const r0 = A.el.playbackRate || 1;
+    const tc = t0 + Math.max(0.05, (p.cutAt - A.el.currentTime) / r0);
+    const L = tc - t0, beat = p.beat / r0;
+    p._tCut = tc;
+    this.cookHist = [...(this.cookHist || []), p.cook].slice(-2);
+    const H = this.hold.bind(this);
+    const gate = (g, from, to, div0, div1) => { // volume chops, getting faster: div = notes per beat
+      let t = from, i = 0;
+      while (t < to - 0.004) {
+        const x = (t - from) / Math.max(0.001, to - from);
+        const step = beat / (div0 * Math.pow(div1 / div0, x));
+        g.setValueAtTime(i % 2 ? 0.0001 : 1, t); i++;
+        t += step / 2;
+      }
+    };
+    const rateRamp = (to, from, at, len, curve = 2) => { // pitched (tape-style) speed change, stepped
+      try { A.el.preservesPitch = false; A.el.webkitPreservesPitch = false; A.el.mozPreservesPitch = false; } catch (e) { /* */ }
+      const start = performance.now() + (at - ctx.currentTime) * 1000, ms = len * 1000;
+      clearInterval(A.rateTimer);
+      A.rateTimer = setInterval(() => {
+        if (A.token !== tokA) { clearInterval(A.rateTimer); return; }
+        const x = (performance.now() - start) / ms;
+        if (x < 0) return;
+        const k = Math.min(1, x);
+        A.el.playbackRate = Math.max(0.0625, from + (to - from) * Math.pow(k, curve));
+        if (k >= 1) clearInterval(A.rateTimer);
+      }, 30);
+    };
+    switch (p.cook) {
+      case 'tapestop':
+        rateRamp(0.07, r0, t0, L, 0.6);
+        H(A.lp.frequency, t0); A.lp.frequency.exponentialRampToValueAtTime(500, tc);
+        H(A.fade.gain, t0); A.fade.gain.setValueAtTime(1, t0 + L * 0.7); A.fade.gain.linearRampToValueAtTime(0.0001, tc);
+        break;
+      case 'gateroll':
+        H(A.fade.gain, t0); gate(A.fade.gain, t0, tc, 2, 8); A.fade.gain.setValueAtTime(0.0001, tc);
+        H(A.hp.frequency, t0); A.hp.frequency.exponentialRampToValueAtTime(1400, tc);
+        break;
+      case 'dubecho':
+        this.echoDelay.delayTime.setValueAtTime(Math.min(2.5, p.echoTime / r0), t0);
+        H(this.echoFb.gain, t0); this.echoFb.gain.setValueAtTime(0.66, t0);
+        this.echoFb.gain.setValueAtTime(0.66, tc + 1.2); this.echoFb.gain.linearRampToValueAtTime(0, tc + 3.4);
+        H(A.send.gain, t0); A.send.gain.linearRampToValueAtTime(1, tc);
+        H(A.fade.gain, t0); A.fade.gain.setValueAtTime(1, tc - 0.02); A.fade.gain.linearRampToValueAtTime(0.0001, tc);
+        H(A.hp.frequency, t0); A.hp.frequency.exponentialRampToValueAtTime(300, tc);
+        break;
+      case 'washout':
+        H(A.lp.frequency, t0); A.lp.frequency.exponentialRampToValueAtTime(160, tc + beat * 2);
+        H(A.lp.Q, t0); A.lp.Q.linearRampToValueAtTime(9, tc);
+        this.echoDelay.delayTime.setValueAtTime(Math.min(2.5, p.echoTime / r0), t0);
+        H(this.echoFb.gain, t0); this.echoFb.gain.setValueAtTime(0.5, t0); this.echoFb.gain.linearRampToValueAtTime(0, tc + beat * 6);
+        H(A.send.gain, t0); A.send.gain.linearRampToValueAtTime(0.6, tc);
+        H(A.fade.gain, t0); A.fade.gain.setValueAtTime(1, tc); A.fade.gain.linearRampToValueAtTime(0.0001, tc + beat * 3);
+        break;
+      case 'riser': {
+        // white-noise sweep that climbs into the drop, then a low "boom" on the cut
+        const n = ctx.createBufferSource(), buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        n.buffer = buf; n.loop = true;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.4;
+        bp.frequency.setValueAtTime(350, t0); bp.frequency.exponentialRampToValueAtTime(9000, tc);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.22, tc - 0.02); g.gain.linearRampToValueAtTime(0, tc + 0.01);
+        n.connect(bp).connect(g).connect(this.input); n.start(t0); n.stop(tc + 0.1);
+        this.cookBoom(tc);
+        H(A.hp.frequency, t0); A.hp.frequency.exponentialRampToValueAtTime(900, tc);
+        H(A.fade.gain, t0); gate(A.fade.gain, tc - beat * 2, tc, 4, 8); A.fade.gain.setValueAtTime(0.0001, tc);
+        break;
+      }
+      case 'launch':
+        rateRamp(1.32 * r0, r0, t0, L, 1.8);
+        H(A.hp.frequency, t0); A.hp.frequency.exponentialRampToValueAtTime(700, tc);
+        H(A.fade.gain, t0); A.fade.gain.setValueAtTime(1, tc - 0.03); A.fade.gain.linearRampToValueAtTime(0.0001, tc);
+        this.cookBoom(tc);
+        break;
+      case 'chop':
+        H(A.fade.gain, t0); gate(A.fade.gain, t0, tc, 4, 4); A.fade.gain.setValueAtTime(0.0001, tc);
+        this.cookBoom(tc);
+        break;
+      case 'spin':
+      default:
+        // the record gets pushed: a quick pitched speed-up then a brake, with a filter swoop
+        rateRamp(1.5 * r0, r0, t0, L * 0.35, 1);
+        setTimeout(() => { if (A.token === tokA) rateRamp(0.08, A.el.playbackRate, ctx.currentTime, Math.max(0.05, tc - ctx.currentTime), 0.7); }, L * 350);
+        H(A.lp.frequency, t0); A.lp.frequency.exponentialRampToValueAtTime(700, tc);
+        H(A.fade.gain, t0); A.fade.gain.setValueAtTime(1, tc - beat * 0.5); A.fade.gain.linearRampToValueAtTime(0.0001, tc);
+        break;
+    }
+    // get the next song rolling (silent) just before the cut so it's heard exactly on it
+    const lead = 0.3;
+    await new Promise((r) => setTimeout(r, Math.max(0, (tc - ctx.currentTime - lead) * 1000)));
+    if (A.token !== tokA || this.cur !== A || !this.playing) { this.cookAbort(A); return false; }
+    try { B.el.currentTime = Math.max(0, p.bStart - lead); } catch (e) { /* */ }
+    return true;
+  }
+  cookBoom(at) {
+    const ctx = this.ctx, o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(110, at); o.frequency.exponentialRampToValueAtTime(38, at + 0.45);
+    g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.5, at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.7);
+    o.connect(g).connect(this.input); o.start(at); o.stop(at + 0.75);
+  }
+  cookAbort(d) {
+    clearInterval(d.rateTimer);
+    try { d.el.preservesPitch = true; d.el.webkitPreservesPitch = true; } catch (e) { /* */ }
+    if (d.track && d === this.cur) { d.el.playbackRate = 1; this.resetFx(d); this.setFade(d, 1); try { d.lp.Q.setValueAtTime(0.7, this.ctx.currentTime); } catch (e) { /* */ } }
+  }
+  // the next song's entrance on the cut
+  cookEnter(A, B, p) {
+    const ctx = this.ctx, tc = Math.max(ctx.currentTime + 0.005, p._tCut || ctx.currentTime), beat = 60 / (library.analysis.get(B.track?.id)?.bpm || 120);
+    const g = B.fade.gain;
+    g.cancelScheduledValues(0); g.setValueAtTime(0, ctx.currentTime); g.setValueAtTime(0, tc);
+    if (p.entry === 'stutter') {
+      let t = tc; for (let i = 0; i < 8; i++) { g.setValueAtTime(i % 2 ? 0.0001 : 1, t); t += beat / 4; }
+      g.setValueAtTime(1, t);
+    } else g.linearRampToValueAtTime(1, tc + 0.012);
+    if (p.entry === 'rise') { this.hold(B.hp.frequency, ctx.currentTime); B.hp.frequency.setValueAtTime(1800, tc); B.hp.frequency.exponentialRampToValueAtTime(HP_OFF, tc + beat * 4); }
+    if (p.cook === 'dubecho' || p.cook === 'washout') { this.hold(B.bass.gain, ctx.currentTime); B.bass.gain.setValueAtTime(-14, tc); B.bass.gain.linearRampToValueAtTime(0, tc + beat * 8); }
+    // A is silent from the cut on (echo / washout tails keep ringing on their own bus)
+    if (p.cook !== 'washout') { this.hold(A.fade.gain, ctx.currentTime); A.fade.gain.setValueAtTime(0.0001, tc + 0.01); }
+  }
   // automation helpers (Web Audio clock)
   hold(param, at) {
     if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(at); else { param.cancelScheduledValues(at); param.setValueAtTime(param.value, at); }
@@ -1341,6 +1532,18 @@ class Engine extends Emitter {
       this.echoPending = false;
       if (A.token !== tokA || this.cur !== A || !this.playing) return;
     }
+    if (p.style === 'cook') {
+      if (p._started || this.cooking) return; // already building (the mix timer and the clock can both fire it)
+      p._started = true;
+      if (!useFx) { p.style = 'filter'; p.overlap = 4; p.inDur = 2.4; p.outDur = 2.8; p.outDelay = 1.2; }
+      else {
+        this.setFade(B, 0);
+        this.cooking = true;
+        let ok = false;
+        try { ok = await this.cookBuild(A, B, p); } finally { this.cooking = false; }
+        if (!ok || this.plan !== p) return;
+      }
+    }
     if (!rolling) { try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } } }
     const t0 = this.ctx ? this.ctx.currentTime + 0.01 : 0;
     const D = p.overlap || p.outDelay + p.outDur;
@@ -1348,6 +1551,9 @@ class Engine extends Emitter {
     switch (p.style) {
       case 'gapless':
         this.fade(A, 0, p.outDur, { shape: 'linear' });
+        break;
+      case 'cook':
+        this.cookEnter(A, B, p);
         break;
       case 'crossfade':
         this.fade(B, 1, p.inDur, { shape: sh });
@@ -1544,7 +1750,11 @@ class Engine extends Emitter {
     const { from, to } = this.transition;
     this.transition = null;
     this.emit('transition', false);
-    if (from !== this.cur) { this.resetFx(from); from.unload(); this.reassertNowPlaying(); }
+    if (from !== this.cur) {
+      clearInterval(from.rateTimer);
+      try { from.el.preservesPitch = true; from.el.webkitPreservesPitch = true; from.lp?.Q.setValueAtTime(0.7, this.ctx?.currentTime || 0); } catch (e) { /* */ }
+      this.resetFx(from); from.unload(); this.reassertNowPlaying();
+    }
     if (to?.fx && this.ctx) {
       this.voxActive(to, false);
       const now = this.ctx.currentTime;

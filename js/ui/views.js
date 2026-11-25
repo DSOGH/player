@@ -103,6 +103,12 @@ export function home() {
       ${likedN ? html`<a class="quick" href="#/liked"><div class="art quick-art liked-art">${icon('heart-fill')}</div><span>Liked Songs</span></a>` : ''}
       ${quick.slice(0, likedN ? 5 : 6).map((a) => html`<a class="quick" href="#/album/${a.id}">${art(a.artId, 'quick-art')}<span>${a.title}</span></a>`)}
     </div>
+    ${library.size >= 4 ? html`<button class="cook-card" data-a="cook-it-up">
+      <span class="cook-bg"><i></i><i></i><i></i></span>
+      <span class="cook-ic">${icon('sparkle')}</span>
+      <span class="cook-txt"><b>DJ Cook It Up</b><small>Your whole library at random · tape stops, stutter rolls, risers, dub echoes — never the same twice</small></span>
+      <span class="cook-go">${icon('play')}</span>
+    </button>` : ''}
     ${weekCard()}
     ${shelf('Made for You', mixes.map(mixCard), { cls: 'mixes' })}
     ${recent.length ? shelf('Jump Back In', recent.map((a) => albumCard(a))) : ''}

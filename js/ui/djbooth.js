@@ -9,8 +9,8 @@ import { isAnalyzed } from '../analysis.js';
 import { art } from './components.js';
 
 const pct = (r) => `${r >= 1 ? '+' : '−'}${Math.abs((r - 1) * 100).toFixed(1)}%`;
-const STYLE_ICON = { acapella: 'lyrics', blend: 'bpm', echo: 'smart', under: 'crossfade', filter: 'eq', crossfade: 'crossfade', gapless: 'gapless' };
-const STYLE_NAME = { auto: 'Auto', beats: 'Beat match', wordplay: 'Word play' };
+const STYLE_ICON = { cook: 'sparkle', acapella: 'lyrics', blend: 'bpm', echo: 'smart', under: 'crossfade', filter: 'eq', crossfade: 'crossfade', gapless: 'gapless' };
+const STYLE_NAME = { auto: 'Auto', beats: 'Beat match', wordplay: 'Word play', cook: 'Cook It Up' };
 
 function lineAt(t, time) {
   const L = cachedLyrics(t);
@@ -30,6 +30,24 @@ export function explain(p, A, B) {
     ? `Keys ${a.camelot} → ${b.camelot}: ${kc >= 0.85 ? 'harmonic match — they sound great together' : kc < 0.5 ? 'they clash, so the overlap stays tight' : 'compatible'}`
     : null;
   switch (p.style) {
+    case 'cook': {
+      const what = {
+        tapestop: 'This song grinds to a halt like a tape machine losing power',
+        gateroll: 'This song chops into a stutter roll that speeds up into the cut',
+        dubecho: `This song is thrown into a dub echo (${p.echoTime ? (p.echoTime / (p.beat || 0.5)).toFixed(2).replace(/\.?0+$/, '') : '¾'} beat repeats) that rings out over the next one`,
+        washout: 'A resonant filter sweeps this song away into an echo wash',
+        riser: 'A white-noise riser climbs, the beat chops faster, then a sub boom on the drop',
+        launch: 'This song speeds up and pitches up like it’s taking off — then a boom',
+        chop: 'A quick volume chop on the last beat, then a boom',
+        spin: 'The record gets pushed faster, then braked to a stop',
+      }[p.cook];
+      out.push(what || 'Something wild');
+      const beats = Math.round((p.build || 0) / (p.beat || 0.5));
+      out.push(`${beats} beat${beats === 1 ? '' : 's'} long, landing exactly on a bar line${p.cutAt < (A.duration || 0) - 20 ? ` — leaving at ${Math.floor(p.cutAt / 60)}:${String(Math.floor(p.cutAt % 60)).padStart(2, '0')}, not the end` : ''}`);
+      out.push(p.entry === 'rise' ? 'Next song opens up from a high-pass sweep' : p.entry === 'stutter' ? 'Next song stutters in for a beat' : 'Next song slams straight in');
+      out.push('Cook It Up never uses the same move as the last two');
+      break;
+    }
     case 'blend': {
       const beats = Math.round(p.overlap / (p.beat || 0.5));
       out.push(`Beat-matched overlay — ${beats} beats (${p.overlap.toFixed(1)}s), starting on a bar line`);

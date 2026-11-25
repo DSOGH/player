@@ -184,10 +184,10 @@ async function act(a, el) {
     case 'lyrics-retry': { const { forgetLyrics } = await import('../lyrics.js'); forgetLyrics(engine.track); renderLyrics(true); break; }
     case 'booth': setMode('booth'); break;
     case 'dj-style': {
-      const order = ['beats', 'auto', 'wordplay'];
-      const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % 3];
+      const order = ['beats', 'auto', 'wordplay', 'cook'];
+      const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % order.length];
       settings.set('djStyle', nx);
-      toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play' }[nx]);
+      toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play', cook: 'DJ style: Cook It Up 🔥' }[nx]);
       if (engine.upcoming) engine.computePlan();
       renderBooth($('#np .np-booth'));
       break;

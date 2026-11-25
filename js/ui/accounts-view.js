@@ -285,19 +285,22 @@ export function restoreSheet(r, { restore, fresh }) {
   const p = d.profile || {};
   const a = { name: p.name || 'Your account', color: p.color ?? 1 };
   const when = d.at ? new Date(d.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  const bits = [
-    d.playlists?.length ? `${d.playlists.length} playlist${d.playlists.length > 1 ? 's' : ''}` : '',
-    d.likes?.length ? `${d.likes.length} liked songs` : '',
-    Object.keys(d.bpm || {}).length ? `${Object.keys(d.bpm).length} tapped BPMs` : '',
-    d.settings ? 'your settings' : '',
-  ].filter(Boolean);
+  const nPlays = Object.values(d.statsBy || {}).reduce((n, v) => n + Object.values(v.plays || {}).reduce((m, arr) => m + arr.length, 0), 0) + Object.values(d.plays || {}).reduce((m, arr) => m + arr.length, 0);
+  const nDev = Object.keys(d.statsBy || {}).length;
+  const parts = [
+    ['profile', 'Name, colour & PIN', p.name || ''],
+    ['settings', 'Settings', d.settings ? 'DJ, sound, look & everything else' : ''],
+    ['music', 'Playlists & likes', [d.playlists?.length ? `${d.playlists.length} playlist${d.playlists.length > 1 ? 's' : ''}` : '', d.likes?.length ? `${d.likes.length} likes` : ''].filter(Boolean).join(' · ')],
+    ['dj', 'BPMs & clean/explicit picks', Object.keys(d.bpm || {}).length ? `${Object.keys(d.bpm).length} tapped BPMs` : ''],
+    ['stats', 'Listening stats', nPlays ? `${nPlays.toLocaleString()} plays${nDev > 1 ? ` from ${nDev} devices` : ''}` : ''],
+  ].filter(([k, , sub]) => k === 'profile' || k === 'settings' ? true : !!sub);
   const [c1, c2] = accounts.colors(a);
   sheet.innerHTML = html`<div class="sheet-backdrop"></div>
     <div class="sheet-panel dialog connect-sheet" style="--c1:${c1};--c2:${c2}">
       ${avatar(a, 'big')}
       <div class="sheet-title big">Welcome back${p.name ? `, ${p.name}` : ''}</div>
       <p class="plex-sub">Your Player account is saved on ${r.where === 'GitHub' ? 'GitHub' : 'your Plex'}${d.device ? ` from ${d.device}` : ''}${when ? ` (${when})` : ''}. Bring it to this device?</p>
-      ${bits.length ? html`<p class="restore-bits">${bits.join(' · ')}</p>` : ''}
+      <div class="restore-parts">${parts.map(([k, l, sub]) => html`<label class="restore-part"><input type="checkbox" value="${k}" checked><span><b>${l}</b>${sub ? html`<small>${sub}</small>` : ''}</span></label>`)}</div>
       <button class="btn pill primary connect-btn restore-go" data-c="restore">${icon('download')}Restore my account</button>
       <button class="sheet-cancel" data-c="fresh">Start fresh on this device</button>
     </div>`.toString();
@@ -305,7 +308,11 @@ export function restoreSheet(r, { restore, fresh }) {
   const shut = () => { sheet.classList.remove('open'); setTimeout(() => { if (!sheet.classList.contains('open')) sheet.innerHTML = ''; }, 260); };
   sheet.onclick = async (e) => {
     const c = e.target.closest('[data-c]')?.dataset.c;
-    if (c === 'restore') { e.target.closest('button').textContent = 'Restoring…'; await restore(); shut(); }
+    if (c === 'restore') {
+      const sel = [...sheet.querySelectorAll('.restore-part input:checked')].map((x) => x.value);
+      if (!sel.length) return;
+      e.target.closest('button').textContent = 'Restoring…'; await restore(sel); shut();
+    }
     else if (c === 'fresh') { shut(); fresh(); }
   };
 }
