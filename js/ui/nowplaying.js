@@ -692,7 +692,8 @@ function startPulse() {
     lastT = now;
     const visible = (open || document.body.classList.contains('dual')) && !document.hidden;
     // smooth, exact clock & slider while the player is on screen (not just 5× a second)
-    if (visible && engine.track && !dragging && (engine.playing || !engine.cur.el.paused)) renderTime();
+    // clock/slider ~15×/s (smooth to the eye, light on the phone — keeps audio glitch-free during mixes)
+    if (visible && engine.track && !dragging && (engine.playing || !engine.cur.el.paused) && performance.now() - (loop._rt || 0) > 66) { loop._rt = performance.now(); renderTime(); }
     const an = engine.analyser;
     const art = np.querySelector('.np-art .art');
     const glow = np.querySelector('.np-glow');

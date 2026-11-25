@@ -404,7 +404,7 @@ class Engine extends Emitter {
     clearInterval(d.rateTimer);
     const from = d.el.playbackRate;
     if (Math.abs(from - to) < 0.001) return;
-    const steps = Math.max(1, Math.min(4, Math.round(Math.abs(to - from) / 0.012)));
+    const steps = IOS ? 1 : Math.max(1, Math.min(4, Math.round(Math.abs(to - from) / 0.012)));
     let k = 0;
     const step = () => {
       k++;
@@ -709,6 +709,7 @@ class Engine extends Emitter {
     this.emit('state');
     const ds = [this.cur, this.transition?.from].filter(Boolean);
     clearTimeout(this.planTimer); this.planTimer = null;
+    this.stopPreroll();
     this._pausing = true;
     if (settings.get('pauseFade') && this.ctx && !this.cur.el.paused) {
       this.fade(this.cur, 0, 0.18, { shape: 'linear' });
@@ -740,6 +741,7 @@ class Engine extends Emitter {
     this._seekTo = to; this._seekAt = performance.now(); this._seekDeck = d; this._seekRetried = false;
     // jumped past where the DJ mix was going to start: don't mix away right away — let you hear the
     // part you picked, then a short crossfade into the next song at the very end
+    this.stopPreroll();
     const p = this.plan;
     this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 3);
     this._lateGo = false;
@@ -892,8 +894,18 @@ class Engine extends Emitter {
   }
 
   // ---------- transitions ----------
+  // a silent pre-roll that's no longer valid (pause, seek, queue change): stop it so it can redo itself
+  stopPreroll() {
+    clearInterval(this.prerollTimer);
+    const p = this.plan;
+    if (p?.prerolled && !this.transition) {
+      p.prerolled = false;
+      try { this.other.el.pause(); } catch (e) { /* */ }
+    }
+  }
   cancelNext() {
     clearTimeout(this.planTimer); this.planTimer = null;
+    this.stopPreroll();
     if (!this.transition && this.cur.track && Math.abs(this.cur.el.playbackRate - 1) > 0.001) this.rampRate(this.cur, 1, 1.5);
     this.plan = null;
     if (this.upcoming && !this.transition) this.other.unload();
@@ -1073,9 +1085,10 @@ class Engine extends Emitter {
     const kc = s.harmonicMix !== false ? keyCompat(aA?.camelot, aB?.camelot) : 0.8;
     // tempo sync: the incoming song matches the outgoing one; for bigger gaps both meet in the middle
     const maxEach = (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
-    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= maxEach * 2.02 + 0.005 && end > 20) {
+    // iPhone: every speed change of a playing song can click, so only the incoming song changes speed (once, before it's heard)
+    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 2.02 + 0.005) && end > 20) {
       let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
-      if (s.tempoMatch && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
+      if (!IOS && s.tempoMatch && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
       let beats = clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
@@ -1120,19 +1133,69 @@ class Engine extends Emitter {
   hold(param, at) {
     if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(at); else { param.cancelScheduledValues(at); param.setValueAtTime(param.value, at); }
   }
+  // Start the incoming song ~3 s early with its volume at zero, already at the right speed, and keep
+  // nudging its *position* (silently) until it's beat-locked. At the mix point only volumes/filters move,
+  // so there's no start-up stutter and no audible speed corrections.
+  preroll(p) {
+    const A = this.cur, B = this.other, nx = this.upcoming;
+    if (!nx || !this.ctx || !A.fx || this.transition) { p.noPreroll = true; return; }
+    const rb = p.rate || 1;
+    const lead = (p.mixStart - A.el.currentTime) / (A.el.playbackRate || 1); // real seconds until the mix
+    const startAt = p.bStart - lead * rb;
+    if (lead < 0.8) { p.noPreroll = true; return; }
+    if (B.track !== nx.track) { this.loadDeck(B, nx.track, Math.max(0, startAt)); this.applyDeckGain(B); }
+    if (!B.fx) { p.noPreroll = true; return; } // can't silence a direct (non-Web-Audio) element on iPhone
+    if (startAt < 0.2) {
+      // the mix starts at the very top of the next song: warm it up silently (decoder + buffer), then park it
+      // exactly on its start so it begins instantly at the mix point
+      p.noPreroll = true;
+      const tokB = B.token;
+      this.resetFx(B);
+      this.setFade(B, 0);
+      try { B.el.currentTime = 0; } catch (e) { /* */ }
+      B.el.playbackRate = rb;
+      B.el.play().then(() => setTimeout(() => {
+        if (B.token !== tokB || this.transition || this.plan !== p) return;
+        B.el.pause();
+        try { B.el.currentTime = p.bStart; } catch (e) { /* */ }
+      }, Math.min(700, Math.max(200, (lead - 0.4) * 1000)))).catch(() => {});
+      return;
+    }
+    this.resetFx(B);
+    this.setFade(B, 0);
+    try { B.el.currentTime = startAt; } catch (e) { /* */ }
+    B.el.playbackRate = rb;
+    p.prerolled = true;
+    const tokA = A.token, tokB = B.token;
+    B.el.play().catch(() => { p.prerolled = false; p.noPreroll = true; });
+    clearInterval(this.prerollTimer);
+    this.prerollTimer = setInterval(() => {
+      if (A.token !== tokA || B.token !== tokB || this.transition || this.plan !== p) { clearInterval(this.prerollTimer); return; }
+      const ra = A.el.playbackRate || 1;
+      const left = (p.mixStart - A.el.currentTime) / ra;
+      if (left < 0.35) { clearInterval(this.prerollTimer); return; } // settled
+      if (B.el.paused || B.el.readyState < 3) return;
+      const exp = p.bStart - left * rb;
+      if (Math.abs(B.el.currentTime - exp) > 0.025) { try { B.el.currentTime = exp + 0.01; } catch (e) { /* */ } }
+    }, 120);
+  }
   async runPlan() {
     this.planTimer = null;
     const p = this.plan, nx = this.upcoming;
     if (!p || !nx || this.transition || !this.playing) return;
     const A = this.cur, B = this.other;
+    clearInterval(this.prerollTimer);
+    const rolling = p.prerolled && B.track === nx.track && !B.el.paused;
     if (B.track !== nx.track) { this.loadDeck(B, nx.track, p.bStart); this.applyDeckGain(B); }
-    else if (Math.abs(B.el.currentTime - p.bStart) > 0.08) { try { B.el.currentTime = p.bStart; } catch (e) { /* */ } }
+    else if (!rolling && Math.abs(B.el.currentTime - p.bStart) > 0.08) { try { B.el.currentTime = p.bStart; } catch (e) { /* */ } }
     const useFx = p.fx && A.fx && B.fx && this.ctx;
     if (p.style === 'acapella' && useFx && A.vox) return this.runAcapella(A, B, p, nx);
     if (p.style === 'acapella') { p.style = 'echo'; p.lead = p.iso; p.bStart = p.bDrop; } // no worklet: classic echo word play
-    this.resetFx(B);
-    this.setFade(B, p.style === 'gapless' ? 1 : 0);
-    B.el.playbackRate = p.rate || 1;
+    if (!rolling) {
+      this.resetFx(B);
+      this.setFade(B, p.style === 'gapless' ? 1 : 0);
+      B.el.playbackRate = p.rate || 1;
+    }
     // B's low end starts held back (DJ style) so two kick drums never fight
     if (useFx) {
       const now = this.ctx.currentTime;
@@ -1158,7 +1221,7 @@ class Engine extends Emitter {
       this.echoPending = false;
       if (A.token !== tokA || this.cur !== A || !this.playing) return;
     }
-    try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } }
+    if (!rolling) { try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } } }
     const t0 = this.ctx ? this.ctx.currentTime + 0.01 : 0;
     const D = p.overlap || p.outDelay + p.outDur;
     const sh = p.shape;
@@ -1244,6 +1307,7 @@ class Engine extends Emitter {
       // big error: jump — but only while the incoming song is still (nearly) silent
       if (Math.abs(err) > 0.12 && performance.now() - started < 1500) { try { B.el.currentTime = expB + 0.02; } catch (e) { /* */ } return; }
       const now = performance.now();
+      if (IOS || p.prerolled) return; // lined up silently during the pre-roll; no audible speed nudges
       if (now - lastChange < 700) return; // rare, deliberate corrections only
       // within 10 ms: back to the exact sync speed; otherwise a single 1–2% nudge that closes the gap in ~1.5 s
       const target = Math.abs(err) < 0.01 ? rb : rb * (1 + clamp(-err / 1.5, -0.02, 0.02));
@@ -1315,7 +1379,7 @@ class Engine extends Emitter {
       const err = B.el.currentTime - (p.bDrop - (tEnd - now));
       if (now < tEnd - 0.35) {
         if (Math.abs(err) > 0.04) { try { B.el.currentTime = p.bDrop - (tEnd - now) + 0.03; } catch (e) { /* */ } }
-        else if (Math.abs(err) > 0.012) { const q = Math.round((1 - clamp(err / 0.6, -0.04, 0.04)) * 400) / 400; if (Math.abs(B.el.playbackRate - q) >= 0.002) B.el.playbackRate = q; }
+        else if (!IOS && Math.abs(err) > 0.012) { const q = Math.round((1 - clamp(err / 0.6, -0.04, 0.04)) * 400) / 400; if (Math.abs(B.el.playbackRate - q) >= 0.002) B.el.playbackRate = q; }
         else if (B.el.playbackRate !== 1) B.el.playbackRate = 1;
       } else if (B.el.playbackRate !== 1 && Math.abs(err) < 0.02) B.el.playbackRate = 1;
     }, 150);
@@ -1395,6 +1459,7 @@ class Engine extends Emitter {
       return;
     }
     const pl = this.plan;
+    if (pl && !pl.prerolled && !pl.noPreroll && ['blend', 'under', 'filter', 'crossfade'].includes(pl.style) && t >= pl.mixStart - 3 * (d.el.playbackRate || 1)) this.preroll(pl);
     if (pl && pl.aRate && Math.abs(pl.aRate - 1) > 0.001 && !pl.aRamped && t >= pl.mixStart - (pl.preroll || 4)) {
       pl.aRamped = true;
       this.rampRate(d, pl.aRate, Math.max(0.5, (pl.mixStart - t) / (d.el.playbackRate || 1)));
