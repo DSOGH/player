@@ -649,10 +649,19 @@ async function doAction(a, el, e) {
       break;
     }
     case 'fr-notify': {
+      if (friends.pushOn) { await friends.disablePush(); settings.set('friendNotify', false); toast('Message notifications off'); render({ keepScroll: true }); break; }
       if (!('Notification' in window)) { toast('Add Player to your Home Screen first — iPhone only allows notifications for home-screen apps'); break; }
+      // must be the first thing after the tap, or iPhone won't show the Allow prompt
       const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-      settings.set('friendNotify', perm === 'granted');
-      toast(perm === 'granted' ? 'Message notifications are on' : 'Notifications are blocked — turn them on in iPhone Settings → Notifications → Player');
+      if (perm !== 'granted') { toast('Notifications are blocked — turn them on in iPhone Settings → Notifications → Player'); render({ keepScroll: true }); break; }
+      settings.set('friendNotify', true);
+      try {
+        await friends.enablePush();
+        toast('Message notifications on — even when Player is closed');
+      } catch (er) {
+        console.warn('push', er);
+        toast(er.message === 'relay-no-push' ? 'Your message relay doesn’t support push — notifications only while Player is open' : 'Couldn’t turn on push — notifications only while Player is open');
+      }
       render({ keepScroll: true });
       break;
     }
@@ -912,7 +921,7 @@ function wireEngineEvents() {
       const atBottom = main().scrollHeight - main().scrollTop - main().clientHeight < 120;
       render({ keepScroll: true }).then(() => { if (atBottom || !incoming) main().scrollTo({ top: main().scrollHeight, behavior: 'smooth' }); });
       if (incoming) haptic(10);
-    } else if (incoming && document.hidden && settings.get('friendNotify') && 'Notification' in window && Notification.permission === 'granted') {
+    } else if (incoming && document.hidden && !friends.pushOn && settings.get('friendNotify') && 'Notification' in window && Notification.permission === 'granted') {
       // app in the background (e.g. playing music): a real iPhone notification
       const f = friends.friend(fid);
       navigator.serviceWorker?.ready.then((reg) => reg.showNotification(f?.name || 'Friend', {
@@ -925,7 +934,10 @@ function wireEngineEvents() {
     }
   });
   addEventListener('hashchange', () => { if (!location.hash.startsWith('#/chat/')) friends.viewing = null; });
-  navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type === 'open' && e.data.url) location.hash = e.data.url; });
+  navigator.serviceWorker?.addEventListener('message', (e) => {
+    if (e.data?.type === 'open' && e.data.url) location.hash = e.data.url;
+    if (e.data?.type === 'relay-ping' && friends.me) friends.poll(friends.me.last || '12h');
+  });
   // switches on non-settings pages (e.g. Friends)
   document.addEventListener('change', (e) => {
     const sw = e.target.closest?.('#view [data-set]');

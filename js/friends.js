@@ -14,6 +14,7 @@ const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/
 const rand = (n) => b64u(crypto.getRandomValues(new Uint8Array(n)));
 const relay = () => (localStorage.getItem('relayBase') || settings.get('friendRelay') || 'https://ntfy.sh').replace(/\/$/, '');
 const topic = (id) => `plyr_${id}`;
+const npTopic = (id) => `plyr_${id}_np`; // "listening to" status lives on its own topic (never pushes)
 const norm = (s) => String(s || '').toLowerCase().replace(/\(.*?\)|\[.*?\]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 async function importKey(raw) { return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']); }
@@ -37,7 +38,7 @@ class Friends extends Emitter {
     this.pending = (await db.kv.get('friends:pending')) || [];
     for (const f of this.list) this.keys.set(f.kid, await importKey(unb64u(f.key)));
     for (const p of this.pending) this.keys.set(p.kid, await importKey(unb64u(p.key)));
-    if (this.me) this.connect();
+    if (this.me) { this.connect(); this.refreshPush(); }
   }
   async setup(name) {
     if (!this.me) this.me = { id: rand(18), since: Date.now(), last: 'all' };
@@ -118,7 +119,7 @@ class Friends extends Emitter {
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(msg)));
       const env = JSON.stringify({ v: 1, k: f.kid, iv: b64u(iv), c: b64u(ct) });
-      const r = await fetch(`${relay()}/${topic(f.id)}`, { method: 'POST', body: env, headers: { 'X-Cache': 'yes' } });
+      const r = await fetch(`${relay()}/${msg.type === 'np' ? npTopic(f.id) : topic(f.id)}`, { method: 'POST', body: env, headers: { 'X-Cache': 'yes' } });
       if (!r.ok) throw new Error('relay ' + r.status);
       if (store) { msg.state = 'sent'; db.kv.set('chat:' + f.id, await this.history(f.id)); this.emit('message', f.id, msg); }
     } catch (e) {
@@ -208,7 +209,7 @@ class Friends extends Emitter {
     const since = this.me.last && this.me.last !== 'all' ? this.me.last : '12h';
     this.poll(since);
     try {
-      this.es = new EventSource(`${relay()}/${topic(this.me.id)}/sse?since=${encodeURIComponent(this.me.last || '12h')}`);
+      this.es = new EventSource(`${relay()}/${topic(this.me.id)},${npTopic(this.me.id)}/sse?since=${encodeURIComponent(this.me.last || '12h')}`);
       this.es.onmessage = (e) => { try { this.handle(JSON.parse(e.data)); } catch (er) { /* */ } };
       this.es.onerror = () => { /* EventSource reconnects by itself */ };
     } catch (e) { this.es = null; }
@@ -220,10 +221,52 @@ class Friends extends Emitter {
   }
   async poll(since) {
     try {
-      const r = await fetch(`${relay()}/${topic(this.me.id)}/json?poll=1&since=${encodeURIComponent(since || '12h')}`);
+      const r = await fetch(`${relay()}/${topic(this.me.id)},${npTopic(this.me.id)}/json?poll=1&since=${encodeURIComponent(since || '12h')}`);
       if (!r.ok) return;
       for (const line of (await r.text()).split('\n')) { if (line.trim()) { try { await this.handle(JSON.parse(line)); } catch (e) { /* */ } } }
     } catch (e) { /* offline */ }
+  }
+  // ---------- push notifications (work even when Player is closed) ----------
+  // The relay (ntfy) sends a Web Push to this phone for each message; the service worker decrypts it
+  // on the phone and shows the notification. The relay only ever sees the encrypted envelope.
+  get pushOn() { return !!this.me?.pushAt; }
+  async enablePush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('unsupported');
+    const reg = await navigator.serviceWorker.ready;
+    const txt = await (await fetch(`${relay()}/config.js`, { cache: 'no-store' })).text();
+    const key = (txt.match(/web_push_public_key["']?\s*:\s*["']([A-Za-z0-9_-]{40,})["']/) || [])[1];
+    if (!key) throw new Error('relay-no-push');
+    const appKey = unb64u(key);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      const cur = sub.options?.applicationServerKey ? b64u(sub.options.applicationServerKey) : null;
+      if (cur && cur !== key) { await sub.unsubscribe(); sub = null; }
+    }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+    const j = sub.toJSON();
+    const r = await fetch(`${relay()}/v1/webpush`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: j.endpoint, auth: j.keys.auth, p256dh: j.keys.p256dh, topics: [topic(this.me.id)] }),
+    });
+    if (!r.ok) throw new Error('relay ' + r.status);
+    this.me.pushAt = Date.now();
+    await db.kv.set('friends:me', this.me);
+    this.emit('change');
+  }
+  async disablePush() {
+    try {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (sub) {
+        await fetch(`${relay()}/v1/webpush`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+        await sub.unsubscribe();
+      }
+    } catch (e) { /* */ }
+    if (this.me) { delete this.me.pushAt; await db.kv.set('friends:me', this.me); }
+    this.emit('change');
+  }
+  // the relay forgets push subscriptions that aren't renewed, so renew every few days
+  refreshPush() {
+    if (this.pushOn && Date.now() - this.me.pushAt > 4 * 86400000 && Notification.permission === 'granted') this.enablePush().catch(() => {});
   }
   reconnect() { try { this.es?.close(); } catch (e) { /* */ } this.es = null; this.connect(); }
 }

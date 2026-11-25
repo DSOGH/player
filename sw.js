@@ -5,7 +5,7 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.15.0';
+const VERSION = 'v1.15.1';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -277,6 +277,42 @@ self.addEventListener('fetch', (e) => {
   if (p.includes('/__art/')) return e.respondWith(art(decodeURIComponent(p.split('/__art/')[1])));
   if (p.includes('/__demo/')) return e.respondWith(demo(e.request, url));
   if (e.request.method === 'GET') e.respondWith(shell(e.request));
+});
+
+// ---- friend messages pushed by the relay (ntfy Web Push): decrypt on the phone, show the notification ----
+const b64uDec = (x) => Uint8Array.from(atob(x.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((x.length + 3) % 4)), (c) => c.charCodeAt(0));
+async function friendNote(raw) {
+  const env = JSON.parse(raw);
+  const list = (await idbGet('kv', 'friends:list')) || [];
+  const pending = (await idbGet('kv', 'friends:pending')) || [];
+  const f = list.find((x) => x.kid === env.k);
+  const keyB64 = f?.key || pending.find((x) => x.kid === env.k)?.key;
+  if (!keyB64) return null;
+  const key = await crypto.subtle.importKey('raw', b64uDec(keyB64), 'AES-GCM', false, ['decrypt']);
+  const m = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64uDec(env.iv) }, key, b64uDec(env.c))));
+  if (m.type === 'hello') return { title: 'New friend', body: `${m.name || 'Someone'} added you on Player`, url: '#/friends', tag: 'hello' };
+  if (!f) return null;
+  const fmt = (x) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`;
+  const body = m.type === 'song'
+    ? `♪ ${m.song.title} — ${m.song.artist}${m.song.at ? ` (from ${fmt(m.song.at)})` : ''}${m.note ? `\n${m.note}` : ''}`
+    : String(m.text || 'New message');
+  return { title: f.name, body, url: `#/chat/${f.id}`, tag: 'chat-' + f.id };
+}
+self.addEventListener('push', (e) => {
+  e.waitUntil((async () => {
+    let d = {};
+    try { d = e.data ? e.data.json() : {}; } catch (er) { try { d = { message: e.data.text() }; } catch (er2) { /* */ } }
+    if (d.event === 'subscription_expiring') {
+      return self.registration.showNotification('Player', { body: 'Open Player to keep message notifications on', tag: 'push-renew', icon: './icons/icon-192.png' });
+    }
+    const msg = d.message && typeof d.message === 'object' ? d.message : d; // ntfy: { event, message: { … } }
+    let n = null;
+    try { n = await friendNote(msg.message); } catch (er) { /* not ours / can't decrypt */ }
+    n = n || { title: 'Player', body: 'New message', url: '#/friends', tag: 'chat' };
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of wins) c.postMessage({ type: 'relay-ping' }); // an open app fetches it right away
+    return self.registration.showNotification(n.title, { body: n.body, tag: n.tag, renotify: true, icon: './icons/icon-192.png', badge: './icons/icon-192.png', data: { url: n.url } });
+  })());
 });
 
 // tapping a message notification opens that chat

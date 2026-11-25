@@ -18,7 +18,8 @@ const avatar = (f, cls = '') => html`<span class="fr-av ${cls}" style="backgroun
 export const drafts = new Map();
 function notifyText() {
   if (!('Notification' in window)) return 'Add Player to your Home Screen to get notifications';
-  if (Notification.permission === 'granted' && settings.get('friendNotify')) return 'On — while Player is open or playing in the background';
+  if (friends.pushOn && Notification.permission === 'granted') return 'On — even when Player is closed. Tap to turn off';
+  if (Notification.permission === 'granted' && settings.get('friendNotify')) return 'Only while Player is open — tap to set up push';
   if (Notification.permission === 'denied') return 'Blocked — allow in iPhone Settings → Notifications → Player';
   return 'Tap to get a notification when a friend messages you';
 }
