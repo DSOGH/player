@@ -916,7 +916,7 @@ function wireGlobal() {
     }
   });
 
-  // Swipe a song: left → Add to Queue, right → Add to Playlist. Follows the finger 1:1 (drawn once per
+  // Swipe a song: right → Add to Queue, left → Add to Playlist. Follows the finger 1:1 (drawn once per
   // frame), the color and icon grow with the swipe, a tap of haptics when it locks in, then a smooth glide back.
   let sw = null;
   const SW_ARM = 84;
@@ -934,10 +934,10 @@ function wireGlobal() {
     s2.row.style.transform = `translate3d(${d}px,0,0)`;
     const p = Math.min(1, Math.abs(d) / SW_ARM);
     const u = s2.under;
-    u.dataset.dir = d < 0 ? 'queue' : 'playlist';
+    u.dataset.dir = d > 0 ? 'queue' : 'playlist';
     u.style.setProperty('--p', p.toFixed(3));
     // the icon rides just behind the row's edge
-    const ic = u.querySelector(d < 0 ? '.su-q' : '.su-p');
+    const ic = u.querySelector(d > 0 ? '.su-q' : '.su-p');
     const off = Math.max(0, Math.abs(d) - 64) * 0.5;
     if (ic) ic.style.transform = `translate3d(${d < 0 ? -off : off}px,0,0) scale(${(0.7 + 0.3 * p).toFixed(3)})`;
     const armed = Math.abs(d) > SW_ARM ? Math.sign(d) : 0;
@@ -961,7 +961,7 @@ function wireGlobal() {
       const under = document.createElement('div');
       under.className = 'swipe-under';
       under.style.cssText = `top:${r.offsetTop}px;left:${r.offsetLeft}px;width:${r.offsetWidth}px;height:${r.offsetHeight}px`;
-      under.innerHTML = html`<span class="su-p">${icon('add-playlist')}<b>Add to Playlist</b></span><span class="su-q"><b>Add to Queue</b>${icon('add-queue')}</span>`.toString();
+      under.innerHTML = html`<span class="su-q">${icon('add-queue')}<b>Add to Queue</b></span><span class="su-p"><b>Add to Playlist</b>${icon('add-playlist')}</span>`.toString();
       par.appendChild(under);
       sw.under = under;
       r.classList.add('swiping');
@@ -981,16 +981,16 @@ function wireGlobal() {
     const go = e.type !== 'pointercancel' ? s2.armed : 0;
     if (go) {
       s2.under.classList.add('done');
-      const ic = s2.under.querySelector(go < 0 ? '.su-q' : '.su-p');
-      if (ic) ic.innerHTML = icon('check') + `<b>${go < 0 ? 'Queued' : 'Choose playlist'}</b>`;
+      const ic = s2.under.querySelector(go > 0 ? '.su-q' : '.su-p');
+      if (ic) ic.innerHTML = icon('check') + `<b>${go > 0 ? 'Queued' : 'Choose playlist'}</b>`;
     }
     const back = s2.row.animate([{ transform: `translate3d(${s2.dx}px,0,0)` }, { transform: 'translate3d(0,0,0)' }],
       { duration: go ? 380 : 300, delay: go ? 140 : 0, easing: 'cubic-bezier(.22,.9,.3,1)', fill: 'backwards' });
     s2.row.style.transform = '';
     s2.under.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, delay: go ? 360 : 180, fill: 'forwards' });
     back.finished.finally(() => setTimeout(() => { s2.row.classList.remove('swiping'); s2.under?.remove(); }, 200));
-    if (t && go < 0) { engine.addToQueue([t]); toast(`Added “${t.title}” to queue`); }
-    else if (t && go > 0) setTimeout(() => addToPlaylist([t]), 260);
+    if (t && go > 0) { engine.addToQueue([t]); toast(`Added “${t.title}” to queue`); }
+    else if (t && go < 0) setTimeout(() => addToPlaylist([t]), 260);
   };
   document.addEventListener('pointerup', swEnd);
   document.addEventListener('pointercancel', swEnd);
@@ -1137,8 +1137,14 @@ async function resolveEditions(only = null) {
     return '';
   };
   const cellular = navigator.connection?.type === 'cellular' || navigator.connection?.saveData;
-  const compareAudio = settings.get('editionAudio') && !(cellular && settings.get('analysisNetwork') === 'wifi') ? compareVersions : null;
-  try { if (await library.resolveEditions({ lyricsOf, compareAudio, only, max: only ? 1 : 4 })) rerender(); } catch (e) { console.warn('editions', e); }
+  // listening to two versions downloads whole songs: never while music is playing (it would compete with
+  // the song for the connection and make starts lag), and it stops the moment you press play
+  const ctl = new AbortController();
+  const stop = () => { if (engine.playing) ctl.abort(); };
+  const unsub = engine.on('state', stop);
+  const compareAudio = settings.get('editionAudio') && !engine.playing && !(cellular && settings.get('analysisNetwork') === 'wifi') ? compareVersions : null;
+  try { if (await library.resolveEditions({ lyricsOf, compareAudio, only, max: only ? 1 : 4, signal: ctl.signal })) rerender(); } catch (e) { console.warn('editions', e); }
+  unsub();
 }
 // opening an album whose two versions aren't told apart yet → listen to them right away
 const edChecked = new Set();

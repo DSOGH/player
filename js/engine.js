@@ -821,7 +821,7 @@ class Engine extends Emitter {
     if (p && p.style === 'cook' && this.upcoming && (to > p.mixStart - 0.3 || p._aborted)) {
       const A = d.track, B = this.upcoming.track;
       const np = this.cookPlan({ A, B, aA: library.analysis.get(A.id), aB: library.analysis.get(B.id), bpmA: library.analysis.get(A.id)?.bpm || 0, dur: this.duration, end: this.duration, base: { aId: A.id, bId: B.id, rate: 1, bStart: 0, outDelay: 0, shape: p.shape, style: 'cook' }, durB: B.duration, after: to + 3 });
-      if (np && !np.cookBlend) { clearTimeout(this.planTimer); this.planTimer = null; this.plan = p = np; if (np.needsBuf) this.cookPrepare(np, A); this.emit('plan', np); }
+      if (np && !np.cookBlend) { clearTimeout(this.planTimer); this.planTimer = null; this.plan = p = np; this.emit('plan', np); }
     }
     this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 0.3);
     this._lateGo = false;
@@ -959,7 +959,7 @@ class Engine extends Emitter {
       const i = this.nextIndex(true);
       const n = i >= 0 ? library.track(this.queue[i]) : null;
       if (n) (n !== this.upcoming?.track ? prefetchTrack(n) : Promise.resolve()).then(() => { if (isAnalyzed(n)) verifyBpm(n); });
-      if (isAnalyzed(t)) verifyBpm(t);
+      if (isAnalyzed(t)) verifyBpm(t, { reanalyze: false }); // the playing song is only re-measured later (when it comes up next / library analysis)
     }, 4000);
   }
   scheduleAnalysis(t) {
@@ -1057,6 +1057,7 @@ class Engine extends Emitter {
     this.loadDeck(d, t, this.plan?.bStart || 0);
     this.applyDeckGain(d);
     this.setFade(d, 0);
+    if (IOS && this.playing) this.reassertNowPlaying();
     if (this.wantsAnalysis()) {
       // songs measured by an older version have no loudness map yet: refresh them so the drop can be found
       const a = library.analysis.get(t.id);
@@ -1078,7 +1079,6 @@ class Engine extends Emitter {
     const p = this.makePlan(A, B, this.durationOf(this.cur));
     const old = this.plan;
     this.plan = p;
-    if (p.needsBuf) this.cookPrepare(p, A);
     // re-seek the preloaded deck if the start point moved
     if (old && Math.abs((old.bStart || 0) - p.bStart) > 0.05 && this.other.track === B) {
       try { this.other.el.currentTime = p.bStart; } catch (e) { /* */ }
@@ -1229,7 +1229,8 @@ class Engine extends Emitter {
     // 1) beat-matched blend (harmonic-aware: long blends when keys agree, short when they clash)
     const kc = s.harmonicMix !== false ? keyCompat(aA?.camelot, aB?.camelot) : 0.8;
     // tempo sync: the incoming song matches the outgoing one; for bigger gaps both meet in the middle
-    const maxEach = (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
+    // (Cook It Up blends allow a bigger tempo change: it's a DJ set, the songs are bent to fit)
+    const maxEach = cookBlend ? (IOS ? 0.08 : 0.1) : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
     // iPhone: every speed change of a playing song can click, so only the incoming song changes speed (once, before it's heard)
     if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 1.6 + 0.005) && end > 20) {
       let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
@@ -1274,7 +1275,8 @@ class Engine extends Emitter {
             const eA = loudAt(aA, ms, ms + ovT), eB = loudAt(aB, st.bS, st.bS + ov * bRate);
             const eGap = eA != null && eB != null ? Math.abs(eA - eB) / 20 : 0;
             tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
-              score: clash * 6 + eGap + (st.dropOn ? -2 : 0) + k * 0.7 + (beats - bt) * 0.06 });
+              score: clash * 6 + eGap + (st.dropOn ? -2 : 0) + k * 0.7 + (beats - bt) * 0.06
+                + (cookBlend ? (((cookBlend.jitter * 997 + bt * 13 + k * 7 + (st.dropOn ? 3 : 0)) % 1) * 1.6) : 0) });
           }
         }
       }
@@ -1298,7 +1300,7 @@ class Engine extends Emitter {
         return out;
       }
     }
-    if (cookBlend) { const c = this.cookPlan({ ...cookArgs, exclude: ['blend'] }); if (c && !c.cookBlend) return c; }
+    if (cookBlend && (settings.get('cookLevel') || 'smooth') === 'wild') { const c = this.cookPlan({ ...cookArgs, exclude: ['blend'] }); if (c && !c.cookBlend) return c; }
     // 2) outgoing song fades out by itself → slide the next one underneath
     if (aA && outroLen >= 3) {
       const overlap = clamp(outroLen * 0.85, 3, Math.max(D * 1.5, 5));
@@ -1327,7 +1329,8 @@ class Engine extends Emitter {
   //    before its end; the next song comes in on its drop or on a phrase start
   //  • loops, brakes and spin-backs are played from the decoded audio (sample-accurate, smooth), not by
   //    jerking the player's speed around
-  cookPlan({ A, B, aA, aB, bpmA, dur, end, base, durB, after = 0, exclude = [] }) {
+  cookPlan({ A, B, aA, aB, bpmA, dur, end, base, durB, after = 0, exclude: ex = [] }) {
+    let exclude = ex;
     if (!this.cookSalt) this.cookSalt = Math.random().toString(36).slice(2);
     let seed = 2166136261;
     for (const ch of A.id + '|' + B.id + '|' + this.cookSalt + '|' + (this.cookHist || []).join() + '|' + exclude.join()) { seed ^= ch.charCodeAt(0); seed = Math.imul(seed, 16777619); }
@@ -1338,7 +1341,7 @@ class Engine extends Emitter {
     let bpmB = aB?.bpm || 0;
     if (bpmA && bpmB) { if (bpmB / bpmA > 1.4) bpmB /= 2; else if (bpmA / bpmB > 1.4) bpmB *= 2; }
     const ratio = bpmA && bpmB ? bpmA / bpmB : 0;
-    const sync = ratio && Math.abs(ratio - 1) <= (IOS ? 0.06 : 0.08);
+    const sync = ratio && Math.abs(ratio - 1) <= (IOS ? 0.08 : 0.1);
     const NAMES = { blend: 'Bass-swap blend', cut: 'Echo throw & cut', roll: 'Loop roll', brake: 'Vinyl brake', backspin: 'Spin-back', dub: 'Dub echo', riser: 'Riser into the drop', washout: 'Filter washout' };
     // how much it shows off: Smooth (default) is mostly clean blends with the odd echo or cut;
     // Hype adds rolls, brakes and spin-backs; Wild is everything, often
@@ -1348,6 +1351,14 @@ class Engine extends Emitter {
       hype: sync ? { blend: 4, cut: 2, roll: 2, backspin: 1, brake: 1, dub: 2, riser: 1, washout: 1 } : { roll: 1, backspin: 2, brake: 2, dub: 3, riser: 1, washout: 2 },
       wild: sync ? { blend: 3, cut: 2, roll: 3, backspin: 2, brake: 1, dub: 2, riser: 1, washout: 1 } : { roll: 2, backspin: 3, brake: 2, dub: 3, riser: 2, washout: 2 },
     }[level] || {};
+    // Smooth & Hype are a DJ set: every transition is a real beat-matched blend (the songs are picked so
+    // tempos line up, and Cook It Up allows a bigger tempo change), Hype sometimes throws in a cut or a
+    // loop roll. Only Wild uses the stand-alone effects.
+    if (level !== 'wild' && !after) {
+      const trick = level === 'hype' && sync && rnd() < 0.22 ? pickOf(['cut', 'roll']) : null;
+      if (!trick || (this.cookHist || []).includes(trick)) return { cookBlend: true, throwEcho: rnd() < (level === 'smooth' ? 0.3 : 0.5), cookKind: 'blend', jitter: rnd() };
+      exclude = [...exclude, ...Object.keys(W).filter((k) => k !== trick)];
+    }
     const recent = this.cookHist || [];
     let pool = Object.keys(W).filter((k) => !recent.includes(k) && !exclude.includes(k));
     if (after) pool = pool.filter((k) => k !== 'blend'); // after a jump there's no room planning a long blend
@@ -1949,7 +1960,10 @@ class Engine extends Emitter {
     const remaining = dur - t;
     // the next song + its mix are worked out early (10 s into a song), so the mix point is known — and
     // marked on the scrubber — long before it comes, and scrubbing to just before it always works
-    if (!this.upcoming && (remaining < 90 || (this.cookMode && t > 10))) this.prepareNext();
+    if (!this.upcoming && (remaining < 90 || (this.cookMode && settings.get('cookLevel') === 'wild' && t > 10))) this.prepareNext();
+    // Cook It Up loops / brakes need the decoded song: only fetched shortly before they're used
+    const cp = this.plan;
+    if (cp?.needsBuf && !cp._slice && !cp._slicing && t > cp.mixStart - 25) this.cookPrepare(cp, this.cur.track);
     if (this.lateSeek) {
       if (remaining < 1.6 && !this._lateGo) {
         this._lateGo = true;

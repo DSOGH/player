@@ -16,7 +16,7 @@ export const SYNC_TITLE = 'Player sync';
 const MAGIC = 'PLAYERSYNC1:';
 const GIST_FILE = 'player-sync.json';
 // settings that describe this screen or this device rather than you
-const LOCAL_ONLY = new Set(['layoutMode', 'deskWidth', 'deskPlayerW', 'deskSidebar', 'deskFrame', 'dualSwap', 'friendRelay', 'analysisNetwork', 'prefetch']);
+const LOCAL_ONLY = new Set(['engine', 'volume', 'layoutMode', 'deskWidth', 'deskPlayerW', 'deskSidebar', 'deskFrame', 'dualSwap', 'friendRelay', 'analysisNetwork', 'prefetch']);
 
 async function gz(str) {
   const cs = new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'));
