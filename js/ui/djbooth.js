@@ -51,6 +51,8 @@ export function explain(p, A, B) {
     case 'blend': {
       const beats = Math.round(p.overlap / (p.beat || 0.5));
       out.push(`Beat-matched overlay — ${beats} beats (${p.overlap.toFixed(1)}s), starting on a bar line`);
+      if (p.stems === 'avb') out.push('Vocal bridge: this song’s beat slips away and its vocal keeps singing over the next song’s beat, then bows out as the next song takes over');
+      if (p.stems === 'bva') out.push('Beat swap: the next song’s vocal comes in over this song’s beat, then the beats swap with the bass and it’s the next song in full');
       if (p.aRate && Math.abs(p.aRate - 1) > 0.002) out.push(`Tempos meet in the middle: ${Math.round(a.bpm)} → ${Math.round(a.bpm * p.aRate)} ← ${Math.round(b.bpm)} BPM (this song ${pct(p.aRate)}, next ${pct(p.rate)}), pitch stays the same`);
       else if (Math.abs((p.rate || 1) - 1) > 0.002) out.push(`Next song plays at ${pct(p.rate)} to lock to ${Math.round(a.bpm)} BPM, then glides back to normal`);
       else out.push(`Both songs already at ${Math.round(a.bpm)} BPM`);

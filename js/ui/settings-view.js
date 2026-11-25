@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.25.0';
+export const APP_VERSION = '1.26.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -276,7 +276,7 @@ function playback() {
     `)}
     ${tm === 'smart' ? group('DJ Cook It Up', html`
       ${button('cook-it-up', 'sparkle', 'Start DJ Cook It Up', { sub: 'Your whole library as a DJ set — songs picked to fit each other, mixed on the beat' })}
-      ${seg('cookLevel', 'Energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'A real DJ set: each next song is picked to fit (tempo, key, genre, energy, a different artist) and every transition is a beat-matched blend with a bass swap.', hype: 'The same set, plus the odd echo throw as songs leave.', wild: 'Party tricks: loop rolls, brakes, spin-backs, risers, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
+      ${seg('cookLevel', 'Energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'A real DJ set: each next song is picked to fit (tempo, key, genre, energy) and mixed slowly on the beat — long EQ blends, vocal bridges (one song singing over the other’s beat) and beat swaps. No cuts, no slides.', hype: 'The same set, plus the odd echo throw as songs leave.', wild: 'Party tricks: loop rolls, brakes, spin-backs, risers, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
     `) : ''}
     ${group('Playing', html`
       ${toggle('skipFade', 'Fade when skipping', 'Off = the next song starts instantly when you press ⏭ / ⏮')}

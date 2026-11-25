@@ -1095,7 +1095,13 @@ class Engine extends Emitter {
     if (!this.upcoming || this.transition || this.cooking) return;
     const A = this.cur.track, B = this.upcoming.track;
     if (!A || !B) return;
-    const p = this.makePlan(A, B, this.durationOf(this.cur));
+    let p = this.makePlan(A, B, this.durationOf(this.cur));
+    // Cook It Up never slides one song under another or drops it in: when the songs can't be beat-matched
+    // it does a long, slow filter blend instead
+    if (this.cookMode && p && p.fx && (p.style === 'under' || p.style === 'echo') && !p.cue) {
+      const ov = Math.max(p.overlap || 0, 12), ms = Math.max(1, (p.mixStart || 0) + (p.overlap || 0) - ov);
+      p = { ...p, style: 'filter', type: 'smart', label: 'Cook It Up · Slow filter blend', mixStart: ms, overlap: ov, inDur: ov * 0.6, outDur: ov * 0.7, outDelay: ov * 0.3 };
+    }
     const old = this.plan;
     this.plan = p;
     // re-seek the preloaded deck if the start point moved
@@ -1256,7 +1262,8 @@ class Engine extends Emitter {
       if (!IOS && s.tempoMatch && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
-      let beats = clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
+      // (Cook It Up: long, slow blends — a set should feel like one continuous song)
+      let beats = cookBlend ? (kc < 0.5 ? 24 : 32) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
       while (beats > 8 && beats * beat > Math.min(dur * 0.4, durB * 0.45, 28)) beats -= 8;
       const overlapTrack = beats * beat;
       const overlap = overlapTrack / aRate; // real seconds
@@ -1314,7 +1321,24 @@ class Engine extends Emitter {
           mixStart: ms, overlap: overlapR, inDur: overlapR * 0.5, outDur: overlapR * 0.62, outDelay: overlapR * 0.38,
           bStart: pick.bS, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate, vocalClash: pick.clash, stripA, dropAt: pick.dropOn ? drop : null,
         };
-        if (cookBlend) Object.assign(out, { cookKind: 'blend', throwEcho: cookBlend.throwEcho, label: `Cook It Up · Bass-swap blend${cookBlend.throwEcho ? ' + echo throw' : ''} · ${out.label.replace(/^Beat match · /, '')}` });
+        if (cookBlend) {
+          Object.assign(out, { cookKind: 'blend', throwEcho: cookBlend.throwEcho, label: `Cook It Up · Slow EQ blend${cookBlend.throwEcho ? ' + echo throw' : ''} · ${out.label.replace(/^Beat match · /, '')}` });
+          // Stem swaps — what DJs do with acapellas/stems: one song's vocal rides on the other song's beat
+          // for a while, so the change is carried by the music instead of a fade.
+          if (fx && this.voxReady && vA && vB) {
+            const ovT = bt * beat, ovB = overlapR * bRate, bS0 = pick.bS;
+            const sing = (sp, t0, t1) => { let x = 0; for (const [a, b] of sp) x += Math.max(0, Math.min(b, t1) - Math.max(a, t0)); return x; };
+            const aSings = sing(vA, ms + ovT * 0.3, ms + ovT * 0.85), bIntroQuiet = sing(vB, bS0, bS0 + ovB) < 0.3;
+            const aQuiet = sing(vA, ms + ovT * 0.2, ms + ovT) < 0.5, bSingsEarly = sing(vB, bS0 + ovB * 0.1, bS0 + ovB * 0.55) >= 1.5;
+            if (aSings >= 2 && bIntroQuiet) {
+              // the outgoing song's vocal over the incoming song's beat
+              Object.assign(out, { stems: 'avb', stripA: false, label: `Cook It Up · Vocal bridge: ${A.title} sings over ${B.title}’s beat · ${tempoTxt} · ${bt} beats` });
+            } else if (aQuiet && bSingsEarly) {
+              // the incoming song's vocal arrives over the outgoing song's beat, then the beats swap
+              Object.assign(out, { stems: 'bva', stripA: false, inDur: 0.05, outDelay: overlapR * 0.5, outDur: overlapR * 0.22, label: `Cook It Up · Beat swap: ${B.title}’s vocal over ${A.title}’s beat · ${tempoTxt} · ${bt} beats` });
+            }
+          }
+        }
         return out;
       }
     }
@@ -1748,6 +1772,30 @@ class Engine extends Emitter {
             A.dry.gain.setTargetAtTime(0, tt + b * 0.5, 0.006);
             if (A.instV) A.instV.gain.setTargetAtTime(0, tt + b * 0.5, 0.006);
           }
+          // stem swaps (Cook It Up): the change happens in the music — one song's vocal over the other's beat
+          if (p.stems === 'avb' && A.vox && A.instV && A.dry) {
+            // A goes to stems without a sound changing, its beat leaves as B's bass takes over, its vocal
+            // keeps singing on B's beat, then bows out
+            const b = p.beat || 0.5, ts = t0 + D * 0.22;
+            this.voxActive(A, true);
+            this.hold(A.dry.gain, t0); A.dry.gain.setValueAtTime(1, ts); A.dry.gain.linearRampToValueAtTime(0, ts + b * 2);
+            this.hold(A.instV.gain, t0); A.instV.gain.setValueAtTime(0, ts); A.instV.gain.linearRampToValueAtTime(1, ts + b * 2);
+            A.instV.gain.setValueAtTime(1, t0 + D * 0.32); A.instV.gain.linearRampToValueAtTime(0, t0 + D * 0.52);
+            this.hold(A.voxGain.gain, t0); A.voxGain.gain.setValueAtTime(0, ts); A.voxGain.gain.linearRampToValueAtTime(1, ts + b * 2);
+            A.voxGain.gain.setValueAtTime(1, t0 + D * 0.84); A.voxGain.gain.linearRampToValueAtTime(0, t0 + D * 0.99);
+            // B's mids stay tucked while the borrowed vocal sits on top
+            if (B.mid) { B.mid.gain.cancelScheduledValues(t0); B.mid.gain.setValueAtTime(-6, t0); B.mid.gain.setValueAtTime(-6, t0 + D * 0.8); B.mid.gain.linearRampToValueAtTime(0, t0 + D); }
+          }
+          if (p.stems === 'bva' && B.vox && B.instV && B.dry) {
+            // B starts as its vocal only (over A's beat), its beat swaps in with the bass, then it's whole
+            const b = p.beat || 0.5, sw = t0 + D * 0.5;
+            this.voxActive(B, true);
+            this.hold(B.dry.gain, t0); B.dry.gain.setValueAtTime(0, t0); B.dry.gain.setValueAtTime(0, t0 + D * 0.82); B.dry.gain.linearRampToValueAtTime(1, t0 + D * 0.82 + b * 2);
+            this.hold(B.instV.gain, t0); B.instV.gain.setValueAtTime(0, t0); B.instV.gain.setValueAtTime(0, sw); B.instV.gain.linearRampToValueAtTime(1, sw + b);
+            B.instV.gain.setValueAtTime(1, t0 + D * 0.82); B.instV.gain.linearRampToValueAtTime(0, t0 + D * 0.82 + b * 2);
+            this.hold(B.voxGain.gain, t0); B.voxGain.gain.setValueAtTime(0, t0); B.voxGain.gain.linearRampToValueAtTime(0.95, t0 + b * 4);
+            B.voxGain.gain.setValueAtTime(0.95, t0 + D * 0.82); B.voxGain.gain.linearRampToValueAtTime(0, t0 + D * 0.82 + b * 2);
+          }
           // vocals would clash: the outgoing song drops its vocals (keeps its music and beat) as the next one comes in
           if (p.stripA && A.vox && A.instV && A.dry) {
             this.voxActive(A, true);
@@ -1921,8 +1969,14 @@ class Engine extends Emitter {
     if (!this.transition) return;
     clearTimeout(this.transitionTimer);
     const { from, to } = this.transition;
+    const st = this.transition.plan?.stems;
     this.transition = null;
     this.emit('transition', false);
+    if (st && this.cur?.dry && this.ctx) {
+      const d = this.cur, now = this.ctx.currentTime;
+      for (const [g, v] of [[d.dry.gain, 1], [d.instV?.gain, 0], [d.voxGain?.gain, 0]]) if (g) { g.cancelScheduledValues(now); g.setValueAtTime(v, now); }
+      this.voxActive(d, false);
+    }
     if (from !== this.cur) {
       clearInterval(from.rateTimer);
       try { from.el.preservesPitch = true; from.el.webkitPreservesPitch = true; from.lp?.Q.setValueAtTime(0.7, this.ctx?.currentTime || 0); } catch (e) { /* */ }
