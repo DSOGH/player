@@ -500,6 +500,9 @@ class Engine extends Emitter {
       // iOS/CarPlay take "Now Playing" from whichever element just started: re-send the song info
       this.updateMediaSession();
     });
+    el.addEventListener('playing', () => {
+      if (el === d.el && d === this.cur && this.playing) { try { navigator.mediaSession.playbackState = 'playing'; } catch (e) { /* */ } this.updatePosition(); }
+    });
     el.addEventListener('seeked', () => {
       if (el !== d.el) return;
       if (this._seekDeck === d) this._seekTo = null;
@@ -662,10 +665,11 @@ class Engine extends Emitter {
         if (el.getAttribute('src') && el.getAttribute('src') !== SILENT) continue;
         try {
           el.src = SILENT;
+          el.muted = true; // a muted element can't take over the lock screen / CarPlay
           const p = el.play();
-          if (p) waits.push(p.then(() => { if (el.getAttribute('src') === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } })
-            .catch((e) => { if (e.name === 'NotAllowedError') el._unlocked = false; }));
-        } catch (e) { el._unlocked = false; }
+          if (p) waits.push(p.then(() => { if (el.getAttribute('src') === SILENT) { el.pause(); el.removeAttribute('src'); el.load(); } el.muted = false; })
+            .catch((e) => { el.muted = false; if (e.name === 'NotAllowedError') el._unlocked = false; }));
+        } catch (e) { el.muted = false; el._unlocked = false; }
       }
     }
     // iOS hands "Now Playing" (lock screen / Dynamic Island) to whichever element started last — if a
@@ -747,11 +751,27 @@ class Engine extends Emitter {
     this._lateGo = false;
     if (p && !this.lateSeek) p.aRamped = false;
     if (Math.abs(d.el.playbackRate - 1) > 0.001 && !this.transition) { clearInterval(d.rateTimer); d.el.playbackRate = 1; }
-    try {
-      d.el.currentTime = to;
-    } catch (e) { /* not seekable yet: retry once it is */
-      d.el.addEventListener('loadedmetadata', () => { try { d.el.currentTime = to; } catch (er) { /* */ } }, { once: true });
-    }
+    const jump = () => {
+      try {
+        d.el.currentTime = to;
+      } catch (e) { /* not seekable yet: retry once it is */
+        d.el.addEventListener('loadedmetadata', () => { try { d.el.currentTime = to; } catch (er) { /* */ } }, { once: true });
+      }
+    };
+    if (d.fx && this.ctx && this.playing && !d.el.paused && !this.transition) {
+      // fade out in 30 ms, jump, fade back in once the new spot is actually playing
+      const tok = d.token, my = (this._seekN = (this._seekN || 0) + 1);
+      this.fade(d, 0, 0.03, { shape: 'linear' });
+      clearTimeout(this._seekFadeT);
+      const back = () => { if (d.token === tok && my === this._seekN && d === this.cur) this.fade(d, 1, 0.12, { shape: 'equalpower' }); };
+      setTimeout(() => {
+        if (d.token !== tok || my !== this._seekN) return;
+        jump();
+        if (!d.el.seeking) setTimeout(back, 40);
+        else d.el.addEventListener('seeked', () => setTimeout(back, 40), { once: true });
+        this._seekFadeT = setTimeout(back, 1500); // never stay silent
+      }, 34);
+    } else jump();
     clearTimeout(this.planTimer); this.planTimer = null;
     if (this.playing && d.el.paused) d.el.play().catch(() => {});
     this.emit('time');
@@ -1147,8 +1167,10 @@ class Engine extends Emitter {
     if (!B.fx) { p.noPreroll = true; return; } // can't silence a direct (non-Web-Audio) element on iPhone
     if (startAt < 0.2) {
       // the mix starts at the very top of the next song: warm it up silently (decoder + buffer), then park it
-      // exactly on its start so it begins instantly at the mix point
+      // exactly on its start so it begins instantly at the mix point. Not on iPhone: a play→pause there hands
+      // the lock screen / CarPlay to the paused song ("Paused" while music plays).
       p.noPreroll = true;
+      if (IOS) return;
       const tokB = B.token;
       this.resetFx(B);
       this.setFade(B, 0);
@@ -1241,6 +1263,10 @@ class Engine extends Emitter {
           this.hold(B.bass.gain, t0); B.bass.gain.setValueAtTime(BASS_CUT, swap); B.bass.gain.linearRampToValueAtTime(0, swap + swapLen);
           this.hold(A.bass.gain, t0); A.bass.gain.setValueAtTime(0, swap); A.bass.gain.linearRampToValueAtTime(BASS_CUT, swap + swapLen);
           this.hold(A.hp.frequency, t0); A.hp.frequency.setValueAtTime(HP_OFF, t0 + D * 0.55); A.hp.frequency.exponentialRampToValueAtTime(380, t0 + D);
+          // incoming highs open up over the first ~40% (hats and vocals don't pile on top of the outgoing song)
+          this.hold(B.lp.frequency, t0); B.lp.frequency.setValueAtTime(2600, t0); B.lp.frequency.exponentialRampToValueAtTime(LP_OFF, t0 + D * 0.42);
+          // outgoing highs soften as it leaves
+          this.hold(A.lp.frequency, t0); A.lp.frequency.setValueAtTime(LP_OFF, t0 + D * 0.5); A.lp.frequency.exponentialRampToValueAtTime(5200, t0 + D);
         }
         break;
       }
