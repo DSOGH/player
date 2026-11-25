@@ -544,6 +544,13 @@ async function doAction(a, el, e) {
       if (settings.get('engine') !== 'enhanced' && /iPhone|iPad/.test(navigator.userAgent)) toast('Tip: turn on Enhanced audio for the full effects on iPhone', { ms: 5000 });
       break;
     }
+    case 'cloud-remove': {
+      const name = el.dataset.name || 'this account';
+      if (!(await confirmSheet(`Remove “${name}” from the cloud? It stays on any device that has it (and is saved again from there).`, 'Remove', true))) break;
+      try { await cloud.removeProfile(el.dataset.cid); toast(`Removed ${name} from the cloud`); } catch (e) { toast('Couldn’t remove it: ' + (e.message || 'error')); }
+      render({ keepScroll: true });
+      break;
+    }
     case 'cloud-save': {
       toast('Syncing…'); cloud.firstOk = true;
       const r = await cloud.syncNow();
@@ -1262,6 +1269,23 @@ async function boot() {
   plex.on('connection', () => setTimeout(checkCloud, 1500));
   plex.on('done', () => cloud.schedule(5000));
   if (plex.connected || cloud.ghToken) setTimeout(checkCloud, 5000);
+  // an account just added from the cloud (login screen): bring everything it saved into it
+  if (sessionStorage.getItem('afterSwitch') === 'restore') {
+    sessionStorage.removeItem('afterSwitch');
+    (async () => {
+      for (let i = 0; i < 20 && !plex.connected && !cloud.ghToken; i++) await new Promise((r) => setTimeout(r, 500));
+      const r = await cloud.fetchRemote().catch(() => null);
+      const d = r?.c?.profiles?.[accounts.active?.cid];
+      cloudAsked = true; cloud.firstOk = true;
+      if (d) { await cloud.apply(d, { full: true }); applyTheme(); paintAccountChip(); toast(`Welcome back${d.profile?.name ? ', ' + d.profile.name : ''} — everything’s restored`); rerender(); }
+      if (plex.connected && !library.size) plex.sync();
+    })();
+  }
+  // keep this device in step while it's open (friends, playlists, likes from your other devices)
+  let lastSync = Date.now();
+  const tickSync = () => { if (!document.hidden && Date.now() - lastSync > 45000 && cloud.state.at) { lastSync = Date.now(); checkCloud(); } };
+  document.addEventListener('visibilitychange', tickSync);
+  setInterval(tickSync, 120000);
   if (sessionStorage.getItem('afterSwitch') === 'connect') {
     sessionStorage.removeItem('afterSwitch');
     if (!plex.signedIn && !library.size) setTimeout(() => connectSheet({ plexSignIn }), 500);

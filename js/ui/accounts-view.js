@@ -1,7 +1,7 @@
 // "Who's listening?" — the account picker / login screen (launch, Settings, sidebar), PIN pad,
 // add / edit accounts, and the first-run "connect your music" step for a brand-new account.
 import { html, icon, $, $$ } from '../util.js';
-import { accounts, COLORS } from '../accounts.js';
+import { accounts, COLORS, dbNameOf } from '../accounts.js';
 import { openedName } from '../db.js';
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
@@ -32,6 +32,7 @@ function pickerHTML() {
       ${list.map((a, i) => html`<button class="acct${a.id === cur && mode !== 'boot' ? ' current' : ''}" data-l="${manage ? 'edit' : 'pick'}" data-id="${a.id}" style="--i:${i}">
         ${avatar(a)}${manage ? html`<span class="acct-badge">${icon('edit')}</span>` : ''}
         <b>${accounts.label(a)}</b><small>${a.id === cur && mode !== 'boot' ? 'Using now' : sub(a)}</small></button>`)}
+      ${manage ? '' : accounts.cloudOnly().map((c, i) => html`<button class="acct cloud" data-l="cloud" data-cid="${c.cid}" style="--i:${list.length + i}">${avatar({ name: c.name, color: c.color, pin: c.pin })}<span class="acct-cloud-badge">${icon('download')}</span><b>${c.name || 'Account'}</b><small>Saved in your ${accounts.roster()?.where === 'GitHub' ? 'GitHub' : 'Plex'}</small></button>`)}
       ${manage ? '' : html`<button class="acct add" data-l="add" style="--i:${list.length}"><span class="acct-av plus">${icon('plus')}</span><b>Add account</b><small>Plex or NAS</small></button>`}
     </div>
     <div class="login-foot">
@@ -181,6 +182,65 @@ function enter(id, then = '') {
   accounts.switchTo(id, { then });
 }
 
+// an account saved in the cloud but not on this device: make it here, signed in to the same Plex as the
+// account that saw it, and restore everything into it on start
+async function onCloud(cid) {
+  const r = accounts.roster(), c = r?.list.find((x) => x.cid === cid);
+  if (!c) return;
+  if (c.pin) {
+    const tmp = { id: '_cloud', name: c.name, color: c.color, pin: c.pin };
+    const ok = await pinFlowHash(tmp);
+    if (!ok) { stage(pickerHTML(), 'back'); return; }
+  }
+  const id = accounts.add({ name: c.name, color: c.color });
+  accounts.update(id, { cid: c.cid, pin: c.pin || '' });
+  accounts.markUnlocked(id);
+  const src = accounts.get(r.from) ? r.from : accounts.activeId;
+  await copyKv(dbNameOf(src), dbNameOf(id), ['plex', 'cloud:gh']);
+  enter(id, 'restore');
+}
+async function pinFlowHash(a) {
+  // the PIN was set on another device: check it against the saved hash
+  const saved = a.pin;
+  return new Promise((res) => {
+    const el = stage(pinHTML(a));
+    let val = '';
+    const dots = $$('.pin-dots i', el), msg = $('[data-msg]', el);
+    const paint = () => dots.forEach((d, i) => d.classList.toggle('on', i < val.length));
+    const sha = async (s) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((x) => x.toString(16).padStart(2, '0')).join('');
+    const press = async (k) => {
+      if (k === 'del') { val = val.slice(0, -1); paint(); return; }
+      if (val.length >= 4 || !/^\d$/.test(k)) return;
+      val += k; paint();
+      if (val.length < 4) return;
+      if (await sha('player-pin:' + val) === saved) { el.classList.add('ok'); off(); setTimeout(() => res(true), 180); }
+      else { val = ''; el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); msg.textContent = 'Wrong PIN — try again'; setTimeout(paint, 300); }
+    };
+    const onKey = (e) => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') press('del'); else if (e.key === 'Escape') { off(); res(false); } };
+    const off = () => removeEventListener('keydown', onKey, true);
+    addEventListener('keydown', onKey, true);
+    el.addEventListener('click', (e) => { const k = e.target.closest('[data-k]')?.dataset.k; if (k != null) press(k); if (e.target.closest('[data-l="back"]')) { off(); res(false); } });
+  });
+}
+// copy a few saved values (the Plex sign-in) from one account's database to another's
+function openDb(name) {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(name, 1);
+    r.onupgradeneeded = () => { const d = r.result; for (const st of ['tracks', 'art', 'analysis', 'playlists']) if (!d.objectStoreNames.contains(st)) d.createObjectStore(st, { keyPath: 'id' }); if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function copyKv(from, to, keys) {
+  try {
+    const a = await openDb(from), b = await openDb(to);
+    for (const k of keys) {
+      const v = await new Promise((res) => { const q = a.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); });
+      if (v !== undefined) await new Promise((res) => { const tx = b.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = res; });
+    }
+    a.close(); b.close();
+  } catch (e) { /* the new account just signs in itself */ }
+}
+
 async function onEdit(id) {
   const a = id ? accounts.get(id) : null;
   const r = await formFlow(a);
@@ -229,6 +289,7 @@ export function showLogin({ boot = false } = {}) {
     if (l === 'pick') onPick(b.dataset.id);
     else if (l === 'edit') onEdit(b.dataset.id);
     else if (l === 'add') onEdit(null);
+    else if (l === 'cloud') onCloud(b.dataset.cid);
     else if (l === 'manage') { manage = !manage; stage(pickerHTML(), manage ? 'fwd' : 'back'); }
     else if (l === 'close') close();
   });

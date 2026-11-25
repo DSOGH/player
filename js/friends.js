@@ -31,6 +31,9 @@ class Friends extends Emitter {
     this.es = null;
   }
   get ready() { return !!this.me; }
+  // every inbox this account listens on: its id, plus ids it had on other devices before they were joined
+  ids() { return this.me ? [this.me.id, ...(this.me.alts || [])] : []; }
+  inbox() { return this.ids().flatMap((id) => [topic(id), npTopic(id)]).join(','); }
 
   async load() {
     this.me = await db.kv.get('friends:me');
@@ -71,7 +74,7 @@ class Friends extends Emitter {
     const raw = crypto.getRandomValues(new Uint8Array(32));
     const kid = await keyId(raw);
     const key = b64u(raw);
-    this.pending.push({ key, kid, at: Date.now() });
+    this.pending.push({ key, kid, at: Date.now(), via: this.me.id });
     this.pending = this.pending.slice(-12);
     this.keys.set(kid, await importKey(raw));
     await this.save();
@@ -86,18 +89,18 @@ class Friends extends Emitter {
   async acceptInvite(code) {
     const c = this.parseCode(code);
     if (!c) throw new Error('That isn’t a valid friend code');
-    if (c.id === this.me.id) throw new Error('That’s your own code');
+    if (this.ids().includes(c.id)) throw new Error('That’s your own code');
     let f = this.friend(c.id);
     const raw = unb64u(c.key);
     const kid = await keyId(raw);
     if (!f) {
-      f = { id: c.id, name: c.name, key: c.key, kid, color: colorFor(c.id), added: Date.now(), unread: 0 };
+      f = { id: c.id, name: c.name, key: c.key, kid, color: colorFor(c.id), added: Date.now(), unread: 0, via: this.me.id };
       this.list.push(f);
     } else Object.assign(f, { key: c.key, kid, name: c.name });
     this.keys.set(kid, await importKey(raw));
     await this.save();
     // tell them who we are (encrypted with the key from their invite)
-    await this.send(f, { type: 'hello', from: this.me.id, name: this.me.name }, { store: false });
+    await this.send(f, { type: 'hello', from: f.via || this.me.id, name: this.me.name }, { store: false });
     return f;
   }
   async remove(id) {
@@ -122,7 +125,8 @@ class Friends extends Emitter {
     return true;
   }
   async send(f, body, { store = true } = {}) {
-    const msg = { mid: rand(9), at: Date.now(), from: this.me.id, ...body };
+    // always as the "you" this friend knows (an account joined from two devices can have had two ids)
+    const msg = { mid: rand(9), at: Date.now(), from: f.via || this.me.id, ...body };
     if (store) { msg.state = 'sending'; await this.store(f.id, msg); this.emit('message', f.id, msg); }
     try {
       const key = this.keys.get(f.kid);
@@ -196,7 +200,7 @@ class Friends extends Emitter {
       // someone accepted one of my invites
       const inv = this.pending.find((p) => p.kid === env.k);
       if (!f && inv) {
-        f = { id: msg.from, name: String(msg.name || 'Friend').slice(0, 40), key: inv.key, kid: inv.kid, color: colorFor(msg.from), added: Date.now(), unread: 0 };
+        f = { id: msg.from, name: String(msg.name || 'Friend').slice(0, 40), key: inv.key, kid: inv.kid, color: colorFor(msg.from), added: Date.now(), unread: 0, via: inv.via || this.me.id };
         this.list.push(f);
         await this.save();
         this.emit('friend', f);
@@ -223,16 +227,30 @@ class Friends extends Emitter {
   async importData(d) {
     if (!d) return false;
     let changed = false;
-    // same identity on every device of this account → every device gets your messages
-    if (d.me && (!this.me || this.me.id !== d.me.id)) {
-      if (!this.me || !this.list.length) { this.me = { ...d.me, last: this.me?.last || d.me.last || '12h' }; changed = true; }
+    const theirId = d.me?.id;
+    // the same account on two devices: join the two "you"s — one id goes first, the other is kept as an
+    // extra inbox, and every friend remembers which of them they know. Nobody loses a friend or a message.
+    if (d.me && !this.me) { this.me = { ...d.me, last: d.me.last || '12h' }; changed = true; }
+    else if (d.me && this.me && !this.ids().includes(theirId)) {
+      const all = [...new Set([...this.ids(), theirId, ...(d.me.alts || [])])];
+      const primary = this.list.length ? this.me.id : theirId; // keep the one that has friends in front
+      for (const f of this.list) f.via ||= this.me.id;
+      this.me = { ...this.me, id: primary, alts: all.filter((x) => x !== primary), name: this.me.name || d.me.name };
+      changed = true;
+    } else if (d.me && this.me) {
+      const all = [...new Set([...this.ids(), ...(d.me.alts || [])])].filter((x) => x !== this.me.id);
+      if (all.length !== (this.me.alts || []).length) { this.me.alts = all; changed = true; }
     }
-    for (const f of d.list || []) {
+    for (const f0 of d.list || []) {
+      const f = { ...f0, via: f0.via || theirId };
       const mine = this.list.find((x) => x.id === f.id);
       if (!mine) { this.list.push(f); changed = true; }
-      else if (!mine.nick && f.nick) { mine.nick = f.nick; changed = true; }
+      else {
+        if (!mine.nick && f.nick) { mine.nick = f.nick; changed = true; }
+        if (!mine.via && f.via) { mine.via = f.via; changed = true; }
+      }
     }
-    for (const p of d.pending || []) if (!this.pending.some((x) => x.kid === p.kid) && !this.list.some((x) => x.kid === p.kid)) { this.pending.push(p); changed = true; }
+    for (const p of d.pending || []) if (!this.pending.some((x) => x.kid === p.kid) && !this.list.some((x) => x.kid === p.kid)) { this.pending.push({ ...p, via: p.via || theirId }); changed = true; }
     for (const f of [...this.list, ...this.pending]) if (!this.keys.has(f.kid)) this.keys.set(f.kid, await importKey(unb64u(f.key)));
     for (const [id, msgs] of Object.entries(d.chats || {})) for (const m of msgs) if (await this.store(id, m)) changed = true;
     if (changed) {
@@ -253,7 +271,7 @@ class Friends extends Emitter {
     const since = this.me.last && this.me.last !== 'all' ? this.me.last : '12h';
     this.poll(since);
     try {
-      this.es = new EventSource(`${relay()}/${topic(this.me.id)},${npTopic(this.me.id)}/sse?since=${encodeURIComponent(this.me.last || '12h')}`);
+      this.es = new EventSource(`${relay()}/${this.inbox()}/sse?since=${encodeURIComponent(this.me.last || '12h')}`);
       this.es.onmessage = (e) => { try { this.handle(JSON.parse(e.data)); } catch (er) { /* */ } };
       this.es.onerror = () => { /* EventSource reconnects by itself */ };
     } catch (e) { this.es = null; }
@@ -265,7 +283,7 @@ class Friends extends Emitter {
   }
   async poll(since) {
     try {
-      const r = await fetch(`${relay()}/${topic(this.me.id)},${npTopic(this.me.id)}/json?poll=1&since=${encodeURIComponent(since || '12h')}`);
+      const r = await fetch(`${relay()}/${this.inbox()}/json?poll=1&since=${encodeURIComponent(since || '12h')}`);
       if (!r.ok) return;
       for (const line of (await r.text()).split('\n')) { if (line.trim()) { try { await this.handle(JSON.parse(line)); } catch (e) { /* */ } } }
     } catch (e) { /* offline */ }
@@ -301,7 +319,7 @@ class Friends extends Emitter {
     try {
       r = await fetch(`${relay()}/v1/webpush`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: j.endpoint, auth: j.keys.auth, p256dh: j.keys.p256dh, topics: [topic(this.me.id)] }),
+        body: JSON.stringify({ endpoint: j.endpoint, auth: j.keys.auth, p256dh: j.keys.p256dh, topics: this.ids().map((id) => topic(id)) }),
       });
     } catch (e) { throw new Error('couldn’t reach the relay to register'); }
     if (!r.ok) { let m = ''; try { m = (await r.json()).error || ''; } catch (e) { /* */ } throw new Error(`relay said ${r.status}${m ? ' – ' + m : ''}`); }

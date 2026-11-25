@@ -99,7 +99,7 @@ export async function chatView(id) {
       const d = new Date(m.at);
       out.push(html`<div class="ch-day">${day === new Date().toDateString() ? 'Today' : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>`);
     }
-    const mine = m.from === friends.me.id;
+    const mine = friends.ids().includes(m.from);
     const next = h[i + 1];
     const tail = !next || next.from !== m.from || next.at - m.at > 5 * 60000;
     out.push(html`<div class="ch-msg ${mine ? 'me' : 'them'}${tail ? ' tail' : ''}${m.state === 'failed' ? ' failed' : ''}" data-mid="${m.mid}">

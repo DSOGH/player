@@ -8,6 +8,7 @@ export const DEFAULTS = {
   djEffects: true,            // bass swaps, filter sweeps, echo outs in DJ Mix
   djStyle: 'beats',           // 'beats' | 'auto' | 'wordplay' | 'cook'
   djPrevStyle: 'beats',
+  cookLevel: 'smooth',        // DJ Cook It Up: 'smooth' | 'hype' | 'wild'
   harmonicMix: true,          // use musical key (Camelot) to choose blend length
   onlineLyrics: true,         // look up lyrics by title + artist (LRCLIB)
   fadeCurve: 'equalpower',    // 'equalpower' | 'linear' | 'scurve'

@@ -62,7 +62,7 @@ class Cloud extends Emitter {
     const bpm = {};
     for (const an of library.analysis.values()) if (an.tapped && an.bpm) bpm[an.id] = [an.bpm, an.beatOffset || 0];
     const out = {
-      v: 1, cid: this.cid(), at: Date.now(), device: deviceName(),
+      v: 1, cid: this.cid(), at: Date.now(), device: deviceName(), did: deviceId(),
       profile: { name: a?.name || '', color: a?.color ?? 1, pin: a?.pin || '' },
       settings: s,
       playlists: [...library.playlists.values()].filter((p) => !p.source),
@@ -161,7 +161,8 @@ class Cloud extends Emitter {
   // touches the others: they all live side by side in the same place, each under its own id.
   cid() {
     const a = accounts.active;
-    if (a?.cid) return a.cid;
+    // two accounts on this device must never share an id (they'd overwrite each other)
+    if (a?.cid && !accounts.all.some((x) => x.id !== a.id && x.cid === a.cid)) return a.cid;
     const id = 'p' + Math.random().toString(36).slice(2, 10);
     accounts.update(accounts.activeId, { cid: id });
     return id;
@@ -181,7 +182,28 @@ class Cloud extends Emitter {
     if (!got.length) return null;
     const profiles = {};
     for (const { d } of got) for (const [k, v] of Object.entries(d.profiles || {})) if (!profiles[k] || (v.at || 0) > (profiles[k].at || 0)) profiles[k] = v;
-    return { c: { v: 2, at: Math.max(...got.map((g) => g.d.at || 0)), profiles }, where: got.map((g) => g.where).join(' + ') };
+    const r = { c: { v: 2, at: Math.max(...got.map((g) => g.d.at || 0)), profiles }, where: got.map((g) => g.where).join(' + ') };
+    this.saveRoster(r);
+    return r;
+  }
+  // a small list of the accounts saved in the cloud, readable before anything starts — the login screen
+  // shows the ones that aren't on this device yet, so anyone can pick theirs
+  saveRoster(r) {
+    try {
+      const list = Object.values(r?.c?.profiles || {}).map((d) => ({ cid: d.cid, name: d.profile?.name || '', color: d.profile?.color ?? 1, pin: d.profile?.pin || '', at: d.at || 0, device: d.device || '' }));
+      localStorage.setItem('playerCloudRoster', JSON.stringify({ at: Date.now(), from: accounts.activeId, where: r.where, list }));
+    } catch (e) { /* */ }
+  }
+  // take an account out of the cloud (it's not touched on any device that has it)
+  async removeProfile(cid) {
+    const remote = await this.fetchRemote();
+    if (!remote?.c?.profiles?.[cid]) return false;
+    delete remote.c.profiles[cid];
+    remote.c.at = Date.now();
+    if (plex.connected && library.plexAnyKey()) await this.plexWrite(remote.c);
+    if (this.ghToken) await this.ghWrite(remote.c);
+    this.saveRoster(remote);
+    return true;
   }
   // the cloud's accounts as a list, newest first (for the restore screen)
   listProfiles(r) { return Object.values(r?.c?.profiles || {}).sort((a, b) => (b.at || 0) - (a.at || 0)); }
@@ -203,7 +225,9 @@ class Cloud extends Emitter {
       let remote = null;
       try { remote = await this.fetchRemote(); } catch (e) { /* */ }
       // saved before accounts had ids → this device's account is the old single entry
-      if (!accounts.active?.cid && this.state.at && remote?.c?.profiles?.legacy) accounts.update(accounts.activeId, { cid: 'legacy' });
+      const leg = remote?.c?.profiles?.legacy;
+      if (!accounts.active?.cid && this.state.at && leg && !accounts.all.some((a) => a.cid === 'legacy')
+        && (leg.profile?.name || '') === (accounts.active?.name || '')) accounts.update(accounts.activeId, { cid: 'legacy' });
       const cid = this.cid();
       const mineBefore = remote?.c?.profiles?.[cid];
       this.remoteStats = { ...(mineBefore?.statsBy || {}), ...(this.remoteStats || {}) };
@@ -212,7 +236,8 @@ class Cloud extends Emitter {
       const where = [];
       if (plex.connected && library.plexAnyKey()) { await this.plexWrite(box); where.push('Plex'); }
       if (this.ghToken) { await this.ghWrite(box); where.push('GitHub'); }
-      this.state = { at: data.at, where: where.join(' + '), error: '' };
+      this.saveRoster({ c: box, where: where.join(' + ') });
+      this.state = { ...this.state, at: data.at, where: where.join(' + '), error: '' };
       await db.kv.set('cloud', this.state);
       this.emit('saved', this.state);
       return true;
@@ -263,7 +288,8 @@ class Cloud extends Emitter {
         if (add.length) { library.playLog[m] = [...(library.playLog[m] || []), ...add].sort((a, b) => a[1] - b[1]); await db.kv.set('plays:' + m, library.playLog[m]); }
       }
     }
-    if (d.friends && (want('friends') && full || friends.me?.id === d.friends.me?.id)) await friends.importData(d.friends).catch(() => {});
+    // friends always follow the account between its devices (merged, never replaced)
+    if (d.friends && (!full || want('friends'))) await friends.importData(d.friends).catch((e) => console.warn('friends import', e));
     library.build();
     library.emit('playlists'); library.emit('likes'); library.emit('change');
     this.state = { ...this.state, pulled: Date.now(), from: d.device };
@@ -274,7 +300,9 @@ class Cloud extends Emitter {
     if (!this.enabled || !this.available) return null;
     const r = await this.fetchRemote();
     const mine = r?.c?.profiles?.[this.cid()];
-    if (mine && (mine.at || 0) > (this.state.at || 0) && mine.device !== deviceName()) await this.apply(mine);
+    // saved by another device (two iPhones are both just "iPhone", so devices are told apart by their id)
+    const other = mine && (mine.did ? mine.did !== deviceId() : mine.device !== deviceName());
+    if (mine && other && (mine.at || 0) > (this.state.pulledAt || 0)) { await this.apply(mine); this.state.pulledAt = mine.at; await db.kv.set('cloud', this.state); }
     await this.push();
     return mine ? r : null;
   }

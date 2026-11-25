@@ -88,8 +88,13 @@ export const accounts = {
   },
 
   hasPin(id) { return !!this.get(id)?.pin; },
-  async setPin(id, pin) { this.update(id, { pin: pin ? await sha(id + ':' + pin) : '' }); if (pin) this.markUnlocked(id); },
-  async checkPin(id, pin) { const a = this.get(id); return !!a?.pin && a.pin === await sha(id + ':' + pin); },
+  // the PIN hash doesn't depend on this device's account id, so a PIN keeps working when the account is
+  // restored on another device (older PINs, tied to the local id, still work too)
+  async setPin(id, pin) { this.update(id, { pin: pin ? await sha('player-pin:' + pin) : '' }); if (pin) this.markUnlocked(id); },
+  async checkPin(id, pin) { const a = this.get(id); return !!a?.pin && (a.pin === await sha('player-pin:' + pin) || a.pin === await sha(id + ':' + pin)); },
+  roster() { try { return JSON.parse(localStorage.getItem('playerCloudRoster')) || null; } catch (e) { return null; } },
+  // accounts saved in the cloud that aren't on this device yet
+  cloudOnly() { const r = this.roster(); const have = new Set(this.all.map((a) => a.cid).filter(Boolean)); return (r?.list || []).filter((x) => x.cid && !have.has(x.cid)); },
   isUnlocked(id) { return !this.hasPin(id) || sessionStorage.getItem('unlocked:' + id) === '1'; },
   markUnlocked(id) { try { sessionStorage.setItem('unlocked:' + id, '1'); } catch (e) { /* */ } },
   lock(id = this.activeId) { try { sessionStorage.removeItem('unlocked:' + id); } catch (e) { /* */ } },
@@ -117,7 +122,7 @@ export const accounts = {
   needsPicker() {
     const s = read();
     if (sessionStorage.getItem('picked')) return !this.isUnlocked(s.active);
-    if (s.list.length > 1 && s.ask !== false) return true;
+    if (s.list.length + this.cloudOnly().length > 1 && s.ask !== false) return true;
     return !this.isUnlocked(s.active);
   },
 };

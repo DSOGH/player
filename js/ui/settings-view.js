@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.21.1';
+export const APP_VERSION = '1.22.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -76,6 +76,15 @@ function cloudGroup() {
     ${toggle('cloudStats', 'Combine stats from all devices', 'Off: Stats count this device (still backed up, and restorable). On: every device’s listening adds up')}
     ${where ? button('cloud-save', 'refresh', 'Sync now', { sub: st.pulled ? `Last brought in changes from ${st.from || 'another device'} ${ago(st.pulled)}` : 'Save this device and pick up changes from the others' }) : ''}
     ${where ? button('cloud-restore', 'download', 'Restore from cloud…', { sub: 'Choose what to bring back: settings, playlists & likes, stats, BPMs' }) : ''}
+    ${(() => {
+      const r = accounts.roster(); const list = r?.list || [];
+      if (!list.length) return '';
+      const mine = accounts.active?.cid, here = new Set(accounts.all.map((a) => a.cid));
+      return html`<div class="set-row col"><div class="set-text"><span>Saved accounts</span><small>${list.length} account${list.length > 1 ? 's' : ''} on ${r.where || 'your Plex'} — each kept separately. Anyone can add theirs from the login screen.</small></div>
+        <div class="cloud-list">${list.sort((a, b) => b.at - a.at).map((c) => html`<div class="cloud-acct"><span class="acct-av sm" style="--c1:${accounts.colors(c)[0]};--c2:${accounts.colors(c)[1]}"><em>${(c.name || '?')[0].toUpperCase()}</em></span>
+          <span class="cloud-acct-t"><b>${c.name || 'Account'}</b><small>${c.cid === mine ? 'This account' : here.has(c.cid) ? 'On this device' : 'Not on this device'} · ${ago(c.at)}${c.device ? ` · ${c.device}` : ''}</small></span>
+          ${c.cid === mine ? '' : html`<button class="dl-x" data-a="cloud-remove" data-cid="${c.cid}" data-name="${c.name}" aria-label="Remove from cloud">${icon('trash')}</button>`}</div>`)}</div></div>`;
+    })()}
     ${button('cloud-github', 'server', cloud.ghToken ? 'GitHub backup: on' : 'Also back up to GitHub', { sub: cloud.ghToken ? 'A private Gist on your GitHub · tap to change or remove' : 'Optional — a private Gist. Works even without Plex (needs a GitHub token)' })}
   `);
 }
@@ -246,7 +255,8 @@ function playback() {
         { smart: 'Mixes like a DJ: beat-matched, tempo-synced blends with a bass swap when tempos line up; filter sweeps when they don’t; echo-outs for hard endings; and the next song slides under natural fade-outs. Albums stay gapless.', crossfade: 'Classic crossfade for a fixed time, like Spotify.', off: 'No overlap — songs play back-to-back.' }[tm])}
       ${slider('crossfadeSec', tm === 'smart' ? 'Mix length' : 'Crossfade length', 1, 16, 0.5, 's')}
       ${tm === 'smart' ? html`
-        ${button('cook-it-up', 'sparkle', 'DJ Cook It Up', { sub: 'Play your whole library at random with crazy transitions' })}
+        ${button('cook-it-up', 'sparkle', 'DJ Cook It Up', { sub: 'Play your whole library at random with DJ tricks' })}
+      ${seg('cookLevel', 'Cook It Up energy', [['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']], { smooth: 'Mostly clean beat-matched blends, with the odd echo throw or cut — near the end of songs.', hype: 'More tricks: loop rolls, brakes, spin-backs, risers — and it leaves songs a bit earlier.', wild: 'Everything, often, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
       ${seg('djStyle', 'DJ style', [['beats', 'Beat match'], ['auto', 'Auto'], ['wordplay', 'Word play'], ['cook', 'Cook It Up']],
           { auto: 'Beat-matched blends, plus word play only when two songs line up really cleanly in their lyrics.', beats: 'Always mix on the beat: tempo-synced, phrase-aligned blends with a bass swap.', cook: 'DJ Cook It Up: goes wild — tape stops, stutter rolls, dub echoes, risers with a boom, speed-up launches, spin-outs — a different one every time, at random points in the songs, landing on the beat. Start it from Home to play your whole library at random.', wordplay: 'Finds the same words in both songs. The beat drops out, the vocal is isolated live, and the next song picks up singing those exact words — one continuous vocal across two songs. Also cuts on a sung title. DJ Order chains songs by shared lyrics.' }[settings.get('djStyle')])}
         ${toggle('harmonicMix', 'Harmonic mixing', 'Detects each song’s musical key — long blends when keys agree, quick ones when they clash')}
@@ -393,7 +403,7 @@ function appearance() {
     `)}
     ${group('Device', html`
       ${seg('dualScreen', 'Dual-screen layout', [['auto', 'Split at hinge'], ['span', 'Span over hinge'], ['off', 'Off']], 'iPhone Duo, Surface Duo and other foldables: library on one side of the fold, player on the other. “Span over hinge” ignores the fold.')}
-      <div class="set-row col"><div class="set-text"><span>Detected</span><small data-dual-info>${dualInfo.mode === 'single' ? 'Single screen right now — span the app across both screens to adjust' : `${dualInfo.device || 'Dual screen'} · split at ${(+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1)}px · hinge ${(+dualInfo.hinge).toFixed(1)}px`}</small></div></div>
+      <div class="set-row col"><div class="set-text"><span>Detected</span><small data-dual-info>${dualInfo.mode === 'single' ? 'Single screen right now — span the app across both screens to adjust' : `${dualInfo.device || 'Dual screen'} · split at ${typeof (dualInfo.leftW || dualInfo.topH) === 'string' ? 'the middle' : (+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1) + 'px'} · hinge ${(+dualInfo.hinge).toFixed(1)}px`}</small></div></div>
       ${toggle('dualSwap', 'Swap sides', 'Put the player on the left (or on top when rotated) and the library on the other side')}
       ${slider('dualShift', 'Nudge split', -40, 40, 0.5, 'px', 'Move the split left/right (up/down when rotated) until it sits exactly on the hinge')}
       ${slider('dualHinge', 'Hinge gap', -1, 60, 0.5, 'px', '−1 = automatic (iPhone Duo has no gap; Surface Duo 34px, Duo 2 26.4px)')}
@@ -528,7 +538,7 @@ export function bindSettings(root, rerender) {
     if (lab) lab.textContent = k === 'dualHinge' && v < 0 ? 'Auto' : fmtNum(v) + (r.dataset.unit || '');
     if (k === 'dualShift' || k === 'dualHinge') setTimeout(() => {
       const el = root.querySelector('[data-dual-info]');
-      if (el && dualInfo.mode !== 'single') el.textContent = `${dualInfo.device || 'Dual screen'} · split at ${(+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1)}px · hinge ${(+dualInfo.hinge).toFixed(1)}px`;
+      if (el && dualInfo.mode !== 'single') el.textContent = `${dualInfo.device || 'Dual screen'} · split at ${typeof (dualInfo.leftW || dualInfo.topH) === 'string' ? 'the middle' : (+dualInfo.leftW || +dualInfo.topH || 0).toFixed(1) + 'px'} · hinge ${(+dualInfo.hinge).toFixed(1)}px`;
     }, 50);
   });
   root.addEventListener('click', (e) => {
@@ -539,7 +549,7 @@ export function bindSettings(root, rerender) {
     const v = typeof DEFAULTS[k] === 'number' ? +raw : raw;
     settings.set(k, v);
     $$('button', b.parentNode).forEach((x) => x.classList.toggle('on', x === b));
-    if (k === 'transition' || k === 'djStyle') rerender.page();
+    if (k === 'transition' || k === 'djStyle' || k === 'cookLevel') rerender.page();
   });
 }
 
