@@ -704,7 +704,7 @@ function startPulse() {
   let avg = 0, level = 0, buf = null, lastT = 0, lastLevel = -1;
   const loop = (now) => {
     requestAnimationFrame(loop);
-    if (now - lastT < 33) return;
+    if (now - lastT < (settings.get('reactiveArt') && mode === 'art' && open ? 15 : 33)) return; // smooth beat pulse while the cover is showing
     lastT = now;
     const visible = (open || document.body.classList.contains('dual')) && !document.hidden;
     // smooth, exact clock & slider while the player is on screen (not just 5× a second)
@@ -728,8 +728,24 @@ function startPulse() {
       for (let i = lo; i <= hi; i++) s += buf[i];
       const bass = s / (hi - lo + 1) / 255;
       avg = avg * 0.92 + bass * 0.08;
-      const hit = Math.max(0, bass - avg * 1.08) * 4.5;
-      level = Math.max(level * 0.8, Math.min(1, hit));
+      const t = engine.track, a = t && library.analysis.get(t.id);
+      const bpm = t && library.bpmOf(t);
+      if (bpm && a) {
+        // locked to the song's beat grid: a sharp hit exactly on every beat (bigger on the downbeat),
+        // timed to when you *hear* it (the clock runs a little ahead of the speakers)
+        const ctx = engine.ctx;
+        const lat = (ctx.outputLatency || 0) + (ctx.baseLatency || 0) + 2048 / ctx.sampleRate;
+        const th = engine.currentTime - lat * (engine.cur.el.playbackRate || 1);
+        const beats = (th - (a.beatOffset || 0)) * (bpm / 60);
+        const ph = beats - Math.floor(beats);
+        const down = ((Math.floor(beats) % 4) + 4) % 4 === 0;
+        const amp = (0.35 + 0.65 * Math.min(1, avg * 3.2)) * (down ? 1 : 0.62);
+        level = beats < 0 ? level * 0.8 : Math.exp(-ph * 7) * amp;
+      } else {
+        // no tempo yet: follow the kick drum
+        const hit = Math.max(0, bass - avg * 1.08) * 4.5;
+        level = Math.max(level * 0.8, Math.min(1, hit));
+      }
       apply(art, glow);
     }
     if (vizOn) drawViz(buf);

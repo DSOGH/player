@@ -68,7 +68,7 @@ export function bpmChip(t) {
   const bpm = library.bpmOf(t);
   if (!bpm) return '';
   const k = library.analysis.get(t.id)?.camelot;
-  return html`<span class="bpmchip">${Math.round(bpm)}${k ? html`<i>${k}</i>` : ''}</span>`;
+  return html`<span class="bpmchip">${Math.round(bpm)} BPM${k ? html`<i>${k}</i>` : ''}</span>`;
 }
 export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum = false, extra = '' } = {}) {
   const playing = engine.track?.id === t.id;
@@ -78,10 +78,9 @@ export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum
     ${num ? html`<div class="num">${playing ? html`<span class="eqbars"><i></i><i></i><i></i></span>` : t.track || ''}</div>` : ''}
     ${showArt && !num ? art(t.artId, 'sm') : ''}
     <div class="meta">
-      <div class="t1">${t.title}${t.edition === 'explicit' ? html`<span class="ebadge" title="Explicit">E</span>` : ''}</div>
+      <div class="t1"><span class="t1-text">${t.title}</span>${t.edition === 'explicit' ? html`<span class="ebadge" title="Explicit">E</span>` : ''}${bpmChip(t)}</div>
       <div class="t2">${liked ? html`<span class="mini-heart">${icon('heart-fill')}</span>` : ''}${off ? html`<span class="mini-dl">${icon('downloaded')}</span>` : ''}${showAlbum ? `${t.artist} · ${t.album}` : t.artist}</div>
     </div>
-    ${bpmChip(t)}
     ${raw(extra)}
     <button class="icon-btn more" data-a="track-menu" data-tid="${t.id}" aria-label="More">${icon('more')}</button>
   </div>`;

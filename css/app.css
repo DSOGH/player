@@ -1201,3 +1201,8 @@ body.desk .row.track { padding-top: 7px; padding-bottom: 7px; border-radius: 8px
 /* ultrawide: even "Smart" width stops at 2200 px so nothing turns into a 4000 px bar; quick picks get more columns */
 body.desk[data-desk-width="auto"] #view { max-width: 2200px; }
 body.desk .quick-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)) !important; }
+/* BPM · key right next to the song title */
+.row.track .t1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.row.track .t1-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.track .t1 .ebadge { flex: none; }
+.row.track .t1 .bpmchip { flex: none; margin-left: 2px; padding: 2px 6px; font-size: 10.5px; border-radius: 5px; }
