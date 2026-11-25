@@ -1394,3 +1394,16 @@ body.desk .cook-card:hover { transform: translateY(-2px); }
 .hear-mix { all: unset; cursor: pointer; flex: none; margin-left: 8px; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #fff; background: rgba(255,255,255,.18); -webkit-tap-highlight-color: transparent; transition: background .15s, transform .12s; }
 .hear-mix:hover { background: rgba(255,255,255,.28); } .hear-mix:active { transform: scale(.94); }
 .dj-trans-head .hear-mix { margin-left: auto; align-self: center; }
+
+/* v1.20.3: unfolded / dual screens — the player half is never an empty dark panel, headers don't overlap */
+.np-idle { display: none; }
+body.dual:not(.has-track) #np .np-inner { visibility: hidden; }
+body.dual:not(.has-track) #np .np-idle { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px calc(24px + var(--sar, 0px)) 24px 24px; }
+body.dual:not(.has-track) #np .np-bg { background: radial-gradient(ellipse at 30% 20%, color-mix(in srgb, var(--accent) 35%, transparent), transparent 60%), radial-gradient(ellipse at 80% 90%, color-mix(in srgb, var(--accent) 20%, #3a1d5c), transparent 65%), var(--bg); }
+.np-idle-art { width: min(42%, 220px); aspect-ratio: 1; border-radius: 22%; display: grid; place-items: center; margin-bottom: 10px; background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 70%, #fff 0%), color-mix(in srgb, var(--accent) 35%, #000)); box-shadow: 0 24px 60px -20px color-mix(in srgb, var(--accent) 70%, transparent); }
+.np-idle-art .ic { width: 38%; height: 38%; color: rgba(255,255,255,.9); }
+.np-idle b { font-size: 22px; font-weight: 800; } .np-idle small { color: var(--text2); font-size: 14px; max-width: 300px; }
+.np-idle-btns { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+.np-idle-btns .ic { width: 16px; height: 16px; }
+body.dual .page-head { transition: background .2s; }
+body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filter: saturate(1.8) blur(20px); backdrop-filter: saturate(1.8) blur(20px); }

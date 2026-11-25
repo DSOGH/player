@@ -32,19 +32,19 @@ export function explain(p, A, B) {
   switch (p.style) {
     case 'cook': {
       const what = {
-        tapestop: 'This song grinds to a halt like a tape machine losing power',
-        gateroll: 'This song chops into a stutter roll that speeds up into the cut',
-        dubecho: `This song is thrown into a dub echo (${p.echoTime ? (p.echoTime / (p.beat || 0.5)).toFixed(2).replace(/\.?0+$/, '') : '¾'} beat repeats) that rings out over the next one`,
-        washout: 'A resonant filter sweeps this song away into an echo wash',
-        riser: 'A white-noise riser climbs, the beat chops faster, then a sub boom on the drop',
-        launch: 'This song speeds up and pitches up like it’s taking off — then a boom',
-        chop: 'A quick volume chop on the last beat, then a boom',
-        spin: 'The record gets pushed faster, then braked to a stop',
+        cut: 'The last beat of this song is thrown into an echo and the next song lands on the 1 underneath it',
+        roll: 'This song’s beat loops and rolls — 1, ½, ¼, ⅛ — tighter and tighter into the cut',
+        brake: 'Vinyl brake: the platter stops and the pitch drops, then the next song hits',
+        backspin: 'Spin-back: the record is pulled backwards, then the next song hits on the 1',
+        dub: 'This song is thrown into a dub echo that rings out over the next one',
+        riser: 'A noise riser climbs while the beat chops faster, then the drop',
+        washout: 'A resonant filter sweeps this song away into an echo wash while the next opens up',
       }[p.cook];
       out.push(what || 'Something wild');
       const beats = Math.round((p.build || 0) / (p.beat || 0.5));
       out.push(`${beats} beat${beats === 1 ? '' : 's'} long, landing exactly on a bar line${p.cutAt < (A.duration || 0) - 20 ? ` — leaving at ${Math.floor(p.cutAt / 60)}:${String(Math.floor(p.cutAt % 60)).padStart(2, '0')}, not the end` : ''}`);
-      out.push(p.entry === 'rise' ? 'Next song opens up from a high-pass sweep' : p.entry === 'stutter' ? 'Next song stutters in for a beat' : 'Next song slams straight in');
+      out.push(p.entry === 'rise' ? 'Next song opens up from a high-pass sweep' : 'Next song slams straight in');
+      if (p.sync && Math.abs((p.rate || 1) - 1) > 0.002) out.push(`Next song is tempo-matched (${pct(p.rate)}) so the beat carries straight through, then eases back to its own speed`);
       out.push('Cook It Up never uses the same move as the last two');
       break;
     }

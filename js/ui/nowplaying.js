@@ -29,6 +29,14 @@ export function initNowPlaying(h) {
   const np = $('#np');
   np.innerHTML = html`
     <div class="np-bg"><div class="np-bg-anim"><div class="np-bg-img"></div></div><div class="np-bg-tint"></div><canvas class="np-viz"></canvas></div>
+    <div class="np-idle">
+      <div class="np-idle-art">${icon('note')}</div>
+      <b>Nothing playing</b><small>Pick something on the other side — or let the DJ take over.</small>
+      <div class="np-idle-btns">
+        <button class="btn pill primary" data-np="idle-cook">${icon('sparkle')}DJ Cook It Up</button>
+        <button class="btn pill" data-np="idle-shuffle">${icon('shuffle')}Shuffle all</button>
+      </div>
+    </div>
     <div class="np-inner">
       <div class="np-top" data-drag>
         <button class="icon-btn np-collapse" data-np="close" aria-label="Close">${icon('down')}</button>
@@ -183,6 +191,8 @@ async function act(a, el) {
     case 'lyrics': setMode('lyrics'); break;
     case 'lyrics-retry': { const { forgetLyrics } = await import('../lyrics.js'); forgetLyrics(engine.track); renderLyrics(true); break; }
     case 'booth': setMode('booth'); break;
+    case 'idle-cook': if (engine.cookItUp()) { haptic(20); toast('🔥 DJ Cook It Up'); } else toast('Add some music first'); break;
+    case 'idle-shuffle': { const all = [...library.tracks.values()].filter((x) => library.visible(x)); if (all.length) engine.playTracks(all, -1, { shuffle: true, context: { type: 'library', name: 'All songs' } }); break; }
     case 'hear-mix': { const p = engine.plan; if (p) { engine.seek(Math.max(0, p.mixStart - 6)); haptic(10); toast('6 seconds before the mix'); } break; }
     case 'dj-style': {
       const order = ['beats', 'auto', 'wordplay', 'cook'];
