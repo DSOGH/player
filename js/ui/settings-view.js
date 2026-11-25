@@ -12,7 +12,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.17.2';
+export const APP_VERSION = '1.17.3';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">

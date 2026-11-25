@@ -74,7 +74,7 @@ export function trackRow(t, i, listKey, { num = false, showArt = true, showAlbum
   const playing = engine.track?.id === t.id;
   const liked = library.likes.has(t.id);
   const off = library.isOffline(t);
-  return html`<div class="row track${playing ? ' playing' : ''}" data-a="play-list" data-list="${listKey}" data-i="${i}" data-tid="${t.id}">
+  return html`<div class="row track${playing ? ' playing' : ''}" data-a="play-list" data-list="${listKey}" data-i="${i}" data-tid="${t.id}" data-num="${t.track || ''}">
     ${num ? html`<div class="num">${playing ? html`<span class="eqbars"><i></i><i></i><i></i></span>` : t.track || ''}</div>` : ''}
     ${showArt && !num ? art(t.artId, 'sm') : ''}
     <div class="meta">

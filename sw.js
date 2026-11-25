@@ -5,7 +5,7 @@
  *  - ./__art/<id>     artwork from IndexedDB
  *  - ./__demo/<n>.wav generated demo music
  */
-const VERSION = 'v1.17.2';
+const VERSION = 'v1.17.3';
 const SHELL_CACHE = 'shell-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',

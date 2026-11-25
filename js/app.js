@@ -1001,9 +1001,19 @@ function wireEngineEvents() {
   engine.on('track', (t) => { if (t?.plex) { plex.enrich(t); plex.timeline(t, engine.playing ? 'playing' : 'paused', 0, t.duration); } });
   engine.on('state', () => { const t = engine.track; if (t?.plex) { plex.timelineAt = 0; plex.timeline(t, engine.playing ? 'playing' : 'paused', engine.currentTime, engine.duration); } });
   engine.on('time', () => { const t = engine.track; if (t?.plex && engine.playing) plex.timeline(t, 'playing', engine.currentTime, engine.duration); });
-  engine.on('track', () => {
-    $$('.row.track.playing').forEach((r) => r.classList.remove('playing'));
-  });
+  // keep every visible song list in step with what's actually playing (color + playing bars)
+  const markPlaying = () => {
+    const id = engine.track?.id;
+    $$('.row.track').forEach((r) => {
+      const on = !!id && r.dataset.tid === id;
+      if (r.classList.contains('playing') === on && (!on || r.querySelector('.num .eqbars') || !r.querySelector('.num'))) return;
+      r.classList.toggle('playing', on);
+      const num = r.querySelector('.num');
+      if (num) num.innerHTML = on ? '<span class="eqbars"><i></i><i></i><i></i></span>' : (r.dataset.num || '');
+    });
+  };
+  engine.on('track', markPlaying);
+  engine.on('transition', markPlaying);
 }
 
 function wireScanner() {
