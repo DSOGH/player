@@ -185,7 +185,9 @@ class Engine extends Emitter {
   // while a seek is still loading, report where you asked to go (the slider/clock jump there immediately)
   get currentTime() {
     const d = this.cur;
-    if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 1200 && (d.el.seeking || performance.now() - this._seekAt < 250)) return this._seekTo;
+    // (a seek / a start point is shown right away, also while the song is still loading)
+    if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 4000
+      && (d.el.seeking || performance.now() - this._seekAt < 250 || (d.el.readyState < 2 && performance.now() - this._seekAt < 4000))) return this._seekTo;
     const ct = d.el.currentTime || 0;
     const now = performance.now(), r = d.el.playbackRate || 1;
     // A smooth clock for the scrubber, lyrics and the DJ: iPhone reports the position in coarse, uneven
@@ -847,7 +849,15 @@ class Engine extends Emitter {
       // end of the queue: stop at the start of the last track
       this.pause(); this.seek(0); return;
     }
-    this.playIndex(i, { mode: this.playing && settings.get('skipFade') ? 'quick' : 'cut' });
+    // Cook It Up: skipping lands where the DJ was going to bring the next song in (its drop, its chorus,
+    // or just past the silence at its start), like a DJ cutting to it
+    let startAt = 0;
+    if (this.cookMode) {
+      const id = this.queue[i], p = this.plan;
+      if (p && p.bId === id && (p.bStart || 0) > 0.5) startAt = p.bStart;
+      else startAt = Math.max(0, (library.analysis.get(id)?.leadIn || 0) - 0.05);
+    }
+    this.playIndex(i, { mode: this.playing && settings.get('skipFade') ? 'quick' : 'cut', startAt });
   }
   prev() {
     if (this.currentTime > settings.get('prevRestarts') || this.index <= 0) { this.seek(0); return; }
@@ -944,6 +954,7 @@ class Engine extends Emitter {
     const old = this.cur;
     this.notePlayed(old);
     this.index = i;
+    this._seekTo = null; this._pm = null; // a new song: forget the old one's seek / clock
     // iPhone: Now Playing (lock screen / Dynamic Island / CarPlay) follows the audio element, so a skip
     // keeps the same element — quick fade out, switch songs, fade in — and iOS never sees a "pause".
     let fadeIn = false;
@@ -984,6 +995,7 @@ class Engine extends Emitter {
         });
       } else this.playing = false;
     }
+    if (startAt > 0.5) { this._seekTo = startAt; this._seekAt = performance.now(); this._seekDeck = this.cur; }
     this.afterTrackChange();
   }
 
