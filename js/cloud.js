@@ -34,6 +34,9 @@ async function gunz(b64) {
 // Saved once for the whole Plex server (it describes the songs, not a listener), so a new phone, a
 // cleared app or another account starts with every song already measured instead of measuring again.
 let merging = false;
+// (set by the app: the playing and next song's ids)
+export let engineIds = () => [];
+export function setEngineIds(fn) { engineIds = fn; }
 const AN_MAGIC = 'PLAYERAN1:';
 const AN_TITLE = 'Player analysis';
 const AN_FILE = 'player-analysis.json';
@@ -66,7 +69,7 @@ export function mergeAnalysis(t) {
     const rec = { ...rest, id, loud: L ? unpackLoud(L) : mine?.loud };
     library.analysis.set(id, rec); put.push(rec); n++;
   }
-  if (put.length) { db.shared.putMany('analysis', put).catch(() => {}); merging = true; try { for (const r of put.slice(0, 200)) library.emit('analysis', r.id); } finally { merging = false; } }
+  if (put.length) { db.shared.putMany('analysis', put).catch(() => {}); merging = true; try { for (const r of put) if (r.id === engineIds()[0] || r.id === engineIds()[1]) library.emit('analysis', r.id); } finally { merging = false; } }
   return n;
 }
 
@@ -148,7 +151,7 @@ class Cloud extends Emitter {
     if (!key) throw new Error('No Plex songs yet');
     const uri = `server://${plex.cfg.server.id}/com.plexapp.plugins.library/library/metadata/${key}`;
     // Plex keeps it in playlist descriptions; long ones are split into pieces, as small as the server needs
-    let size = (await db.kv.get('cloud:anChunk')) || 400000;
+    let size = (await db.kv.get('cloud:anChunk')) || 60000;
     const at = Date.now();
     for (;;) {
       const n = Math.ceil(b.length / size);
@@ -197,6 +200,7 @@ class Cloud extends Emitter {
     if (plex.connected) got.push(this.anPlexRead().catch(() => null));
     if (this.ghToken) got.push(this.anGhRead().catch(() => null));
     for (const d of await Promise.all(got)) if (d?.t) { n += mergeAnalysis(d.t); this._anRemote = Math.max(this._anRemote || 0, Object.keys(d.t).length); }
+    if (n) import('./analysis.js').then((m) => m.fixLite()).catch(() => {});
     this._anPulled = true;
     return n;
   }
@@ -448,7 +452,8 @@ class Cloud extends Emitter {
     const other = mine && (mine.did ? mine.did !== deviceId() : mine.device !== deviceName());
     if (mine && other && (mine.at || 0) > (this.state.pulledAt || 0)) { await this.apply(mine); this.state.pulledAt = mine.at; await db.kv.set('cloud', this.state); }
     await this.push();
-    this.pullAnalysis().then((n) => { if (n) { library.emit('change'); this.emit('analysis', n); } if (this._anDirty || !this._anRemote) this.scheduleAn(8000); }).catch(() => {});
+    // song analysis: fetched once things are quiet (never while a song is starting), uploaded much later
+    setTimeout(() => this.pullAnalysis().then((n) => { if (n) this.emit('analysis', n); if (this._anDirty || !this._anRemote) this.scheduleAn(); }).catch(() => {}), 25000);
     return mine ? r : null;
   }
   async setGithub(token) {

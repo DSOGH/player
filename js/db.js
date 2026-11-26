@@ -92,8 +92,9 @@ function openShared() {
   });
   return _sh;
 }
-async function sstore(name, mode = 'readonly') { const d = await openShared(); return d ? d.transaction(name, mode).objectStore(name) : null; }
+async function sstore(name, mode = 'readonly') { const d = await openShared(); if (!d) throw new Error('no shared store'); return d.transaction(name, mode).objectStore(name); }
 export const shared = {
+  async ok() { return !!(await openShared()); },
   async all(name) { const s = await sstore(name); return s ? req(s.getAll()) : []; },
   async get(name, key) { const s = await sstore(name); return s ? req(s.get(key)) : undefined; },
   async put(name, val, key) { const s = await sstore(name, 'readwrite'); if (s) return req(key === undefined ? s.put(val) : s.put(val, key)); },

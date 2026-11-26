@@ -899,6 +899,12 @@ class Engine extends Emitter {
       const np = this.cookPlan({ A, B, aA: library.analysis.get(A.id), aB: library.analysis.get(B.id), bpmA: library.analysis.get(A.id)?.bpm || 0, dur: this.duration, end: this.duration, base: { aId: A.id, bId: B.id, rate: 1, bStart: 0, outDelay: 0, shape: p.shape, style: 'cook' }, durB: B.duration, after: to + 3 });
       if (np && !np.cookBlend) { clearTimeout(this.planTimer); this.planTimer = null; this.plan = p = np; this.emit('plan', np); }
     }
+    if (p && !this._hearing) p._locked = false;
+    if (p && !this.transition && p.style !== 'gapless' && p.style !== 'cook' && this.upcoming && to > p.mixStart - 0.3 && settings.get('transition') === 'smart') {
+      // you jumped past the planned mix: find the next good mix point after where you landed
+      this.computePlan({ force: true, floor: to + 8 });
+      if (this.plan && this.plan.mixStart > to + 3) p = this.plan;
+    }
     this.lateSeek = !!(p && !this.transition && p.style !== 'gapless' && to > (p.mixStart ?? Infinity) - 0.3);
     this._lateGo = false;
     if (p && !this.lateSeek) p.aRamped = false;
@@ -932,10 +938,31 @@ class Engine extends Emitter {
   }
   // "Hear it": jump to just before the planned mix, with the next song already loading so the mix
   // happens exactly as planned (not a late start or a cut because the next song wasn't there yet)
-  hearMix(at) {
-    const nx = this.upcoming, B = this.other;
-    if (nx && B.track !== nx.track) { this.loadDeck(B, nx.track, this.plan?.bStart || 0); this.applyDeckGain(B); this.setFade(B, 0); }
-    this.seek(at);
+  async hearMix() {
+    if (this.transition) return null;
+    if (!this.upcoming) this.prepareNext();
+    const nx = this.upcoming, A = this.cur.track;
+    if (!nx || !A) return null;
+    // the mix point depends on both songs' beat grids: measure whatever isn't measured yet first,
+    // otherwise the plan changes after the jump and the mix happens somewhere else
+    const need = this.wantsAnalysis() ? [A, nx.track].filter((t) => !isAnalyzed(t)) : [];
+    if (need.length) {
+      this.emit('hear-wait', true);
+      await Promise.race([Promise.all(need.map((t) => analyze(t).catch(() => null))), new Promise((r) => setTimeout(r, 20000))]);
+      this.emit('hear-wait', false);
+      if (this.upcoming !== nx || this.cur.track !== A || this.transition) return null;
+    }
+    // the best mix point for these two songs (wherever it is), held still until it has played
+    this.computePlan({ force: true, floor: 0 });
+    const p = this.plan;
+    if (!p) return null;
+    p._locked = true;
+    const B = this.other;
+    if (B.track !== nx.track) { this.loadDeck(B, nx.track, p.bStart || 0); this.applyDeckGain(B); this.setFade(B, 0); }
+    const at = p.style === 'gapless' ? Math.max(0, this.duration - 8) : Math.max(0, p.mixStart - 6 * (this.cur.el.playbackRate || 1));
+    this._hearing = true;
+    try { this.seek(at); } finally { this._hearing = false; }
+    return p;
   }
   // a seek that hangs (stream stalled on a slow connection): reopen the song right at that spot
   checkSeek(d) {
@@ -1075,6 +1102,27 @@ class Engine extends Emitter {
       if (isAnalyzed(t)) verifyBpm(t, { reanalyze: false }); // the playing song is only re-measured later (when it comes up next / library analysis)
     }, 4000);
   }
+  // measure the next few songs in the queue one at a time while this one plays (small copies, so it's
+  // quick), so every upcoming mix is planned with real beats — never a fallback fade
+  async analyzeAhead(t) {
+    if (this._ahead || !this.wantsAnalysis()) return;
+    this._ahead = true;
+    try {
+      for (let k = 1, seen = 0; k <= 8 && seen < (this.cookMode ? 4 : 2); k++) {
+        if (this.track !== t || !this.playing) return;
+        const id = this.queue[this.index + k];
+        const n = id && library.track(id);
+        if (!n) break;
+        seen++;
+        if (isAnalyzed(n)) continue;
+        // never while the playing song is still loading or a mix is running
+        for (let w = 0; w < 40 && (this.transition || this.cur.el.readyState < 3); w++) await new Promise((r) => setTimeout(r, 1500));
+        if (this.track !== t) return;
+        await analyze(n).catch(() => null);
+        if (this.upcoming?.track === n && !this.transition) this.computePlan();
+      }
+    } finally { this._ahead = false; }
+  }
   scheduleAnalysis(t) {
     clearTimeout(this._anTimer);
     if (this._anCtl && this._anFor !== t?.id && this._anFor !== this.upcoming?.track?.id) { this._anCtl.abort(); this._anCtl = null; }
@@ -1153,7 +1201,7 @@ class Engine extends Emitter {
       if (bA && bB) {
         let r = bB / bA; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2;
         const d = Math.abs(r - 1);
-        sc += d <= 0.015 ? 4.5 : d <= 0.03 ? 3.5 : d <= 0.05 ? 1.5 : d <= 0.08 ? 0.2 : -1.5;
+        sc += d <= 0.015 ? 4.5 : d <= 0.03 ? 3.5 : d <= 0.05 ? 1 : d <= 0.08 ? -1.5 : -5; // (a pair that can't be beat-matched only gets a fade: avoid it)
       } else if (!bB && lookup.length < 10) lookup.push(t);
       // keys that sit together
       const kB = library.analysis.get(t.id)?.camelot;
@@ -1212,11 +1260,18 @@ class Engine extends Emitter {
     }
   }
 
-  computePlan() {
+  computePlan({ force = false, floor = null } = {}) {
     if (!this.upcoming || this.transition || this.cooking) return;
     const A = this.cur.track, B = this.upcoming.track;
     if (!A || !B) return;
-    let p = this.makePlan(A, B, this.durationOf(this.cur));
+    const was = this.plan, el = this.cur.el, now = el.currentTime || 0, r = el.playbackRate || 1;
+    // a mix you asked to hear, or one that's coming up in the next 20 s, is never moved under you
+    // (new BPM / lyrics arriving late used to shift it — so "Hear it" landed in the wrong place)
+    if (!force && was && was.aId === A.id && was.bId === B.id && (was._locked || (was.mixStart > now && (was.mixStart - now) / r < 20))) return;
+    // and a new plan never puts the mix point behind where you are
+    this._planFloor = floor ?? (this.playing && now > 1 ? now + 8 * r : 0);
+    let p;
+    try { p = this.makePlan(A, B, this.durationOf(this.cur)); } finally { this._planFloor = 0; }
     // Cook It Up never slides one song under another or drops it in: when the songs can't be beat-matched
     // it does a long, slow filter blend instead
     if (this.cookMode && p && p.fx && (p.style === 'under' || p.style === 'echo') && !p.cue) {
@@ -1420,8 +1475,9 @@ class Engine extends Emitter {
         for (const st of starts) {
           for (let k = 0; k < (cookBlend?.club ? 24 : cookBlend ? 8 : 4); k++) {
             const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
+            if (ms < (this._planFloor || 0)) break;
             // (Club: like a club DJ, it'll leave a song as early as halfway if that's the best moment)
-            if (ms <= 1 || ms < dur * (cookBlend?.club ? 0.45 : cookBlend ? 0.55 : 0.4)) break;
+            if (ms <= 1 || ms < dur * (cookBlend?.club ? 0.35 : cookBlend ? 0.55 : 0.4)) break;
             const ov = ovT / aRate;
             const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, st.bS, bRate, ov) : 0;
             // seamless = both songs at a similar energy where they overlap
@@ -1438,6 +1494,15 @@ class Engine extends Emitter {
               if (vB && vB.some(([a, b]) => a < st.bS - 0.1 && b > st.bS + 0.2)) cookS += 3;
               // starting later in the next song costs a little (its intro is usually the smoothest way in)
               cookS += (st.phrase || 0) * 0.35;
+              // never fade the outgoing singer out in the middle of a line: the blend ends between lines
+              if (vA && vA.some(([a, b]) => a < ms + ovT * 0.7 && b > ms + ovT * 0.9)) cookS += cookBlend.club ? 3 : 2;
+              // the blend finishes right where the outgoing song changes section (verse→chorus, chorus→break):
+              // that's where a DJ leaves, so the change sounds intended
+              const pre = loudAt(aA, ms + ovT - 8, ms + ovT), post = loudAt(aA, ms + ovT, ms + ovT + 8);
+              if (pre != null && post != null && Math.abs(post - pre) >= 8) cookS -= cookBlend.club ? 1.4 : 0.6;
+              // the next song's entry lands on the start of one of its sections (not inside a build)
+              const bPre = loudAt(aB, st.bS - 6, st.bS), bPost = loudAt(aB, st.bS, st.bS + 6);
+              if (st.phrase && bPre != null && bPost != null && bPost - bPre >= 8) cookS -= 0.5;
             }
             tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
               score: clash * 6 + (cookBlend ? 0 : eGap) + cookS + (st.dropOn ? -2 : 0) + k * (cookBlend?.club ? 0.04 : cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });

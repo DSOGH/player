@@ -112,6 +112,7 @@ export function initNowPlaying(h) {
   engine.on('state', renderState);
   engine.on('time', renderTime);
   engine.on('queue', () => { if (mode === 'queue') renderQueue(); });
+  engine.on('hear-wait', (on) => { const b = $('#np .hear-mix'); if (b) { b.textContent = on ? 'Measuring…' : 'Hear it'; b.disabled = !!on; } if (on) toast('Measuring both songs so the mix lands right…'); });
   engine.on('plan', () => { preloadArt(engine.upcoming?.track?.artId, [200, 360, 640]); });
   engine.on('plan', () => { renderHint(); renderWaveMarks(); if (mode === 'booth') renderBooth($('#np .np-booth')); if (mode === 'lyrics' && lyrics) markCue(); });
   engine.on('queue', () => { if (mode === 'booth') renderBooth($('#np .np-booth')); });
@@ -194,13 +195,12 @@ async function act(a, el) {
     case 'idle-cook': if (engine.cookItUp()) { haptic(20); toast('🔥 DJ Cook It Up'); } else toast('Add some music first'); break;
     case 'idle-shuffle': { const all = [...library.tracks.values()].filter((x) => library.visible(x)); if (all.length) engine.playTracks(all, -1, { shuffle: true, context: { type: 'library', name: 'All songs' } }); break; }
     case 'hear-mix': {
-      // jump to just before the next mix (and plan it first if it isn't planned yet)
+      // jump to just before the next mix (both songs are measured and the mix point is fixed first)
       if (engine.transition) break; // already mixing: you're hearing it
-      if (!engine.plan) engine.prepareNext();
-      const p = engine.plan;
-      if (!p) { toast(engine.queue.length > engine.index + 1 ? 'Still working out the next mix — try again in a second' : 'Nothing is up next'); break; }
-      const at = p.style === 'gapless' ? Math.max(0, engine.duration - 8) : Math.max(0, p.mixStart - 6);
-      engine.hearMix(at); haptic(10);
+      if (!engine.upcoming && !(engine.queue.length > engine.index + 1)) { toast('Nothing is up next'); break; }
+      haptic(10);
+      const p = await engine.hearMix();
+      if (!p) { toast('Couldn’t line up the mix — try again in a second'); break; }
       toast(p.style === 'gapless' ? 'Same album: these two play back-to-back (no mix)' : '6 seconds before the mix');
       break;
     }
@@ -209,7 +209,7 @@ async function act(a, el) {
       const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % order.length];
       settings.set('djStyle', nx);
       toast({ auto: 'DJ style: Auto (word play when lyrics line up, else beat match)', beats: 'DJ style: Beat match', wordplay: 'DJ style: Word play' }[nx]);
-      if (engine.upcoming) engine.computePlan();
+      if (engine.upcoming) engine.computePlan({ force: true });
       renderBooth($('#np .np-booth'));
       break;
     }
@@ -218,7 +218,7 @@ async function act(a, el) {
       toast(`Analyzing the next ${up.length} songs…`);
       const { getLyrics: gl } = await import('../lyrics.js');
       for (const x of up) { await analyze(x); await gl(x); if (mode === 'booth') renderBooth($('#np .np-booth')); }
-      if (engine.upcoming) engine.computePlan();
+      if (engine.upcoming) engine.computePlan({ force: true });
       toast('Upcoming mixes planned');
       break;
     }

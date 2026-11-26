@@ -310,6 +310,15 @@ class Plex extends Emitter {
       session: `${clientId()}-${t.plex.key}`,
     })}`;
   }
+  // A small copy just for measuring BPM / key / beats (a 96 kbps MP3 is ~3 MB instead of 30–100 MB of
+  // FLAC), on its own transcode session so it never interrupts what's playing
+  liteUrl(t) {
+    return `${this.cfg.base}/music/:/transcode/universal/start.mp3?${this.q({
+      path: `/library/metadata/${t.plex.key}`, mediaIndex: 0, partIndex: 0, protocol: 'http',
+      directPlay: 0, directStream: 0, hasMDE: 1, musicBitrate: 96, audioBitrate: 96,
+      session: `${clientId()}-an-${t.plex.key}`,
+    })}`;
+  }
   // Re-check the server address (e.g. after leaving home Wi-Fi). Returns true if the address changed.
   async reconnect() {
     if (!this.connected) return false;

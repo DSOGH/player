@@ -92,8 +92,10 @@ class Library extends Emitter {
   }
 
   async load() {
+    const shOk = await db.shared.ok().catch(() => false);
+    const anMoved = shOk && await db.kv.get('anMoved');
     const [tracks, pls, an, likes, stats, rs, listen, mixes, edSet, edGuess] = await Promise.all([
-      db.all('tracks'), db.all('playlists'), db.all('analysis'),
+      db.all('tracks'), db.all('playlists'), anMoved ? [] : db.all('analysis'),
       db.kv.get('likes'), db.kv.get('stats'), db.kv.get('recentSearches'), db.kv.get('listen'), db.kv.get('mixes'),
       db.kv.get('editionSet'), db.kv.get('editionGuess'),
     ]);
@@ -108,8 +110,9 @@ class Library extends Emitter {
     const sh = await db.shared.all('analysis').catch(() => []);
     this.analysis = new Map(sh.map((a) => [a.id, a]));
     const move = [];
-    for (const a of an) { const o = this.analysis.get(a.id); if (!o || (a.at || 0) > (o.at || 0) || (a.tapped && !o.tapped)) { this.analysis.set(a.id, a); move.push(a); } }
+    for (const a of anMoved ? [] : an) { const o = this.analysis.get(a.id); if (!o || (a.at || 0) > (o.at || 0) || (a.tapped && !o.tapped)) { this.analysis.set(a.id, a); move.push(a); } }
     if (move.length) db.shared.putMany('analysis', move).catch(() => {});
+    if (!anMoved && shOk) db.kv.set('anMoved', 1);
     this.likes = new Set(likes || []);
     this.stats = stats || {};
     this.recentSearches = rs || [];

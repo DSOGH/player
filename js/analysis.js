@@ -5,6 +5,7 @@ import { settings } from './settings.js';
 import { nasUrl } from './util.js';
 import { plex } from './plex.js';
 import { onlineBpm, tempoRelation } from './bpm-online.js';
+import { skv } from './db.js';
 
 const SR = 11025;
 const WIN = 256;               // ~23 ms envelope windows
@@ -64,6 +65,65 @@ export async function prefetchTrack(t) {
   try { await fetchTrackBuffer(t); } catch (e) { /* ignore */ }
 }
 
+// ---- fast measuring ----
+// Big lossless files are measured from a small MP3 copy made by Plex. An MP3 can start a few ms late
+// (encoder delay), which would put the beat grid off — so that delay is measured once, on one song,
+// against the original file, and taken off every song measured this way.
+const LITE_MIN = 12e6;
+function useLite(t) { return !!(t.plex && plex.connected && (t.size || 0) > LITE_MIN && settings.get('fastAnalysis') === true); }
+async function cachedOriginal(t) {
+  for (const name of ['offline-tracks', 'prefetch']) {
+    const hit = await (await caches.open(name)).match(library.cacheKey(t));
+    if (hit) return hit.arrayBuffer();
+  }
+  return null;
+}
+async function fetchLite(t, signal) {
+  const r = await fetch(plex.liteUrl(t), signal ? { signal } : undefined);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const ab = await r.arrayBuffer();
+  if (ab.byteLength < 20000) throw new Error('short');
+  return ab;
+}
+const DELAY_KEY = () => 'liteDelay:' + (plex.cfg?.server?.id || '');
+let liteDelay;
+async function getDelay() { if (liteDelay === undefined) liteDelay = (await skv.get(DELAY_KEY())) ?? null; return liteDelay; }
+const shiftRec = (rec, d) => {
+  if (!d) return rec;
+  const beat = rec.bpm ? 60 / rec.bpm : 0;
+  let off = (rec.beatOffset || 0) - d;
+  if (beat) off = ((off % beat) + beat) % beat;
+  const sh = Math.round(d * 2);
+  return { ...rec, beatOffset: Math.round(off * 1000) / 1000, leadIn: Math.max(0, (rec.leadIn || 0) - d), tailOut: (rec.tailOut || 0) - d,
+    fadeInEnd: Math.max(0, (rec.fadeInEnd || 0) - d), fadeOutStart: (rec.fadeOutStart || 0) - d, loud: sh > 0 && rec.loud ? rec.loud.slice(sh) : rec.loud };
+};
+let calibrating = false;
+async function calibrate(t, liteRec) {
+  if (calibrating || !networkOk() || navigator.connection?.type === 'cellular' || (t.size || 0) > 150e6) return;
+  calibrating = true;
+  try {
+    const ab = await fetchTrackBuffer(t);
+    const res = await analyzeBuffer(ab, liteRec.bpm);
+    if (!res?.bpm || Math.abs(res.bpm - liteRec.bpm) > 0.6) return;
+    const beat = 60 / res.bpm;
+    let d = (liteRec.beatOffset || 0) - res.beatOffset;
+    d = ((d % beat) + beat * 1.5) % beat - beat / 2; // nearest, either way
+    if (Math.abs(d) > 0.12) return;
+    liteDelay = Math.round(d * 1000) / 1000;
+    await skv.set(DELAY_KEY(), liteDelay);
+    // this song: the exact measurement from the original; every song measured from a copy: corrected
+    library.setAnalysis({ ...liteRec, ...res, lite: 0 });
+    for (const a of [...library.analysis.values()]) if (a.lite && !a.liteFixed) library.setAnalysis({ ...shiftRec(a, liteDelay), liteFixed: 1 });
+  } catch (e) { /* try again another time */ } finally { calibrating = false; }
+}
+
+// songs measured from a copy (here or on another device) before the delay was known get corrected
+export async function fixLite() {
+  const d = await getDelay();
+  if (d == null) return;
+  for (const a of [...library.analysis.values()]) if (a.lite && !a.liteFixed) library.setAnalysis({ ...shiftRec(a, d), liteFixed: 1 });
+}
+
 export function analyze(t, { force = false, signal = null } = {}) {
   if (!t) return Promise.resolve(null);
   if (!force && isAnalyzed(t)) return Promise.resolve(library.analysis.get(t.id));
@@ -75,14 +135,20 @@ export function analyze(t, { force = false, signal = null } = {}) {
       // the online tempo is looked up while the song downloads; it steers detection to the right
       // octave (no more half-time / double-time), and the audio still sets the exact value and beat grid
       const ob = onlineBpm(t);
-      const ab = await fetchTrackBuffer(t, signal);
+      // the original if it's already on the phone; otherwise a small copy for big lossless files
+      let ab = useLite(t) ? await cachedOriginal(t) : null, lite = false;
+      if (!ab && useLite(t)) { try { ab = await fetchLite(t, signal); lite = true; } catch (e) { if (e?.name === 'AbortError') throw e; } }
+      if (!ab) ab = await fetchTrackBuffer(t, signal);
       const online = await Promise.race([ob, new Promise((r) => setTimeout(() => r(0), 5000))]);
       const tag = t.bpm >= 40 && t.bpm <= 250 ? t.bpm : 0;
       const hint = online || tag;
-      const res = await analyzeBuffer(ab, hint);
+      let res = await analyzeBuffer(ab, hint);
       if (!res) return null;
+      let fixed = 0;
+      if (lite) { const d = await getDelay(); if (d != null) { res = shiftRec(res, d); fixed = 1; } }
       const rec = { id: t.id, v: ANALYSIS_VERSION, ...res, at: Date.now(), bpmOnline: online || 0, ochk: online ? 1 : 0,
-        bpmSrc: online ? 'online' : tag ? 'tag' : 'audio' };
+        bpmSrc: online ? 'online' : tag ? 'tag' : 'audio', ...(lite ? { lite: 1, liteFixed: fixed } : {}) };
+      if (lite && !fixed) setTimeout(() => calibrate(t, rec), 4000);
       if (!online) ob.then((b) => { if (b && library.analysis.get(t.id) === rec) Object.assign(rec, { bpmOnline: b, ochk: 1 }) && library.setAnalysis(rec); });
       // a BPM you tapped in yourself always wins over detection
       const old = library.analysis.get(t.id);

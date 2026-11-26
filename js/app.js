@@ -22,7 +22,8 @@ import { friends } from './friends.js';
 import { friendsView, chatView, acceptView, drafts } from './ui/friends-view.js';
 import { accounts, writeMeta } from './accounts.js';
 import { compareVersions } from './editions.js';
-import { cloud } from './cloud.js';
+import { cloud, setEngineIds } from './cloud.js';
+setEngineIds(() => [engine.track?.id, engine.upcoming?.track?.id]);
 import { showLogin, noteAccount, connectSheet, restoreSheet } from './ui/accounts-view.js';
 
 const main = () => $('#main');
@@ -916,12 +917,21 @@ function wireGlobal() {
   // frame), the color and icon grow with the swipe, a tap of haptics when it locks in, then a smooth glide back.
   let sw = null;
   const SW_ARM = 84;
-  document.addEventListener('pointerdown', (e) => {
-    if (!settings.get('rowSwipe') || e.pointerType === 'mouse') return;
-    const row = e.target.closest('.row.track');
-    if (!row || row.closest('#np, #sheet') || e.target.closest('button') || row.classList.contains('swiping')) return;
-    sw = { row, x0: e.clientX, y0: e.clientY, id: e.pointerId, axis: null, dx: 0, armed: 0, raf: 0 };
-  }, { passive: true });
+  // touch events (not pointer events): an up/down drag is handed straight to the list so it always
+  // scrolls, and a sideways one is claimed on its first move so iPhone doesn't scroll or go back instead
+  const pt = (e) => e.changedTouches?.[0] || e;
+  const swStart = (e) => {
+    if (!settings.get('rowSwipe') || e.pointerType === 'mouse' || (e.touches && e.touches.length > 1)) { sw = null; return; }
+    const row = e.target.closest?.('.row.track');
+    if (!row || row.closest('#np, #sheet') || e.target.closest('button')) return;
+    const p = pt(e);
+    if (p.clientX < 24) return; // the screen's left edge belongs to the system back swipe
+    // a row stuck mid-animation from an earlier swipe is reset
+    if (row.classList.contains('swiping')) { row.classList.remove('swiping'); row.style.transform = ''; row.parentNode?.querySelectorAll(':scope > .swipe-under').forEach((u) => u.remove()); }
+    sw = { row, x0: p.clientX, y0: p.clientY, id: p.identifier ?? e.pointerId, axis: null, dx: 0, armed: 0, raf: 0 };
+    // only this row listens to the finger (a page-wide blocking listener would slow down every scroll)
+    if (e.changedTouches && !row._swMove) { row._swMove = true; row.addEventListener('touchmove', swMove, { passive: false }); }
+  };
   const swDraw = () => {
     const s2 = sw;
     if (!s2 || !s2.under) return;
@@ -944,13 +954,15 @@ function wireGlobal() {
     }
     void w;
   };
-  document.addEventListener('pointermove', (e) => {
-    if (!sw || e.pointerId !== sw.id) return;
-    const mx = e.clientX - sw.x0, my = e.clientY - sw.y0;
+  const swMove = (e) => {
+    if (!sw) return;
+    const p = e.changedTouches ? [...e.changedTouches].find((x) => x.identifier === sw.id) : (e.pointerId === sw.id ? e : null);
+    if (!p) return;
+    const mx = p.clientX - sw.x0, my = p.clientY - sw.y0;
     if (!sw.axis) {
-      if (Math.hypot(mx, my) < 10) return;
-      sw.axis = Math.abs(mx) > Math.abs(my) * 1.5 ? 'x' : 'y';
-      if (sw.axis === 'y') { sw = null; return; }
+      if (Math.hypot(mx, my) < 8) return;
+      sw.axis = Math.abs(mx) > Math.abs(my) * 1.2 ? 'x' : 'y';
+      if (sw.axis === 'y') { sw = null; return; } // a scroll: leave it alone
       clearTimeout(lpTimer); lpTimer = null;
       sw.x0 = e.clientX - Math.sign(mx) * 2; // no jump when the swipe starts
       const r = sw.row, par = r.offsetParent || r.parentNode;
@@ -962,19 +974,21 @@ function wireGlobal() {
       sw.under = under;
       r.classList.add('swiping');
     }
-    const raw = e.clientX - sw.x0;
+    if (e.cancelable) e.preventDefault(); // ours now: no page scroll / back gesture
+    const raw = p.clientX - sw.x0;
     const lim = sw.row.offsetWidth * 0.45;
     sw.dx = Math.sign(raw) * (Math.abs(raw) < lim ? Math.abs(raw) : lim + (Math.abs(raw) - lim) * 0.2);
     if (!sw.raf) sw.raf = requestAnimationFrame(swDraw);
-  }, { passive: true });
+  };
   const swEnd = (e) => {
-    if (!sw || (e.pointerId !== undefined && e.pointerId !== sw.id)) return;
+    if (!sw) return;
+    if (e.changedTouches ? ![...e.changedTouches].some((x) => x.identifier === sw.id) : (e.pointerId !== undefined && e.pointerId !== sw.id)) return;
     const s2 = sw; sw = null;
     if (s2.axis !== 'x') return;
     cancelAnimationFrame(s2.raf);
     suppressClick = true; setTimeout(() => { suppressClick = false; }, 350);
     const t = library.track(s2.row.dataset.tid);
-    const go = e.type !== 'pointercancel' ? s2.armed : 0;
+    const go = e.type !== 'pointercancel' && e.type !== 'touchcancel' ? s2.armed : 0;
     if (go) {
       s2.under.classList.add('done');
       const ic = s2.under.querySelector(go > 0 ? '.su-q' : '.su-p');
@@ -984,12 +998,22 @@ function wireGlobal() {
       { duration: go ? 380 : 300, delay: go ? 140 : 0, easing: 'cubic-bezier(.22,.9,.3,1)', fill: 'backwards' });
     s2.row.style.transform = '';
     s2.under.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, delay: go ? 360 : 180, fill: 'forwards' });
-    back.finished.finally(() => setTimeout(() => { s2.row.classList.remove('swiping'); s2.under?.remove(); }, 200));
+    const clean = () => { s2.row.classList.remove('swiping'); s2.under?.remove(); };
+    back.finished.finally(() => setTimeout(clean, 200));
+    setTimeout(clean, 1200); // never leave a row stuck (e.g. the list re-drew mid-animation)
     if (t && go > 0) { engine.addToQueue([t]); toast(`Added “${t.title}” to queue`); }
     else if (t && go < 0) setTimeout(() => addToPlaylist([t]), 260);
   };
-  document.addEventListener('pointerup', swEnd);
-  document.addEventListener('pointercancel', swEnd);
+  if ('ontouchstart' in window) {
+    document.addEventListener('touchstart', swStart, { passive: true });
+    document.addEventListener('touchend', swEnd);
+    document.addEventListener('touchcancel', swEnd);
+  } else {
+    document.addEventListener('pointerdown', swStart, { passive: true });
+    document.addEventListener('pointermove', swMove, { passive: true });
+    document.addEventListener('pointerup', swEnd);
+    document.addEventListener('pointercancel', swEnd);
+  }
 
   main().addEventListener('scroll', onScroll, { passive: true });
   addEventListener('hashchange', () => {
