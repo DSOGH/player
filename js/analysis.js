@@ -69,7 +69,7 @@ export async function fetchTrackBuffer(t, signal, { store = true, urgent = false
   if (!urgent) await waitForGap(signal);
   const ctl = new AbortController();
   if (signal) { if (signal.aborted) ctl.abort(); else signal.addEventListener('abort', () => ctl.abort(), { once: true }); }
-  bgCtls.add(ctl);
+  if (!urgent) bgCtls.add(ctl);
   let blob;
   try {
     const r = await fetch(trackSrc(t), { signal: ctl.signal });
@@ -94,7 +94,7 @@ export async function prefetchTrack(t) {
   const mode = settings.get('prefetch');
   if (mode === 'off') return;
   if (mode === 'wifi' && navigator.connection?.type === 'cellular') return;
-  if (t.size > 300e6) return;
+  if (t.size > 40e6) return; // a huge lossless file: the player streams it itself (a full copy only fights the music)
   try { await fetchTrackBuffer(t); } catch (e) { /* ignore */ }
 }
 
@@ -103,7 +103,7 @@ export async function prefetchTrack(t) {
 // (encoder delay), which would put the beat grid off — so that delay is measured once, on one song,
 // against the original file, and taken off every song measured this way.
 const LITE_MIN = 12e6;
-function useLite(t) { return !!(t.plex && plex.connected && (t.size || 0) > LITE_MIN && settings.get('fastAnalysis') === true); }
+export function useLite(t) { return !!(t?.plex && plex.connected && (t.size || 0) > LITE_MIN && settings.get('fastAnalysis') !== false); }
 async function cachedOriginal(t) {
   for (const name of ['offline-tracks', 'prefetch']) {
     const hit = await (await caches.open(name)).match(library.cacheKey(t));
@@ -111,10 +111,20 @@ async function cachedOriginal(t) {
   }
   return null;
 }
-async function fetchLite(t, signal) {
-  const r = await fetch(plex.liteUrl(t), signal ? { signal } : undefined);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const ab = await r.arrayBuffer();
+async function fetchLite(t, signal, urgent = false) {
+  if (!urgent) await waitForGap(signal);
+  const ctl = new AbortController();
+  if (signal) { if (signal.aborted) ctl.abort(); else signal.addEventListener('abort', () => ctl.abort(), { once: true }); }
+  if (!urgent) bgCtls.add(ctl);
+  const tm = setTimeout(() => ctl.abort(), 45000); // Plex taking too long making the copy: try another time
+  const t0 = performance.now();
+  let ab;
+  try {
+    const r = await fetch(plex.liteUrl(t), { signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    ab = await r.arrayBuffer();
+  } finally { clearTimeout(tm); bgCtls.delete(ctl); }
+  dlog('lite-copy', { song: t.title, mb: ab.byteLength / 1e6, s: (performance.now() - t0) / 1000 });
   if (ab.byteLength < 20000) throw new Error('short');
   return ab;
 }
@@ -170,7 +180,13 @@ export function analyze(t, { force = false, signal = null, urgent = false } = {}
       const ob = onlineBpm(t);
       // the original if it's already on the phone; otherwise a small copy for big lossless files
       let ab = useLite(t) ? await cachedOriginal(t) : null, lite = false;
-      if (!ab && useLite(t)) { try { ab = await fetchLite(t, signal); lite = true; } catch (e) { if (e?.name === 'AbortError') throw e; } }
+      if (!ab && useLite(t)) {
+        try { ab = await fetchLite(t, signal, urgent); lite = true; } catch (e) {
+          if (signal?.aborted) throw e;
+          // no small copy: only a moderately sized original is downloaded instead (never a 100 MB one)
+          if ((t.size || 0) > 40e6) { dlog('measure-skip', { song: t.title, mb: (t.size || 0) / 1e6, why: e?.message || e?.name }); return null; }
+        }
+      }
       if (!ab) ab = await fetchTrackBuffer(t, signal, { urgent });
       const online = await Promise.race([ob, new Promise((r) => setTimeout(() => r(0), 5000))]);
       const tag = t.bpm >= 40 && t.bpm <= 250 ? t.bpm : 0;

@@ -4,7 +4,7 @@
 import { settings, EQ_FREQS, EQ_PRESETS } from './settings.js';
 import { library } from './library.js';
 import { dlog } from './diag.js';
-import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm, fetchTrackBuffer, holdBackground, backgroundHeld, isCached, setBusyCheck } from './analysis.js';
+import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm, fetchTrackBuffer, holdBackground, backgroundHeld, isCached, setBusyCheck, useLite } from './analysis.js';
 import { onlineBpm, onlineBpmCached } from './bpm-online.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
@@ -1063,6 +1063,8 @@ class Engine extends Emitter {
     if (i < 0 || i >= this.queue.length) return;
     if (autoplay) this.unlockDecks();
     const t = library.track(this.queue[i]);
+    // a song is starting: every background download stops so it gets the whole connection
+    if (autoplay && t && !t.demo) holdBackground(20000);
     if (!t) { this.queue.splice(i, 1); return this.playIndex(Math.min(i, this.queue.length - 1), { mode, autoplay }); }
     this.ensureGraph();
     if (autoplay) await this.resume();
@@ -1320,7 +1322,8 @@ class Engine extends Emitter {
     const d = this.other;
     const a = library.analysis.get(t.id);
     const refresh = a && !a.loud && settings.get('transition') === 'smart' && settings.get('dropAlign') !== false;
-    const willFetch = this.wantsAnalysis() && (!isAnalyzed(t) || refresh) && !t.demo && t.plex && !isCached(t);
+    // (measuring from Plex's small copy doesn't touch the file the player streams)
+    const willFetch = this.wantsAnalysis() && (!isAnalyzed(t) || refresh) && !t.demo && t.plex && !isCached(t) && !useLite(t);
     const load = () => {
       if (this.upcoming?.track !== t || this.transition || d.track === t) return;
       this.loadDeck(d, t, this.plan?.bStart || 0);
