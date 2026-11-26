@@ -23,6 +23,7 @@ import { friendsView, chatView, acceptView, drafts } from './ui/friends-view.js'
 import { accounts, writeMeta } from './accounts.js';
 import { compareVersions } from './editions.js';
 import { cloud, setEngineIds } from './cloud.js';
+import { diagText } from './diag.js';
 setEngineIds(() => [engine.track?.id, engine.upcoming?.track?.id]);
 import { showLogin, noteAccount, connectSheet, restoreSheet } from './ui/accounts-view.js';
 
@@ -639,6 +640,12 @@ async function doAction(a, el, e) {
     }
     case 'clear-preload': case 'clear-cache': await caches.delete('prefetch'); navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' }); toast('Preloaded songs cleared'); render({ keepScroll: true }); break;
     case 'clear-covers': await caches.delete('plexart-v1'); toast('Cover cache cleared'); render({ keepScroll: true }); break;
+    case 'copy-diag': {
+      const txt = diagText();
+      try { await navigator.clipboard.writeText(txt); toast('Playback report copied — paste it in a message'); }
+      catch (e) { await actionSheet({ title: 'Playback report', items: [{ icon: 'copy', label: 'Select the text below and copy it', value: '' }], text: txt }).catch(() => {}); }
+      break;
+    }
     case 'clear-analysis':
       if (await confirmSheet('Clear BPM & transition analysis for all songs?', 'Clear Analysis', true)) {
         await db.clear('analysis'); await db.shared.clear('analysis').catch(() => {}); library.analysis.clear(); toast('Analysis cleared');
@@ -1186,7 +1193,7 @@ function warmAllCovers() {
 const COOK_STYLES = [
   ['smooth', 'wave', 'Smooth', 'Plays songs out, long slow blends'],
   ['club', 'bpm', 'Club', 'Leaves songs early on the phrase'],
-  ['hype', 'flame', 'Hype', 'Adds echo throws'],
+  ['hype', 'flame', 'Hype', 'Cuts early, keeps the energy up, echo throws'],
   ['wild', 'bolt', 'Wild', 'Rolls, brakes, spin-backs'],
 ];
 function cookSheet() {

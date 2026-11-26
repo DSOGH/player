@@ -3,6 +3,7 @@
 // (silence trimming, fade-aware overlaps, album awareness, beat-matched + tempo-matched mixing).
 import { settings, EQ_FREQS, EQ_PRESETS } from './settings.js';
 import { library } from './library.js';
+import { dlog } from './diag.js';
 import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm, fetchTrackBuffer, holdBackground, backgroundHeld, isCached, setBusyCheck } from './analysis.js';
 import { onlineBpm, onlineBpmCached } from './bpm-online.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
@@ -101,6 +102,7 @@ class Deck {
     if (!src) this.attempt = 0;
     this.switching = true;
     setTimeout(() => { this.switching = false; }, 60);
+    if (this._good?.id !== track?.id) this._good = null;
     this.track = track;
     clearInterval(this.rateTimer);
     this.el.playbackRate = 1;
@@ -538,7 +540,8 @@ class Engine extends Emitter {
   }
   async _recover(d, err) {
     const t = d.track;
-    const pos = this._seekDeck === d && this._seekTo != null ? this._seekTo : Math.max(d.wantStart || 0, d.el.currentTime || 0);
+    const pos = this.resumePos(d);
+    dlog('error', { song: t?.title, code: err?.code, pos, attempt: d.attempt || 0, cur: d === this.cur });
     const wasCur = d === this.cur;
     const retry = (stage, src, raw = d.raw) => {
       if (raw !== d.raw) this.prepareDeck(d, t, raw);
@@ -588,9 +591,9 @@ class Engine extends Emitter {
       // a stream that "ends" well before the song does (iPhone, after a far jump on a slow connection)
       // is reopened at that spot once, instead of skipping the song
       const t = d.track, full = t?.duration || 0;
-      const pos = this._seekDeck === d && this._seekTo != null ? this._seekTo : (el.currentTime || 0);
-      if (t && full > 20 && pos < full - 6 && d._earlyEnd !== d.token) {
-        d.load(t, pos); d._earlyEnd = d.token; this.applyDeckGain(d); this.setFade(d, 1);
+      const pos = this.resumePos(d);
+      if (t && full > 20 && pos > 1 && pos < full - 6 && d._earlyEnd !== d.token) {
+        dlog('early-end', { song: t.title, pos, full }); d.load(t, pos); d._earlyEnd = d.token; this.applyDeckGain(d); this.setFade(d, 1);
         if (this.playing) d.el.play().catch(() => {});
         return;
       }
@@ -624,6 +627,7 @@ class Engine extends Emitter {
         const now = performance.now();
         this._starve = (this._starve || []).filter((x) => now - x < 30000); this._starve.push(now);
         holdBackground(this._starve.length > 1 ? 150000 : 60000);
+        dlog('stutter', { song: d.track?.title, at: el.currentTime, rs: el.readyState, n: this._starve.length });
       }
     });
     el.addEventListener('pause', () => {
@@ -982,6 +986,15 @@ class Engine extends Emitter {
     } finally { this._hearing = false; }
     return p;
   }
+  // where to pick a song back up after a hiccup: the spot you jumped to, else the last spot it was
+  // really playing at (never earlier than that)
+  resumePos(d) {
+    const ct = d.el.currentTime || 0;
+    const good = d._good && d._good.id === d.track?.id ? d._good : null;
+    // a jump that hasn't played yet wins; once it has played, the spot it got to
+    if (this._seekDeck === d && this._seekTo != null && (!good || good.at < this._seekAt)) return this._seekTo;
+    return Math.max(ct, good?.pos || 0) || d.wantStart || 0;
+  }
   // open the playing song again at a given spot (quick fade so there's no click)
   reopenAt(d, at) {
     const t = d.track;
@@ -1014,8 +1027,8 @@ class Engine extends Emitter {
     if (this._stall.done === ct) return;
     this._stall.done = ct; this._stall.at = now;
     console.warn('playback stalled; reopening at', ct.toFixed(1));
-    const at = this._seekDeck === d && this._seekTo != null ? this._seekTo : ct;
-    this.reopenAt(d, at);
+    dlog('stall-reopen', { song: d.track?.title, ct, at: this.resumePos(d), rs: el.readyState, seeking: el.seeking });
+    this.reopenAt(d, this.resumePos(d));
   }
   // a seek that hangs (stream stalled on a slow connection): reopen the song right at that spot
   checkSeek(d) {
@@ -1249,7 +1262,8 @@ class Engine extends Emitter {
     // a set breathes: energy rises and falls in a slow wave, a few points per song — never a hard drop
     // or a ballad straight into a banger
     this._cookN = (this._cookN || 0) + 1;
-    const target = eA == null ? null : eA + 4 * Math.cos(this._cookN / 3);
+    // (it mostly holds or climbs — hype goes into hype; only every so often a small breather)
+    const target = eA == null ? null : eA + 2 + 3 * Math.cos(this._cookN / 3);
     const recent = this.queue.slice(Math.max(0, this.index - 5), this.index + 1).map((id) => library.track(id)).filter(Boolean);
     const recentArtists = new Set(recent.map((t) => t.artist)), recentAlbums = new Set(recent.map((t) => t.albumId));
     let best = -1, bestS = -Infinity;
@@ -1276,7 +1290,7 @@ class Engine extends Emitter {
       if (yA && yB) sc += Math.abs(yA - yB) <= 3 ? 0.5 : Math.abs(yA - yB) > 15 ? -0.5 : 0;
       // energy flow
       const eB = energy(t);
-      if (target != null && eB != null) { sc -= Math.abs(eB - target) / 6; if (Math.abs(eB - eA) > 18) sc -= 3; }
+      if (target != null && eB != null) { sc -= Math.abs(eB - target) / 6; if (eB < eA - 8) sc -= 2.5 + (eA - 8 - eB) / 4; else if (eB - eA > 18) sc -= 2; }
       else if (eA != null) sc -= 0.8; // unknown energy is a gamble
       // variety: not the same artist or album again so soon
       if (t.artist === cur.artist) sc -= 3; else if (recentArtists.has(t.artist)) sc -= 1.5;
@@ -1510,7 +1524,7 @@ class Engine extends Emitter {
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
       // (Cook It Up: long, slow blends — a set should feel like one continuous song)
-      let beats = cookBlend?.club ? (kc < 0.6 ? 16 : 24) : cookBlend ? (kc < 0.6 ? 16 : 32) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
+      let beats = cookBlend?.club ? 16 : cookBlend ? (kc < 0.6 || cookBlend.throwEcho ? 16 : 24) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
       while (beats > 8 && beats * beat > Math.min(dur * 0.4, durB * 0.45, 28)) beats -= 8;
       const overlapTrack = beats * beat;
       const overlap = overlapTrack / aRate; // real seconds
@@ -1554,15 +1568,20 @@ class Engine extends Emitter {
             const eGap = eA != null && eB != null ? Math.abs(eA - eB) / 20 : 0;
             let cookS = 0;
             if (cookBlend) {
-              // energy must flow: the incoming song at the energy the outgoing one is leaving with
-              if (eA != null && eB != null) cookS += Math.abs(eA - eB) / 8;
+              // energy must flow: the incoming song at the energy the outgoing one is leaving with —
+              // and never lower (a dip in the middle of a set is what makes a mix feel flat)
+              if (eA != null && eB != null) cookS += Math.abs(eA - eB) / 8 + Math.max(0, eA - eB - 4) / 5;
+              // leave from a strong part of the song (not its quiet outro) and come in on a strong part
+              const avgA = loudAt(aA, 0, dur), avgB = loudAt(aB, 0, durB);
+              if (eA != null && avgA != null && eA < avgA - 6) cookS += (avgA - 6 - eA) / 6;
+              if (eB != null && avgB != null && eB < avgB - 8) cookS += (avgB - 8 - eB) / 8;
               // leave as the outgoing song winds down or breaks (its next part is quieter), not mid-peak
               const after = loudAt(aA, ms + ovT, ms + ovT + 8);
               if (eA != null && after != null) cookS += after < eA - 6 ? -1.2 : after > eA + 6 ? 1.2 : 0;
               // never start the next song in the middle of a sung line
               if (vB && vB.some(([a, b]) => a < st.bS - 0.1 && b > st.bS + 0.2)) cookS += 3;
               // starting later in the next song costs a little (its intro is usually the smoothest way in)
-              cookS += (st.phrase || 0) * 0.35;
+              cookS += (st.phrase || 0) * 0.15;
               // never fade the outgoing singer out in the middle of a line: the blend ends between lines
               if (vA && vA.some(([a, b]) => a < ms + ovT * 0.7 && b > ms + ovT * 0.9)) cookS += cookBlend.club ? 3 : 2;
               // the blend finishes right where the outgoing song changes section (verse→chorus, chorus→break):
@@ -1676,7 +1695,7 @@ class Engine extends Emitter {
     // Smooth & Hype are a DJ set: the mix itself is the regular DJ engine (beat-matched, phrase-aligned,
     // bass swap, vocals kept apart, drop landed) — what makes it a set is the song picking (cookPickNext).
     // Hype adds the odd echo throw; the stand-alone effects are Wild only.
-    if (level !== 'wild' && !after) return { cookBlend: true, club: level === 'club', throwEcho: level === 'hype' && rnd() < 0.25, cookKind: 'blend' };
+    if (level !== 'wild' && !after) return { cookBlend: true, club: level === 'club' || level === 'hype', throwEcho: level === 'hype' && rnd() < 0.35, cookKind: 'blend' };
     const recent = this.cookHist || [];
     let pool = Object.keys(W).filter((k) => !recent.includes(k) && !exclude.includes(k));
     if (after) pool = pool.filter((k) => k !== 'blend'); // after a jump there's no room planning a long blend
@@ -2023,6 +2042,7 @@ class Engine extends Emitter {
         // the next song didn't start: no half-started mix — keep this song going and move on
         // cleanly at its end (the next song keeps loading meanwhile)
         console.warn('next song did not start in time; mixing at the end instead');
+        dlog('mix-no-start', { from: A.track?.title, to: B.track?.title, rs: B.el.readyState });
         if (B.token === tokB) { try { B.el.pause(); } catch (e) { /* */ } this.setFade(B, 0); }
         this.lateSeek = true; this._lateGo = false;
         return;
@@ -2140,6 +2160,7 @@ class Engine extends Emitter {
     this.notePlayed(A);
     const total = (p.style === 'echo' ? 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
     this.transition = { from: A, to: B, plan: p, at: performance.now(), total: 0 };
+    dlog('mix', { from: A.track?.title, to: B.track?.title, at: A.el.currentTime, plan: p.mixStart, style: p.label, bReady: B.el.readyState });
     queueMicrotask(() => this.emit('transition', true));
     this.ai = 1 - this.ai;
     this.index = nx.index;
@@ -2271,6 +2292,7 @@ class Engine extends Emitter {
   }
   finishTransition() {
     if (!this.transition) return;
+    dlog('mix-done', { song: this.transition.to?.track?.title, at: this.transition.to?.el.currentTime, playing: !this.transition.to?.el.paused });
     this._changedAt = performance.now();
     clearTimeout(this.transitionTimer);
     const { from, to } = this.transition;
@@ -2307,6 +2329,9 @@ class Engine extends Emitter {
     const d = this.cur;
     if (!d.track) return;
     this.checkSeek(d);
+    // the last spot this song was really playing at — recovery always reopens here, never at 0
+    // (a hiccuping stream on iPhone can briefly report position 0 or its start point)
+    if (!d.el.paused && d.el.readyState >= 3 && !d.el.seeking && (d.el.currentTime || 0) > 0.5) d._good = { id: d.track.id, pos: d.el.currentTime, at: performance.now() };
     this.checkStall(d);
     const ctNow = d.el.currentTime || 0;
     if (!this._clk || this._clk.d !== d || this._clk.ct !== ctNow || !this.playing) this._clk = { d, ct: ctNow, at: performance.now() };

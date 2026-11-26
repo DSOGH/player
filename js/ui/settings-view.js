@@ -14,7 +14,7 @@ import { plex } from '../plex.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.32.0';
+export const APP_VERSION = '1.33.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -276,7 +276,7 @@ function playback() {
     `)}
     ${tm === 'smart' ? group('DJ Cook It Up', html`
       ${button('cook-it-up', 'sparkle', 'Start DJ Cook It Up', { sub: 'Your whole library as a DJ set — songs picked to fit each other, mixed on the beat' })}
-      ${seg('cookLevel', 'Style', [['smooth', 'Smooth'], ['club', 'Club'], ['hype', 'Hype'], ['wild', 'Wild']], { club: 'Like a club DJ: songs picked to fit, mixed on the beat — and it isn’t afraid to leave a song as early as halfway when that’s the best moment.', smooth: 'A real DJ set: each next song is picked to fit (tempo, key, genre, energy) and mixed slowly on the beat — long EQ blends, vocal bridges (one song singing over the other’s beat) and beat swaps. No cuts, no slides.', hype: 'The same set, plus the odd echo throw as songs leave.', wild: 'Party tricks: loop rolls, brakes, spin-backs, risers, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
+      ${seg('cookLevel', 'Style', [['smooth', 'Smooth'], ['club', 'Club'], ['hype', 'Hype'], ['wild', 'Wild']], { club: 'Like a club DJ: songs picked to fit, mixed on the beat — and it isn’t afraid to leave a song as early as halfway when that’s the best moment.', smooth: 'A real DJ set: each next song is picked to fit (tempo, key, genre, energy) and mixed slowly on the beat — long EQ blends, vocal bridges (one song singing over the other’s beat) and beat swaps. No cuts, no slides.', hype: 'Keeps the energy up: leaves songs early on a strong part, comes in on the next song’s big part, short tight blends and echo throws.', wild: 'Party tricks: loop rolls, brakes, spin-backs, risers, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
     `) : ''}
     ${group('Playing', html`
       ${toggle('skipFade', 'Fade when skipping', 'Off = the next song starts instantly when you press ⏭ / ⏮')}
@@ -523,6 +523,7 @@ function about() {
       <a class="set-row link" href="https://github.com/DSOGH/player#install-on-your-phone" target="_blank" rel="noopener"><span class="set-ic">${icon('plus')}</span><div class="set-text"><span>Add to Home Screen</span></div>${icon('right', 'chev')}</a>
       <a class="set-row link" href="https://github.com/DSOGH/player" target="_blank" rel="noopener"><span class="set-ic">${icon('info')}</span><div class="set-text"><span>Source code</span></div>${icon('right', 'chev')}</a>
       ${button('force-refresh', 'refresh', 'Refresh App', { sub: 'Loads the newest version — stays signed in' })}
+      ${button('copy-diag', 'copy', 'Copy playback report', { sub: 'If music lags, freezes or skips: copy this and paste it in a message' })}
     `)}
     ${group('Tips', html`<div class="help">
       <p>• Swipe the mini player left/right to skip. Swipe the player down to close it.</p>

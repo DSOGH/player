@@ -6,6 +6,7 @@ import { nasUrl } from './util.js';
 import { plex } from './plex.js';
 import { onlineBpm, tempoRelation } from './bpm-online.js';
 import { skv } from './db.js';
+import { dlog } from './diag.js';
 
 const SR = 11025;
 const WIN = 256;               // ~23 ms envelope windows
@@ -39,6 +40,7 @@ function networkOk() {
 let holdUntil = 0;
 const bgCtls = new Set();
 export function holdBackground(ms = 90000) {
+  dlog('hold-downloads', { s: ms / 1000, stopped: bgCtls.size });
   holdUntil = Math.max(holdUntil, Date.now() + ms);
   for (const c of bgCtls) { try { c.abort(); } catch (e) { /* */ } }
   bgCtls.clear();
@@ -173,7 +175,9 @@ export function analyze(t, { force = false, signal = null, urgent = false } = {}
       const online = await Promise.race([ob, new Promise((r) => setTimeout(() => r(0), 5000))]);
       const tag = t.bpm >= 40 && t.bpm <= 250 ? t.bpm : 0;
       const hint = online || tag;
+      const tA = performance.now();
       let res = await analyzeBuffer(ab, hint);
+      dlog('measured', { song: t.title, mb: ab.byteLength / 1e6, ms: performance.now() - tA, bpm: res?.bpm || 0 });
       if (!res) return null;
       let fixed = 0;
       if (lite) { const d = await getDelay(); if (d != null) { res = shiftRec(res, d); fixed = 1; } }

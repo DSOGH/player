@@ -463,14 +463,19 @@ function renderHint() {
 }
 
 let lastLyricIdx = -1;
-let dragAt = 0;
+let dragAt = 0, scrubId = null;
 function renderTime() {
   const np = $('#np');
   const t = engine.currentTime, d = engine.duration || 0;
   const pct = d ? clamp(t / d, 0, 1) : 0;
   $('#mini .mini-progress i').style.transform = `scaleX(${pct})`;
   // a drag that lost its finger (iOS cancelled the touch) must never freeze the slider
-  if (dragging && performance.now() - dragAt > 1500) { dragging = false; np.querySelector('.scrub').classList.remove('drag'); }
+  // (holding your finger still on it is fine: only a finger that's really gone ends the drag)
+  if (dragging && performance.now() - dragAt > 1500) {
+    const sc = np.querySelector('.scrub');
+    let held = false; try { held = scrubId != null && sc.hasPointerCapture(scrubId); } catch (e) { /* */ }
+    if (!held || performance.now() - dragAt > 20000) { dragging = false; scrubId = null; sc.classList.remove('drag'); }
+  }
   if (!dragging) {
     np.querySelector('.scrub').style.setProperty('--p', pct);
     np.querySelector('.t-cur').textContent = fmtTime(t);
@@ -639,13 +644,14 @@ function wireScrubber() {
     rect = sc.getBoundingClientRect();
     dragging = true; dragAt = performance.now();
     sc.classList.add('drag');
-    sc.setPointerCapture(e.pointerId);
+    try { sc.setPointerCapture(e.pointerId); } catch (er) { /* */ }
+    scrubId = e.pointerId;
     val = pos(e); preview();
   });
   sc.addEventListener('pointermove', (e) => { if (dragging) { dragAt = performance.now(); val = pos(e); preview(); } });
   const end = () => {
     if (!dragging) return;
-    dragging = false;
+    dragging = false; scrubId = null;
     sc.classList.remove('drag');
     engine.seek(val * (engine.duration || 0));
     haptic(5);
