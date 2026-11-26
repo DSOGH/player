@@ -1511,3 +1511,53 @@ body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filte
 /* v1.28.3: the "Hear it" button fits its row (it was clipped, so taps missed it) */
 .np-next-hint.show { height: 28px; }
 .np-next-hint .hear-mix { padding: 4px 11px; line-height: 1.2; }
+
+/* ---------- v1.29: DJ Cook It Up picker ---------- */
+.sheet-panel.ck { padding: 0 0 calc(12px + env(safe-area-inset-bottom)); max-height: 90vh; overflow-y: auto; overscroll-behavior: contain; }
+.ck-hero { position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px; padding: 22px 18px 20px; color: #fff; isolation: isolate; border-radius: 22px 22px 0 0; background: #1a0905; }
+.ck-bg { position: absolute; inset: 0; z-index: -1; filter: blur(26px) saturate(1.4); }
+.ck-bg i { position: absolute; width: 70%; height: 200%; top: -50%; border-radius: 50%; animation: cook-flame 6s ease-in-out infinite alternate; }
+.ck-bg i:nth-child(1) { left: -20%; background: radial-gradient(circle, #ff3d00 0, transparent 65%); }
+.ck-bg i:nth-child(2) { left: 25%; background: radial-gradient(circle, #ffb300 0, transparent 60%); animation-duration: 4.5s; animation-delay: -2s; }
+.ck-bg i:nth-child(3) { right: -25%; background: radial-gradient(circle, #ff1f6b 0, transparent 62%); animation-duration: 7s; animation-delay: -4s; }
+.ck-ic { flex: none; width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; background: rgba(255,255,255,.2); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.ck-ic .ic { width: 28px; height: 28px; }
+.ck-hero b { display: block; font-size: 22px; font-weight: 850; letter-spacing: -.02em; }
+.ck-hero small { font-size: 13px; opacity: .88; }
+.ck-x { all: unset; cursor: pointer; position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.25); }
+.ck-x .ic { width: 14px; height: 14px; }
+.ck-sec { font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--text3); margin: 18px 18px 10px; }
+.ck-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; padding: 0 16px; }
+.ck-card { all: unset; box-sizing: border-box; cursor: pointer; position: relative; display: flex; flex-direction: column; gap: 2px; padding: 8px 8px 10px; border-radius: 16px; background: var(--card); transition: transform .15s, box-shadow .15s; -webkit-tap-highlight-color: transparent; min-width: 0; }
+.ck-card:active { transform: scale(.97); }
+.ck-card.on { box-shadow: inset 0 0 0 2.5px #ff6a00, 0 8px 22px -10px rgba(255,90,0,.7); }
+.ck-card b { font-size: 14px; font-weight: 700; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ck-card small { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ck-mosaic { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--card2); }
+.ck-mosaic.one { grid-template-columns: 1fr; }
+.ck-mosaic .art { width: 100% !important; height: 100% !important; border-radius: 0 !important; }
+.ck-mosaic > i { background: linear-gradient(140deg, var(--card2), var(--card)); }
+.ck-check { position: absolute; top: 14px; right: 14px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: #ff6a00; color: #fff; opacity: 0; transform: scale(.6); transition: opacity .15s, transform .15s; box-shadow: 0 3px 10px rgba(0,0,0,.35); }
+.ck-check .ic { width: 13px; height: 13px; }
+.ck-card.on .ck-check { opacity: 1; transform: none; }
+.ck-note { margin: 10px 18px 0; font-size: 12.5px; color: var(--text3); }
+.ck-styles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 0 16px; }
+.ck-style { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; padding: 12px 6px; border-radius: 16px; background: var(--card); transition: transform .15s, box-shadow .15s, background .15s; min-width: 0; }
+.ck-style:active { transform: scale(.96); }
+.ck-style span { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; background: var(--card2); margin-bottom: 4px; }
+.ck-style span .ic { width: 20px; height: 20px; }
+.ck-style b { font-size: 13.5px; font-weight: 750; }
+.ck-style small { font-size: 10.5px; color: var(--text2); line-height: 1.25; }
+.ck-style.on { background: linear-gradient(160deg, rgba(255,106,0,.22), var(--card)); box-shadow: inset 0 0 0 2px #ff6a00; }
+.ck-style.on span { background: linear-gradient(140deg, #ff3d00, #ffb300); color: #fff; }
+.ck-foot { position: sticky; bottom: 0; padding: 16px 16px 4px; background: linear-gradient(180deg, transparent, var(--sheet-bg, var(--bg2, #1c1c1e)) 30%); }
+.ck-start { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px; border-radius: 16px; color: #fff; font-weight: 800; font-size: 16px; background: linear-gradient(140deg, #ff3d00, #ffb300); box-shadow: 0 12px 26px -12px rgba(255,90,0,.8); transition: transform .12s; }
+.ck-start:active { transform: scale(.98); }
+.ck-start[disabled] { opacity: .4; pointer-events: none; }
+.ck-start .ic { width: 16px; height: 16px; }
+.ck-start small { font-weight: 600; font-size: 12.5px; opacity: .85; }
+@media (max-width: 380px) { .ck-styles { grid-template-columns: repeat(2, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .ck-bg i { animation: none; } }
+
+@media (min-width: 700px) { .ck-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ck-note { margin-bottom: 4px; }

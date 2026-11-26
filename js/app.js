@@ -1158,31 +1158,54 @@ function warmAllCovers() {
 }
 
 // ---------- boot ----------
-// DJ Cook It Up: pick the crate — everything, genres, or "like what's playing" — and the energy
+// DJ Cook It Up: pick the crate — everything, genres, or "like what's playing" — and the style
+const COOK_STYLES = [
+  ['smooth', 'wave', 'Smooth', 'Plays songs out, long slow blends'],
+  ['club', 'bpm', 'Club', 'Leaves songs early on the phrase'],
+  ['hype', 'flame', 'Hype', 'Adds echo throws'],
+  ['wild', 'bolt', 'Wild', 'Rolls, brakes, spin-backs'],
+];
 function cookSheet() {
   const vis = [...library.tracks.values()].filter((t) => library.visible(t));
   if (vis.length < 2) { toast('Add some music first'); return; }
-  const gs = [...(library.genres?.values() || [])].map((G) => ({ ...G, n: G.tracks.filter((t) => library.visible(t)).length })).filter((G) => G.n >= 4).sort((a, b) => b.n - a.n).slice(0, 24);
+  const gs = [...(library.genres?.values() || [])].map((G) => {
+    const tr = G.tracks.filter((t) => library.visible(t));
+    const arts = [...new Set(tr.map((t) => library.album(t.albumId)?.artId).filter(Boolean))].slice(0, 4);
+    return { ...G, n: tr.length, arts };
+  }).filter((G) => G.n >= 4).sort((a, b) => b.n - a.n).slice(0, 24);
+  const allArts = [...new Set(vis.map((t) => library.album(t.albumId)?.artId).filter(Boolean))].sort(() => Math.random() - 0.5).slice(0, 4);
   const cur = engine.track;
   const curG = new Set(String(cur?.genre || '').split(/[;,/]/).map((g) => g.trim().toLowerCase()).filter(Boolean));
   const picked = new Set();
   const sheet = $('#sheet');
   const lv = () => settings.get('cookLevel') || 'smooth';
+  const likePool = () => { const p = vis.filter((t) => t.artist === cur.artist || String(t.genre || '').split(/[;,/]/).some((x) => curG.has(x.trim().toLowerCase()))); return p.length < 8 ? vis : p; };
+  const count = () => {
+    if (picked.has('@cur') && cur) return likePool().length;
+    if (!picked.size) return vis.length;
+    const set = new Set(); for (const id of picked) for (const t of library.genres.get(id)?.tracks || []) if (library.visible(t)) set.add(t.id);
+    return set.size;
+  };
+  const mosaic = (arts) => html`<span class="ck-mosaic">${[0, 1, 2, 3].map((i) => arts[i] ? art(arts[i], 'sm') : html`<i></i>`)}</span>`;
   const draw = () => {
+    const n = count();
     sheet.innerHTML = html`<div class="sheet-backdrop" data-x></div>
-      <div class="sheet-panel cook-sheet">
-        <div class="cook-sheet-head"><span class="cook-ic">${icon('sparkle')}</span><div><div class="sheet-title big">DJ Cook It Up</div><small>A set from your library, picked to fit and mixed on the beat</small></div></div>
-        <div class="cook-sec">Crate</div>
-        <div class="cook-chips">
-          <button class="chip${!picked.size ? ' on' : ''}" data-cg="">Everything <small>${vis.length.toLocaleString()}</small></button>
-          ${cur ? html`<button class="chip${picked.has('@cur') ? ' on' : ''}" data-cg="@cur">${icon('note')} Like “${cur.title}”</button>` : ''}
-          ${gs.map((G) => html`<button class="chip${picked.has(G.id) ? ' on' : ''}" data-cg="${G.id}">${G.name} <small>${G.n}</small></button>`)}
+      <div class="sheet-panel ck">
+        <div class="ck-hero"><span class="ck-bg"><i></i><i></i><i></i></span>
+          <span class="ck-ic">${icon('flame')}</span>
+          <div><b>DJ Cook It Up</b><small>A set from your library — picked to fit, mixed on the beat</small></div>
+          <button class="ck-x" data-x aria-label="Close">${icon('x')}</button>
         </div>
-        ${!gs.length ? html`<p class="cook-note">Your songs don’t have genre tags yet, so the DJ goes by tempo, key and energy.</p>` : ''}
-        <div class="cook-sec">Energy</div>
-        <div class="seg cook-seg">${[['smooth', 'Smooth'], ['club', 'Club'], ['hype', 'Hype'], ['wild', 'Wild']].map(([k, l]) => html`<button class="${lv() === k ? 'on' : ''}" data-cl="${k}">${l}</button>`)}</div>
-        <p class="cook-note">${{ smooth: 'Plays songs out and blends them slowly on the beat.', club: 'Like a club DJ: leaves a song as early as halfway when that’s the best moment, on the phrase.', hype: 'Smooth, plus the odd echo throw.', wild: 'Party tricks: rolls, brakes, spin-backs.' }[lv()]}</p>
-        <button class="btn pill primary cook-start" data-cstart>${icon('play')}Start the set</button>
+        <div class="ck-sec">Style</div>
+        <div class="ck-styles">${COOK_STYLES.map(([k, ic, name, sub]) => html`<button class="ck-style${lv() === k ? ' on' : ''}" data-cl="${k}"><span>${icon(ic)}</span><b>${name}</b><small>${sub}</small></button>`)}</div>
+        <div class="ck-sec">What to play</div>
+        <div class="ck-grid">
+          <button class="ck-card${!picked.size ? ' on' : ''}" data-cg="">${mosaic(allArts)}<b>Everything</b><small>${vis.length.toLocaleString()} songs</small><i class="ck-check">${icon('check')}</i></button>
+          ${cur ? html`<button class="ck-card${picked.has('@cur') ? ' on' : ''}" data-cg="@cur"><span class="ck-mosaic one">${art(library.album(cur.albumId)?.artId || cur.artId, 'sm')}</span><b>Like this song</b><small>${cur.title}</small><i class="ck-check">${icon('check')}</i></button>` : ''}
+          ${gs.map((G) => html`<button class="ck-card${picked.has(G.id) ? ' on' : ''}" data-cg="${G.id}">${mosaic(G.arts)}<b>${G.name}</b><small>${G.n} songs</small><i class="ck-check">${icon('check')}</i></button>`)}
+        </div>
+        ${!gs.length ? html`<p class="ck-note">Your songs don’t have genre tags, so the DJ goes by tempo, key and energy.</p>` : html`<p class="ck-note">Pick one or mix several genres.</p>`}
+        <div class="ck-foot"><button class="ck-start" data-cstart ${n < 2 ? 'disabled' : ''}>${icon('play')}<span>Start the set</span><small>${n.toLocaleString()} songs</small></button></div>
       </div>`.toString();
   };
   draw();
@@ -1195,18 +1218,14 @@ function cookSheet() {
       if (!id) picked.clear();
       else if (id === '@cur') { picked.clear(); picked.add('@cur'); }
       else { picked.delete('@cur'); picked.has(id) ? picked.delete(id) : picked.add(id); }
-      draw(); return;
+      haptic(6); draw(); return;
     }
     const l = e.target.closest('[data-cl]');
-    if (l) { settings.set('cookLevel', l.dataset.cl); draw(); return; }
+    if (l) { settings.set('cookLevel', l.dataset.cl); haptic(6); draw(); return; }
     if (e.target.closest('[data-cstart]')) {
       let pool = null, name = 'DJ Cook It Up', keep = false;
-      if (picked.has('@cur') && cur) {
-        // songs like the one playing: same genre (or same artist) — the set carries on from this song
-        pool = vis.filter((t) => t.artist === cur.artist || String(t.genre || '').split(/[;,/]/).some((x) => curG.has(x.trim().toLowerCase())));
-        if (pool.length < 8) pool = vis;
-        name = `Cook It Up · like ${cur.title}`; keep = true;
-      } else if (picked.size) {
+      if (picked.has('@cur') && cur) { pool = likePool(); name = `Cook It Up · like ${cur.title}`; keep = true; }
+      else if (picked.size) {
         const set = new Set(); for (const id of picked) for (const t of library.genres.get(id)?.tracks || []) if (library.visible(t)) set.add(t);
         pool = [...set];
         name = `Cook It Up · ${[...picked].map((id) => library.genres.get(id)?.name).filter(Boolean).slice(0, 3).join(' + ')}`;

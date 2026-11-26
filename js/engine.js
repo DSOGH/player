@@ -950,6 +950,33 @@ class Engine extends Emitter {
     this.ensureGraph();
     if (autoplay) await this.resume();
     this.finishTransition();
+    // the song you skipped to is already loaded and buffered on the other deck (that's how mixes start
+    // instantly): just switch to it — no new download, no waiting
+    const o = this.other, up = this.upcoming;
+    if (autoplay && up && up.track === t && o.track === t && o.el.readyState >= 3 && Math.abs((o.el.currentTime || 0) - startAt) < (startAt ? 1.5 : 0.8) && !this.transition) {
+      clearTimeout(this.planTimer); this.planTimer = null;
+      if (this.cooking && this.plan) { this.plan._aborted = true; this.cookAbort(this.cur); }
+      const prer = this.plan?.prerolled;
+      this.plan = null; this.upcoming = null; this.emit('plan', null);
+      const old = this.cur;
+      this.notePlayed(old);
+      this.index = i;
+      this._seekTo = null; this._pm = null;
+      this.ai = 1 - this.ai;
+      const d = this.cur;
+      clearInterval(d.rateTimer); d.el.playbackRate = 1;
+      this.resetFx(d); this.applyDeckGain(d);
+      if (!prer) { try { d.el.currentTime = startAt || d.el.currentTime; } catch (e) { /* */ } }
+      this.setFade(d, 0);
+      this.playing = true;
+      d.el.play().catch(() => { /* load failures are handled by recover() */ });
+      this.fade(d, 1, 0.08, { shape: 'equalpower' });
+      this.fade(old, 0, 0.06, { shape: 'linear' });
+      const tok = old.token;
+      setTimeout(() => { if (old.token === tok && old !== this.cur) { if (IOS) { this.setFade(old, 0); old.softUnload(); } else old.unload(); this.reassertNowPlaying(); } }, 140);
+      this.afterTrackChange();
+      return;
+    }
     this.cancelNext();
     const old = this.cur;
     this.notePlayed(old);
@@ -1036,7 +1063,7 @@ class Engine extends Emitter {
       this._anCtl = new AbortController(); this._anFor = t.id;
       analyze(t, { signal: this._anCtl.signal }).then(() => this.warmNext(t));
     };
-    this._anTimer = setTimeout(go, 2500);
+    this._anTimer = setTimeout(go, 6000); // (give the song a head start on the connection first)
   }
   wantsAnalysis() {
     const s = settings.v;
