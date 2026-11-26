@@ -65,6 +65,8 @@ function vocalClash(vA, vB, ms, aRate, bS, bRate, ov) {
 const BASS_CUT = -26;      // dB, low-shelf cut used for DJ "bass swaps"
 const HP_OFF = 12, LP_OFF = 22000;
 
+let lastTailPause = -1e9; // when an old song's player was last put away (after a mix)
+
 class Deck {
   constructor(name) {
     this.name = name;
@@ -136,7 +138,7 @@ class Deck {
     const el = this.el, tok = this.token;
     if (this.raw) { try { el.pause(); } catch (e) { /* */ } return; }
     el._silentTail = true;
-    setTimeout(() => { if (el._silentTail && this.token === tok) { el._silentTail = false; try { el.pause(); } catch (e) { /* */ } } }, 3000);
+    setTimeout(() => { if (el._silentTail && this.token === tok) { el._silentTail = false; lastTailPause = performance.now(); try { el.pause(); } catch (e) { /* */ } } }, 3000);
   }
   unload() {
     this.token++;
@@ -294,7 +296,12 @@ class Engine extends Emitter {
       this.applyMono();
       this.volNode.gain.value = this.volume * this.volume;
       for (const d of this.decks) { d.el.volume = d.fx ? 1 : d.el.volume; if (d.track) this.applyDeckGain(d); }
-      ctx.addEventListener?.('statechange', () => this.emit('state'));
+      ctx.addEventListener?.('statechange', () => {
+        this.emit('state');
+        // iPhone took the audio away (notification, Siri, CarPlay prompt, call) while music plays:
+        // the songs keep running but you'd hear nothing — wake the audio straight back up
+        if (this.playing && ctx.state !== 'running' && ctx.state !== 'closed') { dlog('audio-asleep', { state: ctx.state, song: this.track?.title }); this.resume(); }
+      });
     } catch (e) {
       console.warn('Web Audio unavailable, using simple engine', e);
       this.ctx = null;
@@ -405,8 +412,19 @@ class Engine extends Emitter {
     this.input.channelCountMode = mono ? 'explicit' : 'max';
     this.input.channelInterpretation = 'speakers';
   }
+  // iPhone can leave this hanging forever (after CarPlay, Siri, a call or an alarm took the audio):
+  // never wait more than a moment — the song starts either way and the audio catches up
   async resume() {
-    if (this.ctx && this.ctx.state !== 'running') { try { await this.ctx.resume(); } catch (e) { /* */ } }
+    if (!this.ctx || this.ctx.state === 'running') return;
+    const t0 = performance.now();
+    const ok = await Promise.race([this.ctx.resume().then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 700))]);
+    if (!ok) {
+      dlog('audio-wake-slow', { state: this.ctx.state, ms: performance.now() - t0 });
+      // keep nudging it in the background
+      let n = 0;
+      const nudge = () => { if (!this.ctx || this.ctx.state === 'running' || ++n > 20) return; this.ctx.resume().catch(() => {}); setTimeout(nudge, 500); };
+      nudge();
+    }
   }
 
   // ---------- gains ----------
@@ -634,6 +652,15 @@ class Engine extends Emitter {
       // paused by the OS (another app took audio focus, headphones unplugged...)
       if (el === d.el && d === this.cur && this.playing && !this.transition && !this._pausing && !d.switching && !el.ended && d.track
         && !el.seeking && performance.now() - (this._seekAt || 0) > 1500) {
+        // the new song stopping just after a mix, or just as the old song's player was put away, is a
+        // side effect on iPhone — not you or another app: start it straight back up
+        const now = performance.now();
+        if ((now - (this._changedAt || 0) < 8000 || now - lastTailPause < 1500) && (this._mixKick || 0) < 3) {
+          this._mixKick = (this._mixKick || 0) + 1;
+          dlog('resume-after-mix', { song: d.track?.title, at: el.currentTime, n: this._mixKick });
+          this.resume(); el.play().catch(() => {});
+          return;
+        }
         this.playing = false;
         this.emit('state');
         this.updatePosition();
@@ -1148,7 +1175,7 @@ class Engine extends Emitter {
 
   afterTrackChange(transitionPlan = null) {
     const t = this.track;
-    this._changedAt = performance.now();
+    this._changedAt = performance.now(); this._mixKick = 0;
     this.lateSeek = false; this._lateGo = false;
     this.emit('track', t, transitionPlan);
     this.emit('state');
@@ -2296,7 +2323,7 @@ class Engine extends Emitter {
   finishTransition() {
     if (!this.transition) return;
     dlog('mix-done', { song: this.transition.to?.track?.title, at: this.transition.to?.el.currentTime, playing: !this.transition.to?.el.paused });
-    this._changedAt = performance.now();
+    this._changedAt = performance.now(); this._mixKick = 0;
     clearTimeout(this.transitionTimer);
     const { from, to } = this.transition;
     const st = this.transition.plan?.stems;
@@ -2336,6 +2363,8 @@ class Engine extends Emitter {
     // (a hiccuping stream on iPhone can briefly report position 0 or its start point)
     if (!d.el.paused && d.el.readyState >= 3 && !d.el.seeking && (d.el.currentTime || 0) > 0.5) d._good = { id: d.track.id, pos: d.el.currentTime, at: performance.now() };
     this.checkStall(d);
+    // (and check every couple of seconds, in case the wake-up didn't take)
+    if (this.playing && this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed' && performance.now() - (this._wakeAt || 0) > 2000) { this._wakeAt = performance.now(); this.resume(); }
     const ctNow = d.el.currentTime || 0;
     if (!this._clk || this._clk.d !== d || this._clk.ct !== ctNow || !this.playing) this._clk = { d, ct: ctNow, at: performance.now() };
     this.syncPlayState(d);
@@ -2410,6 +2439,14 @@ class Engine extends Emitter {
       this.updatePosition();
       this._stuck = 0;
     } else if (this.playing && d.el.paused && !d.el.ended && !d.recovering && !this.audible()) {
+      // right after a mix, the new song stopping by itself isn't you: iPhone sometimes pauses it when
+      // the old song's player is put away — start it straight back up (a few tries)
+      if (performance.now() - (this._changedAt || 0) < 8000 && (this._mixKick || 0) < 3) {
+        this._mixKick = (this._mixKick || 0) + 1;
+        dlog('resume-after-mix', { song: d.track?.title, at: ct, n: this._mixKick });
+        this.resume(); d.el.play().catch(() => {});
+        return;
+      }
       if ((this._stuck = (this._stuck || 0) + 1) >= 10) { // 10 ticks × 200 ms
         this._stuck = 0;
         this.playing = false;
