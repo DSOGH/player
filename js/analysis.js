@@ -33,21 +33,52 @@ function networkOk() {
   return true;
 }
 
+// ---- background downloads give way to the music ----
+// When the playing song starts stuttering, every background download (measuring, preloading) is
+// stopped and held back for a while, so the whole connection goes to what you're hearing.
+let holdUntil = 0;
+const bgCtls = new Set();
+export function holdBackground(ms = 90000) {
+  holdUntil = Math.max(holdUntil, Date.now() + ms);
+  for (const c of bgCtls) { try { c.abort(); } catch (e) { /* */ } }
+  bgCtls.clear();
+}
+export const backgroundHeld = () => Date.now() < holdUntil;
+let busyCheck = () => false;
+export function setBusyCheck(fn) { busyCheck = fn; }
+async function waitForGap(signal) {
+  while (Date.now() < holdUntil || busyCheck()) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+export function isCached(t) { return library.isOffline(t) || cachedKeys.has(library.cacheKey(t)); }
+const cachedKeys = new Set();
+
 // Download a track fully and keep it in the "prefetch" cache so playback starts instantly.
-export async function fetchTrackBuffer(t, signal, { store = true } = {}) {
+export async function fetchTrackBuffer(t, signal, { store = true, urgent = false } = {}) {
   const key = library.cacheKey(t);
   for (const name of ['offline-tracks', 'prefetch']) {
     const c = await caches.open(name);
     const hit = await c.match(key);
     if (hit) return hit.arrayBuffer();
   }
-  const r = await fetch(trackSrc(t), signal ? { signal } : undefined);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const blob = await r.blob();
+  // background download: waits for a quiet moment and stops the moment the music needs the connection
+  if (!urgent) await waitForGap(signal);
+  const ctl = new AbortController();
+  if (signal) { if (signal.aborted) ctl.abort(); else signal.addEventListener('abort', () => ctl.abort(), { once: true }); }
+  bgCtls.add(ctl);
+  let blob;
+  try {
+    const r = await fetch(trackSrc(t), { signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    blob = await r.blob();
+  } finally { bgCtls.delete(ctl); }
   if (!t.demo && store) {
     try {
       const c = await caches.open('prefetch');
       await c.put(key, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Content-Length': String(blob.size) } }));
+      cachedKeys.add(key);
       const ks = await c.keys();
       for (let i = 0; i < ks.length - PREFETCH_KEEP; i++) await c.delete(ks[i]);
       navigator.serviceWorker?.controller?.postMessage({ type: 'cache-changed' });
@@ -124,7 +155,7 @@ export async function fixLite() {
   for (const a of [...library.analysis.values()]) if (a.lite && !a.liteFixed) library.setAnalysis({ ...shiftRec(a, d), liteFixed: 1 });
 }
 
-export function analyze(t, { force = false, signal = null } = {}) {
+export function analyze(t, { force = false, signal = null, urgent = false } = {}) {
   if (!t) return Promise.resolve(null);
   if (!force && isAnalyzed(t)) return Promise.resolve(library.analysis.get(t.id));
   if (inflight.has(t.id)) return inflight.get(t.id);
@@ -138,7 +169,7 @@ export function analyze(t, { force = false, signal = null } = {}) {
       // the original if it's already on the phone; otherwise a small copy for big lossless files
       let ab = useLite(t) ? await cachedOriginal(t) : null, lite = false;
       if (!ab && useLite(t)) { try { ab = await fetchLite(t, signal); lite = true; } catch (e) { if (e?.name === 'AbortError') throw e; } }
-      if (!ab) ab = await fetchTrackBuffer(t, signal);
+      if (!ab) ab = await fetchTrackBuffer(t, signal, { urgent });
       const online = await Promise.race([ob, new Promise((r) => setTimeout(() => r(0), 5000))]);
       const tag = t.bpm >= 40 && t.bpm <= 250 ? t.bpm : 0;
       const hint = online || tag;

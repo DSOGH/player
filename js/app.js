@@ -964,7 +964,7 @@ function wireGlobal() {
       sw.axis = Math.abs(mx) > Math.abs(my) * 1.2 ? 'x' : 'y';
       if (sw.axis === 'y') { sw = null; return; } // a scroll: leave it alone
       clearTimeout(lpTimer); lpTimer = null;
-      sw.x0 = e.clientX - Math.sign(mx) * 2; // no jump when the swipe starts
+      sw.x0 = p.clientX - Math.sign(mx) * 2; // no jump when the swipe starts
       const r = sw.row, par = r.offsetParent || r.parentNode;
       const under = document.createElement('div');
       under.className = 'swipe-under';

@@ -3,7 +3,7 @@
 // (silence trimming, fade-aware overlaps, album awareness, beat-matched + tempo-matched mixing).
 import { settings, EQ_FREQS, EQ_PRESETS } from './settings.js';
 import { library } from './library.js';
-import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm, fetchTrackBuffer } from './analysis.js';
+import { analyze, prefetchTrack, trackSrc, isAnalyzed, verifyBpm, fetchTrackBuffer, holdBackground, backgroundHeld, isCached, setBusyCheck } from './analysis.js';
 import { onlineBpm, onlineBpmCached } from './bpm-online.js';
 import { Emitter, shuffleArr, clamp } from './util.js';
 import * as db from './db.js';
@@ -181,6 +181,9 @@ class Engine extends Emitter {
     this.tickTimer = setInterval(() => this.tick(), 200);
     settings.on('change', (k) => this.onSetting(k));
     library.on('analysis', (id) => this.onAnalysis(id));
+    // background downloads wait while a mix runs and for the first 20 s of every song (or while it's
+    // still loading) — that's when the music needs the whole connection
+    setBusyCheck(() => this.playing && (!!this.transition || performance.now() - (this._changedAt || 0) < 20000 || this.cur.el.readyState < 3));
     plex.on?.('connection', () => { this._corsOk = undefined; });
     this.saveState = this.debouncedSave();
     this.skipToken = 0;
@@ -613,7 +616,16 @@ class Engine extends Emitter {
       if (d === this.cur) { this.emit('time'); this.updatePosition(); this.emit('buffering', false); }
     });
     el.addEventListener('seeking', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
-    el.addEventListener('waiting', () => { if (el === d.el && d === this.cur) this.emit('buffering', true); });
+    el.addEventListener('waiting', () => {
+      if (el !== d.el || d !== this.cur) return;
+      this.emit('buffering', true);
+      // the song ran out of data mid-play (not a jump, not just starting): give it the whole connection
+      if (this.playing && !el.seeking && !d.switching && (el.currentTime || 0) > 1.5) {
+        const now = performance.now();
+        this._starve = (this._starve || []).filter((x) => now - x < 30000); this._starve.push(now);
+        holdBackground(this._starve.length > 1 ? 150000 : 60000);
+      }
+    });
     el.addEventListener('pause', () => {
       // paused by the OS (another app took audio focus, headphones unplugged...)
       if (el === d.el && d === this.cur && this.playing && !this.transition && !this._pausing && !d.switching && !el.ended && d.track
@@ -948,7 +960,7 @@ class Engine extends Emitter {
     const need = this.wantsAnalysis() ? [A, nx.track].filter((t) => !isAnalyzed(t)) : [];
     if (need.length) {
       this.emit('hear-wait', true);
-      await Promise.race([Promise.all(need.map((t) => analyze(t).catch(() => null))), new Promise((r) => setTimeout(r, 20000))]);
+      await Promise.race([Promise.all(need.map((t) => analyze(t, { urgent: true }).catch(() => null))), new Promise((r) => setTimeout(r, 20000))]);
       this.emit('hear-wait', false);
       if (this.upcoming !== nx || this.cur.track !== A || this.transition) return null;
     }
@@ -998,7 +1010,7 @@ class Engine extends Emitter {
     if (!this.playing || el.paused || this.transition || this.cooking || d.switching || !d.track || d.track.demo || d.recovering) { this._stall = null; return; }
     const ct = el.currentTime || 0, now = performance.now();
     if (!this._stall || this._stall.d !== d || Math.abs(this._stall.ct - ct) > 0.05) { this._stall = { d, ct, at: now }; return; }
-    if (now - this._stall.at < 7000 || el.readyState >= 3 && !el.seeking) return;
+    if (now - this._stall.at < 10000 || el.readyState >= 3 && !el.seeking) return;
     if (this._stall.done === ct) return;
     this._stall.done = ct; this._stall.at = now;
     console.warn('playback stalled; reopening at', ct.toFixed(1));
@@ -1121,6 +1133,7 @@ class Engine extends Emitter {
 
   afterTrackChange(transitionPlan = null) {
     const t = this.track;
+    this._changedAt = performance.now();
     this.lateSeek = false; this._lateGo = false;
     this.emit('track', t, transitionPlan);
     this.emit('state');
@@ -1169,10 +1182,18 @@ class Engine extends Emitter {
     if (this._anCtl && this._anFor !== t?.id && this._anFor !== this.upcoming?.track?.id) { this._anCtl.abort(); this._anCtl = null; }
     if (t && (!this.wantsAnalysis() || isAnalyzed(t))) { this.warmNext(t); return; }
     if (!t) return;
+    const big = t.plex && (t.size || 0) > 15e6 && !isCached(t);
+    const t0 = performance.now();
     const go = () => {
       if (this.track !== t) return;
       const el = this.cur.el;
-      if (this.playing && (el.paused || el.readyState < 3)) { this._anTimer = setTimeout(go, 1500); return; }
+      if (this.playing && (el.paused || el.readyState < 3 || backgroundHeld())) { this._anTimer = setTimeout(go, 1500); return; }
+      // a big lossless song that's streaming: wait until most of it has come in (so it isn't downloaded
+      // twice at once), at most until 45 s in
+      if (big && this.playing && performance.now() - t0 < 40000) {
+        const b = el.buffered, end = b.length ? b.end(b.length - 1) : 0;
+        if (end < (this.duration || t.duration || 1) * 0.9) { this._anTimer = setTimeout(go, 2000); return; }
+      }
       this._anCtl = new AbortController(); this._anFor = t.id;
       analyze(t, { signal: this._anCtl.signal }).then(() => this.warmNext(t));
     };
@@ -1283,15 +1304,22 @@ class Engine extends Emitter {
     this.upcoming = { index: i, track: t };
     this.computePlan();
     const d = this.other;
-    this.loadDeck(d, t, this.plan?.bStart || 0);
-    this.applyDeckGain(d);
-    this.setFade(d, 0);
-    if (IOS && this.playing) this.reassertNowPlaying();
+    const a = library.analysis.get(t.id);
+    const refresh = a && !a.loud && settings.get('transition') === 'smart' && settings.get('dropAlign') !== false;
+    const willFetch = this.wantsAnalysis() && (!isAnalyzed(t) || refresh) && !t.demo && t.plex && !isCached(t);
+    const load = () => {
+      if (this.upcoming?.track !== t || this.transition || d.track === t) return;
+      this.loadDeck(d, t, this.plan?.bStart || 0);
+      this.applyDeckGain(d);
+      this.setFade(d, 0);
+      if (IOS && this.playing) this.reassertNowPlaying();
+    };
+    // one download per song: when the next song is being downloaded to be measured, its player waits
+    // and then plays that copy from the phone (streaming it at the same time doubled the data and made
+    // the playing song stutter). The tick loads it anyway 35 s before the mix if the download is slow.
+    if (!willFetch) load();
     if (this.wantsAnalysis()) {
-      // songs measured by an older version have no loudness map yet: refresh them so the drop can be found
-      const a = library.analysis.get(t.id);
-      const refresh = a && !a.loud && settings.get('transition') === 'smart' && settings.get('dropAlign') !== false;
-      analyze(t, refresh ? { force: true } : undefined).then(() => { if (this.upcoming?.track === t && !this.transition) this.computePlan(); });
+      analyze(t, refresh ? { force: true } : undefined).then(() => { if (this.upcoming?.track === t && !this.transition) { this.computePlan(); load(); } });
     } else prefetchTrack(t);
     const st = settings.v;
     // lyrics tell the DJ where the singing is: word play needs them, and beat-match blends use them so
@@ -2243,6 +2271,7 @@ class Engine extends Emitter {
   }
   finishTransition() {
     if (!this.transition) return;
+    this._changedAt = performance.now();
     clearTimeout(this.transitionTimer);
     const { from, to } = this.transition;
     const st = this.transition.plan?.stems;
@@ -2323,6 +2352,10 @@ class Engine extends Emitter {
       return;
     }
     const pl = this.plan;
+    if (this.upcoming && this.other.track !== this.upcoming.track && !this.transition && (!pl || t > pl.mixStart - 35 * (d.el.playbackRate || 1) || remaining < 40)) {
+      const o = this.other, nt = this.upcoming.track;
+      this.loadDeck(o, nt, pl?.bStart || 0); this.applyDeckGain(o); this.setFade(o, 0);
+    }
     if (pl && !pl.prerolled && !pl.noPreroll && ['blend', 'under', 'filter', 'crossfade'].includes(pl.style) && t >= pl.mixStart - 3 * (d.el.playbackRate || 1)) this.preroll(pl);
     if (pl && pl.aRate && Math.abs(pl.aRate - 1) > 0.001 && !pl.aRamped && t >= pl.mixStart - (pl.preroll || 4)) {
       pl.aRamped = true;
