@@ -123,17 +123,18 @@ class Deck {
   // iPhone / CarPlay: stopping or emptying the old song's player right after a mix makes iOS think the
   // music paused (wrong button in CarPlay, a click, sometimes it really stops). So the old song just
   // keeps running silently until its own end, or until this deck is needed for the next song.
-  // (it's already faded to silence through Web Audio; nothing about the element itself is changed —
-  // no muting — so iOS treats it exactly as before, and 3 s later it's stopped and emptied as usual)
+  // iPhone: after a mix the old song's player is only ever PAUSED — never emptied (removing its source
+  // and reloading it is what made iOS end the whole audio session: the music stopped after a mix).
+  // It's already silent through Web Audio; 3 s later, once the new song owns Now Playing, it's paused.
   softUnload() {
-    if (this.raw) { this.unload(); return; } // a plain element can't be silenced without stopping it
     this.token++;
     this.track = null;
     clearInterval(this.fadeTimer);
     clearInterval(this.rateTimer);
     const el = this.el, tok = this.token;
+    if (this.raw) { try { el.pause(); } catch (e) { /* */ } return; }
     el._silentTail = true;
-    setTimeout(() => { if (el._silentTail && this.token === tok) { el._silentTail = false; this.unload(); } }, 3000);
+    setTimeout(() => { if (el._silentTail && this.token === tok) { el._silentTail = false; try { el.pause(); } catch (e) { /* */ } } }, 3000);
   }
   unload() {
     this.token++;
@@ -979,7 +980,8 @@ class Engine extends Emitter {
       const tok = old.token;
       setTimeout(() => { if (old.token === tok && old !== this.cur) { if (IOS) { this.setFade(old, 0); old.softUnload(); } else old.unload(); this.reassertNowPlaying(); } }, dur * 1000 + 80);
     } else {
-      this.other.unload();
+      // (iPhone: the other player is just stopped, not emptied — see softUnload)
+      if (IOS) { const o = this.other; o.token++; o.track = null; clearInterval(o.fadeTimer); clearInterval(o.rateTimer); for (const e of Object.values(o.els)) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } } } else this.other.unload();
       this.loadDeck(old, t, startAt);
       this.applyDeckGain(old);
       this.setFade(old, fadeIn ? 0 : 1);
