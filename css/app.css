@@ -1450,3 +1450,61 @@ body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filte
 .cook-seg { display: flex; }
 .cook-start { width: 100%; justify-content: center; margin-top: 18px; background: linear-gradient(140deg, #ff3d00, #ffb300) !important; color: #fff !important; border: 0; font-weight: 750; gap: 8px; }
 .cook-start .ic { width: 16px; height: 16px; }
+
+/* ---------- v1.28: DJ booth, redesigned ---------- */
+.djb { display: flex; flex-direction: column; gap: 12px; }
+.djb-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.djb-head > b { font-size: 20px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.djb-decks { display: grid; grid-template-columns: 1fr auto 1fr; align-items: stretch; gap: 8px; }
+.djb-card { min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: 12px 10px; border-radius: 18px; background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.djb-card.b { background: rgba(255,255,255,.05); }
+.djb-card.empty { justify-content: center; opacity: .5; }
+.djb-art { width: 64%; max-width: 110px; aspect-ratio: 1; margin-bottom: 6px; }
+.djb-art .art { width: 100% !important; height: 100% !important; border-radius: 12px; box-shadow: 0 10px 24px -10px rgba(0,0,0,.6); }
+.djb-card small { font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.5); }
+.djb-card b { font-size: 14px; font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.djb-card > span { font-size: 12px; color: rgba(255,255,255,.6); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.djb-tags { display: flex; gap: 10px; margin-top: 8px; justify-content: center; flex-wrap: wrap; }
+.djb-tags em { font-style: normal; display: flex; flex-direction: column; align-items: center; font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.djb-tags em.dim { opacity: .5; }
+.djb-tags em i { font-style: normal; font-size: 8.5px; font-weight: 800; letter-spacing: .1em; color: rgba(255,255,255,.45); margin-top: 2px; }
+.djb-en span { display: block; width: 30px; height: 6px; margin: 5px 0 3px; border-radius: 3px; background: rgba(255,255,255,.15); position: relative; overflow: hidden; }
+.djb-en span::after { content: ''; position: absolute; inset: 0 auto 0 0; width: var(--e); background: linear-gradient(90deg, #30d158, #ffd60a, #ff453a); border-radius: 3px; }
+.djb-bridge { width: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 3px; }
+.djb-bridge b { font-size: 12.5px; font-weight: 750; line-height: 1.2; }
+.djb-bridge small { font-size: 10.5px; color: rgba(255,255,255,.55); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.djb-bridge .hear-mix { margin: 6px 0 0; }
+.djb-bridge.dim { opacity: .7; }
+.djb-ring { --p: 0; width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 4px;
+  background: conic-gradient(#fff calc(var(--p) * 360deg), rgba(255,255,255,.14) 0); -webkit-mask: radial-gradient(circle, transparent 23px, #000 24px); mask: radial-gradient(circle, transparent 23px, #000 24px); position: relative; }
+.djb-ring > span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; -webkit-mask: none; }
+.djb-bridge { position: relative; }
+.djb-ring + b { margin-top: 2px; }
+.djb-bridge .djb-ring { -webkit-mask: none; mask: none; background: none; }
+.djb-bridge .djb-ring::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(#fff calc(var(--p) * 360deg), rgba(255,255,255,.14) 0); -webkit-mask: radial-gradient(circle, transparent 24px, #000 25px); mask: radial-gradient(circle, transparent 24px, #000 25px); }
+.djb-bridge.live .djb-ring::before { background: conic-gradient(var(--accent, #fff) calc(var(--p) * 360deg), rgba(255,255,255,.14) 0); }
+.djb-bridge.live .djb-ring > span .ic { width: 20px; height: 20px; animation: djb-pulse 1s ease-in-out infinite alternate; }
+@keyframes djb-pulse { from { transform: scale(.9); opacity: .7; } to { transform: scale(1.1); opacity: 1; } }
+.djb-ring .spinner { width: 18px; height: 18px; }
+.djb-curve { width: 100%; height: 64px; display: block; border-radius: 12px; background: rgba(0,0,0,.18); }
+.djb-curve .djb-ov { fill: rgba(255,255,255,.1); }
+.djb-curve polyline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.djb-curve .djb-a { stroke: rgba(255,255,255,.85); }
+.djb-curve .djb-b { stroke: #64d2ff; }
+.djb-curve .djb-now { stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: .9; }
+.djb-why { border-radius: 14px; background: rgba(255,255,255,.06); }
+.djb-why summary { list-style: none; cursor: pointer; padding: 11px 14px; font-size: 13.5px; font-weight: 650; display: flex; justify-content: space-between; }
+.djb-why summary::-webkit-details-marker { display: none; }
+.djb-why summary::after { content: '›'; transition: transform .2s; opacity: .6; }
+.djb-why[open] summary::after { transform: rotate(90deg); }
+.djb-why ol { margin: 0; padding: 0 16px 12px 32px; font-size: 13px; line-height: 1.45; color: rgba(255,255,255,.75); }
+.djb-why li + li { margin-top: 4px; }
+.djb-sub { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.5); margin: 2px 2px -4px; }
+.djb-set { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.djb-set li { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 10px; }
+.djb-set li .art { width: 36px !important; height: 36px !important; border-radius: 7px; flex: none; }
+.djb-st { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.djb-st b { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.djb-st small { font-size: 12px; color: rgba(255,255,255,.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.djb-fit { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-right: 6px; }
+.djb-fit.g { background: #30d158; box-shadow: 0 0 8px #30d158; } .djb-fit.y { background: #ffd60a; } .djb-fit.r { background: #ff453a; } .djb-fit.q { background: rgba(255,255,255,.25); }

@@ -126,6 +126,52 @@ function deck(t, label, rate = 1) {
   </div>`;
 }
 
+// the next mix as a picture: both songs' energy around the mix, the overlap shaded
+function energyCurve(p, A, B) {
+  const aA = library.analysis.get(A.id), aB = library.analysis.get(B.id);
+  if (!aA?.loud || !p || p.mixStart == null) return '';
+  const ovT = (p.overlap || 4) * (p.aRate || 1);
+  const from = Math.max(0, p.mixStart - 24), to = Math.min(A.duration || p.mixStart + ovT + 10, p.mixStart + ovT + 10);
+  const W = 300, H = 64, span = Math.max(1, to - from);
+  const X = (t) => (((t - from) / span) * W).toFixed(1);
+  const Y = (v) => (H - 4 - (Math.max(0, Math.min(100, v)) / 100) * (H - 10)).toFixed(1);
+  // energy around a moment (smoothed over ~3 s, so it reads as a shape, not a scribble)
+  const at = (an, t) => { const L = an?.loud; if (!L) return null; const i = Math.round(t * 2); if (i < 0 || i >= L.length) return null; let s2 = 0, c = 0; for (let j = Math.max(0, i - 3); j <= Math.min(L.length - 1, i + 3); j++) { s2 += L[j]; c++; } return s2 / c; };
+  const ptsA = [], ptsB = [];
+  for (let t = from; t <= to; t += 0.5) {
+    const va = at(aA, t); if (va != null && t <= p.mixStart + ovT) ptsA.push(`${X(t)},${Y(va)}`);
+    if (aB?.loud && t >= p.mixStart) { const tb = (p.bStart || 0) + ((t - p.mixStart) / (p.aRate || 1)) * (p.rate || 1); const vb = at(aB, tb); if (vb != null) ptsB.push(`${X(t)},${Y(vb)}`); }
+  }
+  return html`<svg class="djb-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <rect x="${X(p.mixStart)}" y="0" width="${(X(p.mixStart + ovT) - X(p.mixStart)).toFixed(1)}" height="${H}" rx="6" class="djb-ov"/>
+    ${ptsA.length > 1 ? html`<polyline points="${ptsA.join(' ')}" class="djb-a"/>` : ''}
+    ${ptsB.length > 1 ? html`<polyline points="${ptsB.join(' ')}" class="djb-b"/>` : ''}
+    <line data-dj-now x1="0" x2="0" y1="0" y2="${H}" class="djb-now"/>
+  </svg>`;
+}
+function card(t, label, rate = 1, cls = '') {
+  if (!t) return '';
+  const i = info(t);
+  return html`<div class="djb-card ${cls}">
+    <div class="djb-art">${art(t.artId, 'sm')}</div>
+    <small>${label}</small><b>${t.title}</b><span>${t.artist}</span>
+    <div class="djb-tags">
+      ${i.bpm ? html`<em>${Math.round(i.bpm * rate)}<i>BPM</i></em>` : html`<em class="dim">…<i>BPM</i></em>`}
+      ${i.camelot ? html`<em>${i.camelot}<i>KEY</i></em>` : ''}
+      ${library.analysis.get(t.id) ? html`<em class="djb-en"><span style="--e:${Math.round(i.energy * 100)}%"></span><i>ENERGY</i></em>` : ''}
+    </div>
+  </div>`;
+}
+// how well two songs fit (cheap: tempo + key + energy), for the set list
+function fit(A, B) {
+  const a = info(A), b = info(B);
+  let sc = 0, n = 0;
+  if (a.bpm && b.bpm) { let r = b.bpm / a.bpm; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2; sc += Math.abs(r - 1) <= 0.03 ? 1 : Math.abs(r - 1) <= 0.06 ? 0.5 : 0; n++; }
+  if (a.camelot && b.camelot) { sc += keyCompat(a.camelot, b.camelot) >= 0.85 ? 1 : keyCompat(a.camelot, b.camelot) >= 0.6 ? 0.5 : 0; n++; }
+  if (library.analysis.get(A.id) && library.analysis.get(B.id)) { sc += Math.abs(a.energy - b.energy) < 0.15 ? 1 : Math.abs(a.energy - b.energy) < 0.3 ? 0.5 : 0; n++; }
+  return n ? sc / n : null;
+}
+
 export function renderBooth(box) {
   const t = engine.track;
   if (!t) { box.innerHTML = ''; return; }
@@ -133,71 +179,67 @@ export function renderBooth(box) {
   const tr = engine.transition;
   const style = settings.get('djStyle');
   const mode = settings.get('transition');
-  let trans;
+  const parts = String((tr ? tr.plan : p)?.label || '').split(' · ');
+  const name = parts[0] === 'Cook It Up' ? parts[1] : parts[0];
+  const rest = parts.slice(parts[0] === 'Cook It Up' ? 2 : 1).join(' · ');
+  let bridge;
   if (tr) {
-    trans = html`<div class="dj-trans live">${icon(STYLE_ICON[tr.plan.style] || 'smart')}<div><b>Mixing now → ${tr.to.track?.title || ''}</b><span>${tr.plan.label}</span><div class="dj-mixbar"><i data-dj-mixbar></i></div></div></div>`;
+    bridge = html`<div class="djb-bridge live"><div class="djb-ring" data-dj-ring><span>${icon('mix')}</span></div><b>Mixing now</b><small>${name}</small></div>`;
   } else if (p && nx) {
-    const steps = explain(p, t, nx);
-    trans = html`<div class="dj-trans">
-      <div class="dj-trans-head">${icon(STYLE_ICON[p.style] || 'smart')}<div><b>${p.label}</b><span data-dj-when></span></div>${p.style !== 'gapless' ? html`<button class="hear-mix" data-np="hear-mix">Hear it</button>` : ''}</div>
-      <div class="dj-timeline" data-dj-tl><i class="dj-tl-now"></i><i class="dj-tl-mix"></i>${p.cue ? html`<i class="dj-tl-cue"></i>` : ''}</div>
-      <ol class="dj-steps">${steps.map((s) => html`<li>${s}</li>`)}</ol>
-    </div>`;
-  } else if (engine.queue.length > engine.index + 1 || settings.get('autoplay')) {
-    trans = html`<div class="dj-trans dim"><div class="spinner"></div><div><b>Planning the next mix…</b><span>It’s worked out a few seconds into each song (tempo, key, lyrics) and marked on the scrubber.</span></div></div>`;
-  } else trans = html`<div class="dj-trans dim">${icon('info')}<div><b>Nothing up next</b><span>Add songs or turn on Autoplay.</span></div></div>`;
-
-  // preview the following transitions
-  const q = engine.queue, prev = [];
-  for (let i = engine.index + 1; i + 1 < q.length && prev.length < 4; i++) {
-    const A = library.track(q[i]), B = library.track(q[i + 1]);
-    if (!A || !B) continue;
-    let label;
-    if (!isAnalyzed(A) || !isAnalyzed(B)) label = 'decided when it gets closer';
-    else { try { label = engine.makePlan(A, B, A.duration).label; } catch (e) { label = '—'; } }
-    const cue = style !== 'beats' ? findCue(A, B) : null;
-    prev.push(html`<li><span class="dj-pv-t">${A.title} → ${B.title}</span><span class="dj-pv-l">${cue ? `Word play · “${cue.phrase}”` : label}</span></li>`);
+    bridge = html`<div class="djb-bridge"><div class="djb-ring" data-dj-ring><span data-dj-when>…</span></div><b>${name || 'Mix'}</b><small>${rest}</small>${p.style !== 'gapless' ? html`<button class="hear-mix" data-np="hear-mix">Hear it</button>` : ''}</div>`;
+  } else {
+    bridge = html`<div class="djb-bridge dim"><div class="djb-ring"><span>${engine.queue.length > engine.index + 1 || settings.get('autoplay') ? html`<i class="spinner"></i>` : icon('info')}</span></div><b>${engine.queue.length > engine.index + 1 || settings.get('autoplay') ? 'Planning…' : 'Nothing next'}</b><small>${engine.queue.length > engine.index + 1 ? 'Worked out about 90 s before the end' : 'Add songs or turn on Autoplay'}</small></div>`;
+  }
+  const B = tr ? tr.to.track : nx;
+  // the set: what's coming, and how well each step fits
+  const q = engine.queue, set = [];
+  for (let i = engine.index + (nx ? 2 : 1), prev = nx || t; i < q.length && set.length < 5; i++) {
+    const x = library.track(q[i]); if (!x) continue;
+    const f = fit(prev, x);
+    set.push(html`<li>${art(x.artId, 'sm')}<span class="djb-st"><b>${x.title}</b><small>${x.artist}</small></span>${f == null ? html`<i class="djb-fit q" title="Not analyzed yet"></i>` : html`<i class="djb-fit ${f >= 0.75 ? 'g' : f >= 0.45 ? 'y' : 'r'}" title="Fit with the song before"></i>`}</li>`);
+    prev = x;
   }
   const wk = library.weekStats();
-  box.innerHTML = html`
-    <div class="q-head"><b>DJ Booth</b>
+  box.innerHTML = html`<div class="djb">
+    <div class="djb-head"><b>${engine.cookMode ? (engine.context?.name || 'DJ Cook It Up') : 'DJ'}</b>
       <span class="q-tools">
         <button class="pill-sm${mode === 'smart' ? ' on' : ''}" data-np="mode">${mode === 'smart' ? 'DJ Mix' : mode === 'crossfade' ? 'Crossfade' : 'Gapless'}</button>
-        ${mode === 'smart' ? html`<button class="pill-sm" data-np="dj-style">${engine.cookMode ? "Cook It Up" : STYLE_NAME[style]}</button>` : ''}
+        ${mode === 'smart' && !engine.cookMode ? html`<button class="pill-sm" data-np="dj-style">${STYLE_NAME[style]}</button>` : ''}
       </span></div>
-    ${deck(t, 'Now playing', engine.cur.el.playbackRate || 1)}
-    ${trans}
-    ${nx ? deck(nx, 'Up next', p?.rate || 1) : ''}
-    ${prev.length ? html`<div class="dj-sub">Coming up</div><ol class="dj-preview">${prev}</ol>` : ''}
+    <div class="djb-decks">
+      ${card(tr ? tr.from.track || t : t, tr ? 'Out' : 'Now', (tr ? tr.from : engine.cur).el?.playbackRate || 1, 'a')}
+      ${bridge}
+      ${B ? card(B, tr ? 'In' : 'Next', p?.rate || 1, 'b') : html`<div class="djb-card b empty"><small>Next</small><b>—</b></div>`}
+    </div>
+    ${!tr && p && nx ? energyCurve(p, t, nx) : ''}
+    ${!tr && p && nx ? html`<details class="djb-why"><summary>Why this mix</summary><ol>${explain(p, t, nx).map((x) => html`<li>${x}</li>`)}</ol></details>` : ''}
+    ${set.length ? html`<div class="djb-sub">${engine.cookMode ? 'In the set' : 'Coming up'}</div><ol class="djb-set">${set}</ol>` : ''}
     <div class="dj-actions">
       <button class="pill-sm dj" data-np="dj-order">${icon('mix')}DJ Order</button>
       <button class="pill-sm" data-np="dj-prep">${icon('bpm')}Analyze upcoming</button>
     </div>
-    <div class="dj-foot">${wk.mixes} mixes this week · ${Math.floor(wk.minutes / 60)}h ${wk.minutes % 60}m listened</div>`.toString();
+    <div class="dj-foot">${wk.mixes} mixes this week · ${Math.floor(wk.minutes / 60)}h ${wk.minutes % 60}m listened</div>
+  </div>`.toString();
   tickBooth(box);
 }
 
 export function tickBooth(box) {
-  const tr = engine.transition, bar = box.querySelector('[data-dj-mixbar]');
-  if (tr && bar) bar.style.transform = `scaleX(${tr.total ? Math.min(1, (performance.now() - tr.at) / tr.total) : 0})`;
-  // the booth still shows a finished mix (or a new plan arrived): redraw
-  if ((!tr && bar) || (tr && box.querySelector('[data-dj-when]'))) { renderBooth(box); return; }
-  const p = engine.plan;
-  const el = box.querySelector('[data-dj-when]');
+  const tr = engine.transition, ring = box.querySelector('[data-dj-ring]');
+  const live = !!box.querySelector('.djb-bridge.live');
+  // a mix started or finished (or a new plan arrived): redraw
+  if (!!tr !== live) { renderBooth(box); return; }
+  if (tr) { if (ring) ring.style.setProperty('--p', tr.total ? Math.min(1, (performance.now() - tr.at) / tr.total) : 0); return; }
+  const p = engine.plan, el = box.querySelector('[data-dj-when]');
   if (!p || !el) return;
-  const t = engine.currentTime, dur = engine.duration || 1;
+  const t = engine.currentTime;
   const left = (p.mixStart - t) / (engine.cur.el.playbackRate || 1);
-  el.textContent = left > 0 ? `Starts in ${fmtTime(left)} · at ${fmtTime(p.mixStart)}` : 'Starting…';
-  const tl = box.querySelector('[data-dj-tl]');
-  if (tl) {
-    const from = Math.max(0, Math.min(t, p.mixStart) - 20), to = Math.min(dur, p.mixStart + (p.overlap || 4) * (p.aRate || 1) + 8);
-    const span = Math.max(1, to - from);
-    const x = (v) => `${Math.max(0, Math.min(100, ((v - from) / span) * 100))}%`;
-    tl.querySelector('.dj-tl-now').style.left = x(t);
-    const mix = tl.querySelector('.dj-tl-mix');
-    mix.style.left = x(p.mixStart);
-    mix.style.width = `calc(${x(p.mixStart + (p.overlap || 0.3) * (p.aRate || 1))} - ${x(p.mixStart)})`;
-    const cue = tl.querySelector('.dj-tl-cue');
-    if (cue && p.cue) cue.style.left = x(p.cue.t);
+  el.textContent = left > 0 ? fmtTime(left) : 'now';
+  if (ring) ring.style.setProperty('--p', Math.max(0, Math.min(1, 1 - left / 90)));
+  const now = box.querySelector('[data-dj-now]');
+  if (now) {
+    const ovT = (p.overlap || 4) * (p.aRate || 1);
+    const from = Math.max(0, p.mixStart - 24), to = Math.min(engine.duration || p.mixStart + ovT + 10, p.mixStart + ovT + 10);
+    const x = Math.max(0, Math.min(300, ((t - from) / Math.max(1, to - from)) * 300)).toFixed(1);
+    now.setAttribute('x1', x); now.setAttribute('x2', x);
   }
 }

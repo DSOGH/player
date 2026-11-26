@@ -130,7 +130,11 @@ class Deck {
     clearInterval(this.fadeTimer);
     clearInterval(this.rateTimer);
     try { this.el.muted = true; } catch (e) { /* */ }
-    this.el._silentTail = true;
+    const el = this.el;
+    el._silentTail = true;
+    // …but only for a moment: once the new song owns "Now Playing" the old one stops (so it isn't
+    // still downloading in the background, competing with the song you're hearing)
+    setTimeout(() => { if (el._silentTail) { el._silentTail = false; try { el.pause(); } catch (e) { /* */ } } }, 3000);
   }
   unload() {
     this.token++;
@@ -1054,9 +1058,10 @@ class Engine extends Emitter {
     const genres = (t) => new Set(String(t.genre || '').toLowerCase().split(/[\/,;&|]+/).map((g) => g.replace(/[^a-z0-9]+/g, ' ').trim()).filter(Boolean));
     const energy = (t) => { const L = library.analysis.get(t.id)?.loud; if (!L?.length) return null; let s2 = 0; for (const v of L) s2 += v; return s2 / L.length; };
     const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot, gA = genres(cur), eA = energy(cur), yA = +cur.year || 0;
-    // a set breathes: energy climbs gently, with a short breather every few songs
+    // a set breathes: energy rises and falls in a slow wave, a few points per song — never a hard drop
+    // or a ballad straight into a banger
     this._cookN = (this._cookN || 0) + 1;
-    const target = eA == null ? null : eA + (this._cookN % 6 === 0 ? -8 : 2);
+    const target = eA == null ? null : eA + 4 * Math.cos(this._cookN / 3);
     const recent = this.queue.slice(Math.max(0, this.index - 5), this.index + 1).map((id) => library.track(id)).filter(Boolean);
     const recentArtists = new Set(recent.map((t) => t.artist)), recentAlbums = new Set(recent.map((t) => t.albumId));
     let best = -1, bestS = -Infinity;
@@ -1083,7 +1088,8 @@ class Engine extends Emitter {
       if (yA && yB) sc += Math.abs(yA - yB) <= 3 ? 0.5 : Math.abs(yA - yB) > 15 ? -0.5 : 0;
       // energy flow
       const eB = energy(t);
-      if (target != null && eB != null) sc -= Math.abs(eB - target) / 15;
+      if (target != null && eB != null) { sc -= Math.abs(eB - target) / 6; if (Math.abs(eB - eA) > 18) sc -= 3; }
+      else if (eA != null) sc -= 0.8; // unknown energy is a gamble
       // variety: not the same artist or album again so soon
       if (t.artist === cur.artist) sc -= 3; else if (recentArtists.has(t.artist)) sc -= 1.5;
       if (recentAlbums.has(t.albumId)) sc -= 1;
@@ -1093,7 +1099,7 @@ class Engine extends Emitter {
       if (st?.p) sc += Math.min(1.2, Math.log2(1 + st.p) * 0.35);
       if (st?.k) sc -= Math.min(2.5, st.k * (st.p ? 0.4 : 0.8));
       // a song we know everything about (tempo, key, energy, where it sings) mixes best
-      if (library.analysis.get(t.id)?.bpm) sc += 0.6;
+      if (library.analysis.get(t.id)?.bpm) sc += 1;
       if (sc > bestS) { bestS = sc; best = j; }
     }
     // tempos for songs nobody has measured yet are looked up online, so the next picks are better
@@ -1302,7 +1308,7 @@ class Engine extends Emitter {
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
       // (Cook It Up: long, slow blends — a set should feel like one continuous song)
-      let beats = cookBlend ? (kc < 0.6 ? 16 : 32) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
+      let beats = cookBlend?.club ? (kc < 0.6 ? 16 : 24) : cookBlend ? (kc < 0.6 ? 16 : 32) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
       while (beats > 8 && beats * beat > Math.min(dur * 0.4, durB * 0.45, 28)) beats -= 8;
       const overlapTrack = beats * beat;
       const overlap = overlapTrack / aRate; // real seconds
@@ -1334,9 +1340,10 @@ class Engine extends Emitter {
         // a big moment), so a high-energy exit meets a high-energy entrance, and a soft one a soft one
         if (cookBlend) for (let ph = 1; ph <= 6; ph++) { const st = bS + ph * 16 * beatB; if (st > durB * 0.4) break; starts.push({ bS: st, dropOn: false, phrase: ph }); }
         for (const st of starts) {
-          for (let k = 0; k < (cookBlend ? 8 : 4); k++) {
+          for (let k = 0; k < (cookBlend?.club ? 24 : cookBlend ? 8 : 4); k++) {
             const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
-            if (ms <= 1 || ms < dur * (cookBlend ? 0.55 : 0.4)) break;
+            // (Club: like a club DJ, it'll leave a song as early as halfway if that's the best moment)
+            if (ms <= 1 || ms < dur * (cookBlend?.club ? 0.45 : cookBlend ? 0.55 : 0.4)) break;
             const ov = ovT / aRate;
             const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, st.bS, bRate, ov) : 0;
             // seamless = both songs at a similar energy where they overlap
@@ -1355,7 +1362,7 @@ class Engine extends Emitter {
               cookS += (st.phrase || 0) * 0.35;
             }
             tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
-              score: clash * 6 + (cookBlend ? 0 : eGap) + cookS + (st.dropOn ? -2 : 0) + k * (cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
+              score: clash * 6 + (cookBlend ? 0 : eGap) + cookS + (st.dropOn ? -2 : 0) + k * (cookBlend?.club ? 0.04 : cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
           }
         }
       }
@@ -1376,7 +1383,7 @@ class Engine extends Emitter {
           bStart: pick.bS, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate, vocalClash: pick.clash, stripA, dropAt: pick.dropOn ? drop : null,
         };
         if (cookBlend) {
-          Object.assign(out, { cookKind: 'blend', throwEcho: cookBlend.throwEcho, label: `Cook It Up · Slow EQ blend${cookBlend.throwEcho ? ' + echo throw' : ''} · ${out.label.replace(/^Beat match · /, '')}` });
+          Object.assign(out, { cookKind: 'blend', throwEcho: cookBlend.throwEcho, label: `Cook It Up · ${cookBlend.club && ms < dur * 0.8 ? `Club mix at ${Math.round((ms / dur) * 100)}%` : 'Slow EQ blend'}${cookBlend.throwEcho ? ' + echo throw' : ''} · ${out.label.replace(/^Beat match · /, '')}` });
           // Stem swaps — what DJs do with acapellas/stems: one song's vocal rides on the other song's beat
           // for a while, so the change is carried by the music instead of a fade.
           // clashing keys: shorter, and only one song's melody is heard at a time (mids/highs handed over)
@@ -1457,7 +1464,7 @@ class Engine extends Emitter {
     // Smooth & Hype are a DJ set: the mix itself is the regular DJ engine (beat-matched, phrase-aligned,
     // bass swap, vocals kept apart, drop landed) — what makes it a set is the song picking (cookPickNext).
     // Hype adds the odd echo throw; the stand-alone effects are Wild only.
-    if (level !== 'wild' && !after) return { cookBlend: true, throwEcho: level === 'hype' && rnd() < 0.25, cookKind: 'blend' };
+    if (level !== 'wild' && !after) return { cookBlend: true, club: level === 'club', throwEcho: level === 'hype' && rnd() < 0.25, cookKind: 'blend' };
     const recent = this.cookHist || [];
     let pool = Object.keys(W).filter((k) => !recent.includes(k) && !exclude.includes(k));
     if (after) pool = pool.filter((k) => k !== 'blend'); // after a jump there's no room planning a long blend
@@ -2095,7 +2102,9 @@ class Engine extends Emitter {
     const remaining = dur - t;
     // the next song + its mix are worked out early (10 s into a song), so the mix point is known — and
     // marked on the scrubber — long before it comes, and scrubbing to just before it always works
-    if (!this.upcoming && (remaining < 90 || (this.cookMode && settings.get('cookLevel') === 'wild' && t > 10))) this.prepareNext();
+    // (Club and Wild can leave a song early, so they plan early — on iPhone a little later, to keep the start smooth)
+    const lvl = this.cookMode && settings.get('cookLevel');
+    if (!this.upcoming && (remaining < 90 || ((lvl === 'wild' || lvl === 'club') && t > (IOS ? Math.min(60, this.duration * 0.3) : 10)))) this.prepareNext();
     // Cook It Up loops / brakes need the decoded song: only fetched shortly before they're used
     const cp = this.plan;
     if (cp?.needsBuf && !cp._slice && !cp._slicing && t > cp.mixStart - 25) this.cookPrepare(cp, this.cur.track);

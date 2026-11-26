@@ -106,7 +106,7 @@ export function home() {
     ${library.size >= 4 ? html`<button class="cook-card" data-a="cook-it-up">
       <span class="cook-bg"><i></i><i></i><i></i></span>
       <span class="cook-ic">${icon('sparkle')}</span>
-      <span class="cook-txt"><b>DJ Cook It Up</b><small>Your whole library at random · tape stops, stutter rolls, risers, dub echoes — never the same twice</small></span>
+      <span class="cook-txt"><b>DJ Cook It Up</b><small>A DJ set from your library — songs picked to fit, energy that flows, mixed on the beat</small></span>
       <span class="cook-go">${icon('play')}</span>
     </button>` : ''}
     ${weekCard()}

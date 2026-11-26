@@ -1180,7 +1180,8 @@ function cookSheet() {
         </div>
         ${!gs.length ? html`<p class="cook-note">Your songs don’t have genre tags yet, so the DJ goes by tempo, key and energy.</p>` : ''}
         <div class="cook-sec">Energy</div>
-        <div class="seg cook-seg">${[['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']].map(([k, l]) => html`<button class="${lv() === k ? 'on' : ''}" data-cl="${k}">${l}</button>`)}</div>
+        <div class="seg cook-seg">${[['smooth', 'Smooth'], ['club', 'Club'], ['hype', 'Hype'], ['wild', 'Wild']].map(([k, l]) => html`<button class="${lv() === k ? 'on' : ''}" data-cl="${k}">${l}</button>`)}</div>
+        <p class="cook-note">${{ smooth: 'Plays songs out and blends them slowly on the beat.', club: 'Like a club DJ: leaves a song as early as halfway when that’s the best moment, on the phrase.', hype: 'Smooth, plus the odd echo throw.', wild: 'Party tricks: rolls, brakes, spin-backs.' }[lv()]}</p>
         <button class="btn pill primary cook-start" data-cstart>${icon('play')}Start the set</button>
       </div>`.toString();
   };
