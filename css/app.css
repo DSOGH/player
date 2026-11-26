@@ -1434,3 +1434,19 @@ body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filte
 .set-more[open] > summary::after { transform: translateY(-50%) rotate(90deg); }
 .set-more > summary span { font-size: 16px; font-weight: 600; } .set-more > summary small { font-size: 12.5px; color: var(--text2); }
 .acct-id { font: 600 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 5px 9px; border-radius: 8px; background: var(--card2); color: var(--text2); -webkit-user-select: all; user-select: all; flex: none; }
+
+/* v1.27: Cook It Up crate picker */
+.cook-sheet { max-height: 86vh; overflow-y: auto; }
+.cook-sheet-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.cook-sheet-head .cook-ic { background: linear-gradient(140deg, #ff3d00, #ffb300); color: #fff; }
+.cook-sheet-head small { color: var(--text2); font-size: 13px; }
+.cook-sec { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text3); margin: 14px 2px 8px; }
+.cook-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.cook-chips .chip { display: inline-flex; align-items: center; gap: 6px; }
+.cook-chips .chip small { opacity: .6; font-size: 11px; }
+.cook-chips .chip .ic { width: 14px; height: 14px; }
+.cook-chips .chip.on { background: linear-gradient(140deg, #ff3d00, #ff8a00); color: #fff; }
+.cook-note { font-size: 13px; color: var(--text2); margin: 8px 2px 0; }
+.cook-seg { display: flex; }
+.cook-start { width: 100%; justify-content: center; margin-top: 18px; background: linear-gradient(140deg, #ff3d00, #ffb300) !important; color: #fff !important; border: 0; font-weight: 750; gap: 8px; }
+.cook-start .ic { width: 16px; height: 16px; }

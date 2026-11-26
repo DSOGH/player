@@ -105,6 +105,10 @@ class Deck {
     clearInterval(this.rateTimer);
     this.el.playbackRate = 1;
     this.el.defaultPlaybackRate = 1;
+    // a deck left running silently after a mix (iPhone, see softUnload) is put to use again
+    for (const e of Object.values(this.els)) { if (e !== this.el && e._silentTail) { e._silentTail = false; try { e.pause(); e.muted = false; } catch (er) { /* */ } } }
+    this.el._silentTail = false;
+    this.el.muted = false;
     this.el.src = (src || trackSrc(track)) + (startAt > 0.05 ? `#t=${startAt.toFixed(3)}` : '');
     this.el.load();
     this.wantStart = startAt;
@@ -116,6 +120,17 @@ class Deck {
       };
       el.addEventListener('loadedmetadata', fix, { once: true });
     }
+  }
+  // iPhone / CarPlay: stopping or emptying the old song's player right after a mix makes iOS think the
+  // music paused (wrong button in CarPlay, a click, sometimes it really stops). So the old song just
+  // keeps running silently until its own end, or until this deck is needed for the next song.
+  softUnload() {
+    this.token++;
+    this.track = null;
+    clearInterval(this.fadeTimer);
+    clearInterval(this.rateTimer);
+    try { this.el.muted = true; } catch (e) { /* */ }
+    this.el._silentTail = true;
   }
   unload() {
     this.token++;
@@ -584,16 +599,27 @@ class Engine extends Emitter {
   }
   // ---------- queue ----------
   // DJ Cook It Up: your whole library in random order, mixed with a different wild transition each time
-  cookItUp(pool = null) {
-    const all = (pool || [...library.tracks.values()].filter((t) => library.visible(t))).filter((t) => (t.duration || 200) > 45);
+  cookItUp(pool = null, { keepCurrent = false, name = 'DJ Cook It Up' } = {}) {
+    let all = (pool || [...library.tracks.values()].filter((t) => library.visible(t))).filter((t) => (t.duration || 200) > 45);
     if (!all.length) return false;
     for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+    // start somewhere it knows sounds good: a liked / often-played song from the crate
+    if (!keepCurrent) {
+      const fav = all.findIndex((t) => library.likes.has(t.id) || (library.stats[t.id]?.p || 0) >= 3);
+      if (fav > 0 && fav < 80) all.unshift(...all.splice(fav, 1));
+    }
+    const cur = keepCurrent && this.track;
+    if (cur) all = [cur, ...all.filter((t) => t.id !== cur.id)];
     // Cook It Up only applies to this queue: your normal DJ settings aren't touched
     if (settings.get('transition') !== 'smart') { this._cookPrevTransition = settings.get('transition'); settings.set('transition', 'smart'); }
     this.cookSalt = Math.random().toString(36).slice(2);
     this.cookHist = []; this._cookPicked = new Set(); this._userNext = new Set(); this._cookN = 0;
     (async () => { for (const t of all.slice(1, 60)) { if (!this.cookMode) break; if (!library.bpmOf(t)) await onlineBpm(t).catch(() => 0); } })();
-    this.playTracks(all.slice(0, 400), 0, { context: { type: 'cook', name: 'DJ Cook It Up' } });
+    if (cur && this.playing) {
+      // keep the song that's playing; the set continues from it
+      this.queue = all.slice(0, 400).map((t) => t.id); this.index = 0; this.origQueue = null;
+      this.context = { type: 'cook', name }; this.invalidateNext(); this.emit('queue'); this.saveNow();
+    } else this.playTracks(all.slice(0, 400), 0, { context: { type: 'cook', name } });
     return true;
   }
   get cookMode() { return this.context?.type === 'cook'; }
@@ -778,6 +804,8 @@ class Engine extends Emitter {
   async pause() {
     this.playing = false;
     this._pausedAt = Date.now();
+    // a silently-finishing old song (iPhone) stops with you
+    for (const d of this.decks) for (const e of Object.values(d.els)) if (e._silentTail) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } }
     this.emit('state');
     const ds = [this.cur, this.transition?.from].filter(Boolean);
     clearTimeout(this.planTimer); this.planTimer = null;
@@ -794,6 +822,7 @@ class Engine extends Emitter {
   }
   toggle() { return this.playing ? this.pause() : this.play(); }
   next() {
+    if (this.track && this.currentTime < 30 && !this.transition) library.noteSkip(this.track.id);
     const i = this.index + 1 < this.queue.length ? this.index + 1 : this.nextIndex(false);
     if (i < 0) {
       // end of the queue: stop at the start of the last track
@@ -919,7 +948,7 @@ class Engine extends Emitter {
       this.fade(d, 1, dur * 0.8);
       this.fade(old, 0, dur);
       const tok = old.token;
-      setTimeout(() => { if (old.token === tok && old !== this.cur) { old.unload(); this.reassertNowPlaying(); } }, dur * 1000 + 80);
+      setTimeout(() => { if (old.token === tok && old !== this.cur) { if (IOS) { this.setFade(old, 0); old.softUnload(); } else old.unload(); this.reassertNowPlaying(); } }, dur * 1000 + 80);
     } else {
       this.other.unload();
       this.loadDeck(old, t, startAt);
@@ -1058,6 +1087,13 @@ class Engine extends Emitter {
       // variety: not the same artist or album again so soon
       if (t.artist === cur.artist) sc -= 3; else if (recentArtists.has(t.artist)) sc -= 1.5;
       if (recentAlbums.has(t.albumId)) sc -= 1;
+      // songs it knows you like: liked, played a lot, not skipped
+      const st = library.stats[t.id];
+      if (library.likes.has(t.id)) sc += 1.4;
+      if (st?.p) sc += Math.min(1.2, Math.log2(1 + st.p) * 0.35);
+      if (st?.k) sc -= Math.min(2.5, st.k * (st.p ? 0.4 : 0.8));
+      // a song we know everything about (tempo, key, energy, where it sings) mixes best
+      if (library.analysis.get(t.id)?.bpm) sc += 0.6;
       if (sc > bestS) { bestS = sc; best = j; }
     }
     // tempos for songs nobody has measured yet are looked up online, so the next picks are better
@@ -1294,17 +1330,32 @@ class Engine extends Emitter {
         // where the next song comes in: from its first beat, or timed so its drop lands as the blend ends
         const starts = [{ bS, dropOn: false }];
         if (drop) { const st = drop - bt * beatB; if (st > bS + beatB && st <= 75) starts.push({ bS: Math.max(0, st), dropOn: true }); }
+        // Cook It Up can also bring the next song in at one of its later phrases (its first chorus /
+        // a big moment), so a high-energy exit meets a high-energy entrance, and a soft one a soft one
+        if (cookBlend) for (let ph = 1; ph <= 6; ph++) { const st = bS + ph * 16 * beatB; if (st > durB * 0.4) break; starts.push({ bS: st, dropOn: false, phrase: ph }); }
         for (const st of starts) {
-          for (let k = 0; k < 4; k++) {
+          for (let k = 0; k < (cookBlend ? 8 : 4); k++) {
             const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
-            if (ms <= 1 || ms < dur * 0.4) break;
+            if (ms <= 1 || ms < dur * (cookBlend ? 0.55 : 0.4)) break;
             const ov = ovT / aRate;
             const clash = vA && vB ? vocalClash(vA, vB, ms, aRate, st.bS, bRate, ov) : 0;
             // seamless = both songs at a similar energy where they overlap
             const eA = loudAt(aA, ms, ms + ovT), eB = loudAt(aB, st.bS, st.bS + ov * bRate);
             const eGap = eA != null && eB != null ? Math.abs(eA - eB) / 20 : 0;
+            let cookS = 0;
+            if (cookBlend) {
+              // energy must flow: the incoming song at the energy the outgoing one is leaving with
+              if (eA != null && eB != null) cookS += Math.abs(eA - eB) / 8;
+              // leave as the outgoing song winds down or breaks (its next part is quieter), not mid-peak
+              const after = loudAt(aA, ms + ovT, ms + ovT + 8);
+              if (eA != null && after != null) cookS += after < eA - 6 ? -1.2 : after > eA + 6 ? 1.2 : 0;
+              // never start the next song in the middle of a sung line
+              if (vB && vB.some(([a, b]) => a < st.bS - 0.1 && b > st.bS + 0.2)) cookS += 3;
+              // starting later in the next song costs a little (its intro is usually the smoothest way in)
+              cookS += (st.phrase || 0) * 0.35;
+            }
             tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
-              score: clash * 6 + eGap + (st.dropOn ? -2 : 0) + k * 0.7 + (beats - bt) * 0.06});
+              score: clash * 6 + (cookBlend ? 0 : eGap) + cookS + (st.dropOn ? -2 : 0) + k * (cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
           }
         }
       }
@@ -1993,7 +2044,7 @@ class Engine extends Emitter {
     if (from !== this.cur) {
       clearInterval(from.rateTimer);
       try { from.el.preservesPitch = true; from.el.webkitPreservesPitch = true; from.lp?.Q.setValueAtTime(0.7, this.ctx?.currentTime || 0); } catch (e) { /* */ }
-      this.resetFx(from); from.unload(); this.reassertNowPlaying();
+      this.resetFx(from); if (IOS) { this.setFade(from, 0); from.softUnload(); } else from.unload(); this.reassertNowPlaying();
     }
     if (to?.fx && this.ctx) {
       this.voxActive(to, false);

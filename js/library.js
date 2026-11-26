@@ -482,6 +482,13 @@ class Library extends Emitter {
     db.kv.set('stats', this.stats);
     this.emit('played', id);
   }
+  // skipped in its first 30 seconds: the DJ learns what you don't want to hear
+  noteSkip(id) {
+    const s = this.stats[id] || { p: 0, l: 0 };
+    s.k = (s.k || 0) + 1;
+    this.stats[id] = s;
+    db.kv.set('stats', this.stats);
+  }
   recentAlbums(n = 12) {
     const seen = new Map();
     for (const [id, s] of Object.entries(this.stats)) {

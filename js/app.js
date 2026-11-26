@@ -538,12 +538,7 @@ async function doAction(a, el, e) {
     }
     case 'demo': await toggleDemo(true); break;
     case 'plex-signin': plexSignIn(); break;
-    case 'cook-it-up': {
-      if (!engine.cookItUp()) { toast('Add some music first'); break; }
-      haptic(25); toast('🔥 DJ Cook It Up — your whole library, wild transitions', { ms: 3500 });
-      if (settings.get('engine') !== 'enhanced' && /iPhone|iPad/.test(navigator.userAgent)) toast('Tip: turn on Enhanced audio for the full effects on iPhone', { ms: 5000 });
-      break;
-    }
+    case 'cook-it-up': cookSheet(); break;
     case 'toggle-ask': accounts.ask = !accounts.ask; toast(accounts.ask ? 'The app will ask who’s listening when it opens' : 'The app opens straight into your last account'); render({ keepScroll: true }); break;
     case 'cloud-remove': {
       const name = el.dataset.name || 'this account';
@@ -1163,6 +1158,67 @@ function warmAllCovers() {
 }
 
 // ---------- boot ----------
+// DJ Cook It Up: pick the crate — everything, genres, or "like what's playing" — and the energy
+function cookSheet() {
+  const vis = [...library.tracks.values()].filter((t) => library.visible(t));
+  if (vis.length < 2) { toast('Add some music first'); return; }
+  const gs = [...(library.genres?.values() || [])].map((G) => ({ ...G, n: G.tracks.filter((t) => library.visible(t)).length })).filter((G) => G.n >= 4).sort((a, b) => b.n - a.n).slice(0, 24);
+  const cur = engine.track;
+  const curG = new Set(String(cur?.genre || '').split(/[;,/]/).map((g) => g.trim().toLowerCase()).filter(Boolean));
+  const picked = new Set();
+  const sheet = $('#sheet');
+  const lv = () => settings.get('cookLevel') || 'smooth';
+  const draw = () => {
+    sheet.innerHTML = html`<div class="sheet-backdrop" data-x></div>
+      <div class="sheet-panel cook-sheet">
+        <div class="cook-sheet-head"><span class="cook-ic">${icon('sparkle')}</span><div><div class="sheet-title big">DJ Cook It Up</div><small>A set from your library, picked to fit and mixed on the beat</small></div></div>
+        <div class="cook-sec">Crate</div>
+        <div class="cook-chips">
+          <button class="chip${!picked.size ? ' on' : ''}" data-cg="">Everything <small>${vis.length.toLocaleString()}</small></button>
+          ${cur ? html`<button class="chip${picked.has('@cur') ? ' on' : ''}" data-cg="@cur">${icon('note')} Like “${cur.title}”</button>` : ''}
+          ${gs.map((G) => html`<button class="chip${picked.has(G.id) ? ' on' : ''}" data-cg="${G.id}">${G.name} <small>${G.n}</small></button>`)}
+        </div>
+        ${!gs.length ? html`<p class="cook-note">Your songs don’t have genre tags yet, so the DJ goes by tempo, key and energy.</p>` : ''}
+        <div class="cook-sec">Energy</div>
+        <div class="seg cook-seg">${[['smooth', 'Smooth'], ['hype', 'Hype'], ['wild', 'Wild']].map(([k, l]) => html`<button class="${lv() === k ? 'on' : ''}" data-cl="${k}">${l}</button>`)}</div>
+        <button class="btn pill primary cook-start" data-cstart>${icon('play')}Start the set</button>
+      </div>`.toString();
+  };
+  draw();
+  requestAnimationFrame(() => sheet.classList.add('open'));
+  const shut = () => { sheet.classList.remove('open'); setTimeout(() => { if (!sheet.classList.contains('open')) sheet.innerHTML = ''; }, 260); };
+  sheet.onclick = (e) => {
+    const g = e.target.closest('[data-cg]');
+    if (g) {
+      const id = g.dataset.cg;
+      if (!id) picked.clear();
+      else if (id === '@cur') { picked.clear(); picked.add('@cur'); }
+      else { picked.delete('@cur'); picked.has(id) ? picked.delete(id) : picked.add(id); }
+      draw(); return;
+    }
+    const l = e.target.closest('[data-cl]');
+    if (l) { settings.set('cookLevel', l.dataset.cl); draw(); return; }
+    if (e.target.closest('[data-cstart]')) {
+      let pool = null, name = 'DJ Cook It Up', keep = false;
+      if (picked.has('@cur') && cur) {
+        // songs like the one playing: same genre (or same artist) — the set carries on from this song
+        pool = vis.filter((t) => t.artist === cur.artist || String(t.genre || '').split(/[;,/]/).some((x) => curG.has(x.trim().toLowerCase())));
+        if (pool.length < 8) pool = vis;
+        name = `Cook It Up · like ${cur.title}`; keep = true;
+      } else if (picked.size) {
+        const set = new Set(); for (const id of picked) for (const t of library.genres.get(id)?.tracks || []) if (library.visible(t)) set.add(t);
+        pool = [...set];
+        name = `Cook It Up · ${[...picked].map((id) => library.genres.get(id)?.name).filter(Boolean).slice(0, 3).join(' + ')}`;
+      }
+      if (!engine.cookItUp(pool, { keepCurrent: keep, name })) { toast('Not enough songs there'); return; }
+      shut(); haptic(25); toast(`🔥 ${name}`, { ms: 3000 });
+      if (settings.get('engine') !== 'enhanced' && /iPhone|iPad/.test(navigator.userAgent)) toast('Tip: turn on Enhanced audio for the full DJ mixing on iPhone', { ms: 5000 });
+      return;
+    }
+    if (e.target.closest('[data-x]')) shut();
+  };
+}
+
 let cloudAsked = false;
 // the accounts saved in the cloud: pick one to bring onto this device's account (or start a new one).
 // Each account has its own id there, so restoring or saving one never overwrites another.
