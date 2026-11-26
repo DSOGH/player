@@ -1508,3 +1508,6 @@ body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filte
 .djb-st small { font-size: 12px; color: rgba(255,255,255,.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .djb-fit { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-right: 6px; }
 .djb-fit.g { background: #30d158; box-shadow: 0 0 8px #30d158; } .djb-fit.y { background: #ffd60a; } .djb-fit.r { background: #ff453a; } .djb-fit.q { background: rgba(255,255,255,.25); }
+/* v1.28.3: the "Hear it" button fits its row (it was clipped, so taps missed it) */
+.np-next-hint.show { height: 28px; }
+.np-next-hint .hear-mix { padding: 4px 11px; line-height: 1.2; }

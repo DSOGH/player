@@ -193,7 +193,16 @@ async function act(a, el) {
     case 'booth': setMode('booth'); break;
     case 'idle-cook': if (engine.cookItUp()) { haptic(20); toast('🔥 DJ Cook It Up'); } else toast('Add some music first'); break;
     case 'idle-shuffle': { const all = [...library.tracks.values()].filter((x) => library.visible(x)); if (all.length) engine.playTracks(all, -1, { shuffle: true, context: { type: 'library', name: 'All songs' } }); break; }
-    case 'hear-mix': { const p = engine.plan; if (p) { engine.seek(Math.max(0, p.mixStart - 6)); haptic(10); toast('6 seconds before the mix'); } break; }
+    case 'hear-mix': {
+      // jump to just before the next mix (and plan it first if it isn't planned yet)
+      if (!engine.plan) engine.prepareNext();
+      const p = engine.plan;
+      if (!p) { toast(engine.queue.length > engine.index + 1 ? 'Still working out the next mix — try again in a second' : 'Nothing is up next'); break; }
+      const at = p.style === 'gapless' ? Math.max(0, engine.duration - 8) : Math.max(0, p.mixStart - 6);
+      engine.seek(at); haptic(10);
+      toast(p.style === 'gapless' ? 'Same album: these two play back-to-back (no mix)' : '6 seconds before the mix');
+      break;
+    }
     case 'dj-style': {
       const order = ['beats', 'auto', 'wordplay'];
       const nx = order[(order.indexOf(settings.get('djStyle')) + 1) % order.length];
@@ -448,7 +457,7 @@ function renderHint() {
   el.classList.remove('live');
   if (!settings.get('showNextTransition') || !p || !nx) { el.classList.remove('show'); return; }
   el.dataset.mix = p.mixStart;
-  el.innerHTML = html`${icon(p.style === 'gapless' ? 'gapless' : p.style === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em>${p.style !== 'gapless' ? html`<button class="hear-mix" data-np="hear-mix" aria-label="Jump to just before the mix">Hear it</button>` : ''}`;
+  el.innerHTML = html`${icon(p.style === 'gapless' ? 'gapless' : p.style === 'crossfade' ? 'crossfade' : 'smart')}<span>Next: <b>${nx.track.title}</b> · ${p.label}</span><em></em><button class="hear-mix" data-np="hear-mix" aria-label="Jump to just before the mix">Hear it</button>`;
   el.classList.add('show');
 }
 

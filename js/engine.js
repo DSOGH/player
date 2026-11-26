@@ -106,9 +106,8 @@ class Deck {
     this.el.playbackRate = 1;
     this.el.defaultPlaybackRate = 1;
     // a deck left running silently after a mix (iPhone, see softUnload) is put to use again
-    for (const e of Object.values(this.els)) { if (e !== this.el && e._silentTail) { e._silentTail = false; try { e.pause(); e.muted = false; } catch (er) { /* */ } } }
+    for (const e of Object.values(this.els)) { if (e !== this.el && e._silentTail) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } } }
     this.el._silentTail = false;
-    this.el.muted = false;
     this.el.src = (src || trackSrc(track)) + (startAt > 0.05 ? `#t=${startAt.toFixed(3)}` : '');
     this.el.load();
     this.wantStart = startAt;
@@ -124,17 +123,17 @@ class Deck {
   // iPhone / CarPlay: stopping or emptying the old song's player right after a mix makes iOS think the
   // music paused (wrong button in CarPlay, a click, sometimes it really stops). So the old song just
   // keeps running silently until its own end, or until this deck is needed for the next song.
+  // (it's already faded to silence through Web Audio; nothing about the element itself is changed —
+  // no muting — so iOS treats it exactly as before, and 3 s later it's stopped and emptied as usual)
   softUnload() {
+    if (this.raw) { this.unload(); return; } // a plain element can't be silenced without stopping it
     this.token++;
     this.track = null;
     clearInterval(this.fadeTimer);
     clearInterval(this.rateTimer);
-    try { this.el.muted = true; } catch (e) { /* */ }
-    const el = this.el;
+    const el = this.el, tok = this.token;
     el._silentTail = true;
-    // …but only for a moment: once the new song owns "Now Playing" the old one stops (so it isn't
-    // still downloading in the background, competing with the song you're hearing)
-    setTimeout(() => { if (el._silentTail) { el._silentTail = false; try { el.pause(); } catch (e) { /* */ } } }, 3000);
+    setTimeout(() => { if (el._silentTail && this.token === tok) { el._silentTail = false; this.unload(); } }, 3000);
   }
   unload() {
     this.token++;
