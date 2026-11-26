@@ -187,12 +187,27 @@ class Engine extends Emitter {
     const d = this.cur;
     if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 1200 && (d.el.seeking || performance.now() - this._seekAt < 250)) return this._seekTo;
     const ct = d.el.currentTime || 0;
-    // iPhone can stop updating the clock after a seek while the audio carries on: keep counting ourselves
-    const c = this._clk;
-    if (c && c.d === d && c.ct === ct && this.playing && !d.el.seeking && performance.now() - c.at > 450 && this.audible()) {
-      return Math.min(c.ct + ((performance.now() - c.at) / 1000) * (d.el.playbackRate || 1), this.duration || Infinity);
+    const now = performance.now(), r = d.el.playbackRate || 1;
+    // A smooth clock for the scrubber, lyrics and the DJ: iPhone reports the position in coarse, uneven
+    // steps (worse while two songs play during a mix), so position = last known point + elapsed time ×
+    // speed, gently pulled toward what the player reports; a real jump (seek, new song) resets it.
+    let m = this._pm;
+    if (!m || m.d !== d || m.tok !== d.token || !this.playing || d.el.paused || d.el.seeking) {
+      this._pm = { d, tok: d.token, pos: ct, at: now, r, ct };
+      return ct;
     }
-    return ct;
+    let pred = m.pos + ((now - m.at) / 1000) * m.r;
+    if (Math.abs(r - m.r) > 0.0005) { m.pos = pred; m.at = now; m.r = r; }
+    if (ct !== m.ct) {
+      m.ct = ct; m.ctAt = now;
+      const err = ct - pred;
+      if (Math.abs(err) > 0.35) { m.pos = ct; m.at = now; pred = ct; }      // a real jump
+      else { m.pos = pred + err * 0.2; m.at = now; pred = m.pos; }       // drift: ease toward it
+    } else if (now - (m.ctAt || m.at) > 450 && !this.audible()) {
+      // the player's clock stopped and nothing is coming out: it's buffering, so the clock waits too
+      m.pos = Math.min(pred, ct + 0.3); m.at = now; pred = m.pos;
+    }
+    return Math.max(0, Math.min(pred, this.duration || Infinity));
   }
   // is sound actually coming out right now? (tells a frozen clock apart from real buffering)
   audible() {
