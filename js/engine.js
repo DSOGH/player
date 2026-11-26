@@ -147,6 +147,14 @@ class Deck {
   }
 }
 
+// genres a DJ happily moves between (the set can drift, but never lurches across the map)
+const GENRE_NEAR = {
+  hiphop: ['rnb', 'afro', 'electronic', 'latin'], rnb: ['hiphop', 'pop', 'afro', 'jazz'], pop: ['rnb', 'electronic', 'indie', 'kpop', 'latin'],
+  electronic: ['pop', 'hiphop', 'afro'], latin: ['afro', 'pop', 'hiphop'], afro: ['latin', 'hiphop', 'rnb', 'electronic'],
+  rock: ['indie', 'metal', 'folk'], indie: ['rock', 'pop', 'folk', 'electronic'], metal: ['rock'], folk: ['indie', 'country', 'rock'],
+  country: ['folk', 'rock'], jazz: ['rnb', 'classical'], classical: ['jazz', 'soundtrack'], soundtrack: ['classical'], kpop: ['pop', 'electronic'], gospel: ['rnb'],
+};
+
 class Engine extends Emitter {
   constructor() {
     super();
@@ -527,7 +535,7 @@ class Engine extends Emitter {
   }
   async _recover(d, err) {
     const t = d.track;
-    const pos = Math.max(d.wantStart || 0, d.el.currentTime || 0);
+    const pos = this._seekDeck === d && this._seekTo != null ? this._seekTo : Math.max(d.wantStart || 0, d.el.currentTime || 0);
     const wasCur = d === this.cur;
     const retry = (stage, src, raw = d.raw) => {
       if (raw !== d.raw) this.prepareDeck(d, t, raw);
@@ -574,6 +582,15 @@ class Engine extends Emitter {
   wireEl(d, el) {
     el.addEventListener('ended', () => {
       if (el !== d.el || d !== this.cur || this.transition) return;
+      // a stream that "ends" well before the song does (iPhone, after a far jump on a slow connection)
+      // is reopened at that spot once, instead of skipping the song
+      const t = d.track, full = t?.duration || 0;
+      const pos = this._seekDeck === d && this._seekTo != null ? this._seekTo : (el.currentTime || 0);
+      if (t && full > 20 && pos < full - 6 && d._earlyEnd !== d.token) {
+        d.load(t, pos); d._earlyEnd = d.token; this.applyDeckGain(d); this.setFade(d, 1);
+        if (this.playing) d.el.play().catch(() => {});
+        return;
+      }
       this.onEnded();
     });
     el.addEventListener('error', () => {
@@ -913,6 +930,13 @@ class Engine extends Emitter {
     this.updatePosition();
     this.saveState();
   }
+  // "Hear it": jump to just before the planned mix, with the next song already loading so the mix
+  // happens exactly as planned (not a late start or a cut because the next song wasn't there yet)
+  hearMix(at) {
+    const nx = this.upcoming, B = this.other;
+    if (nx && B.track !== nx.track) { this.loadDeck(B, nx.track, this.plan?.bStart || 0); this.applyDeckGain(B); this.setFade(B, 0); }
+    this.seek(at);
+  }
   // a seek that hangs (stream stalled on a slow connection): reopen the song right at that spot
   checkSeek(d) {
     if (this._seekTo == null || this._seekDeck !== d) return;
@@ -1110,9 +1134,8 @@ class Engine extends Emitter {
     const cur = this.cur.track;
     if (!cur) return;
     const tempo = (t) => library.bpmOf(t) || onlineBpmCached(t) || 0;
-    const genres = (t) => new Set(String(t.genre || '').toLowerCase().split(/[\/,;&|]+/).map((g) => g.replace(/[^a-z0-9]+/g, ' ').trim()).filter(Boolean));
     const energy = (t) => { const L = library.analysis.get(t.id)?.loud; if (!L?.length) return null; let s2 = 0; for (const v of L) s2 += v; return s2 / L.length; };
-    const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot, gA = genres(cur), eA = energy(cur), yA = +cur.year || 0;
+    const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot, fA = cur.genreFamily, eA = energy(cur), yA = +cur.year || 0;
     // a set breathes: energy rises and falls in a slow wave, a few points per song — never a hard drop
     // or a ballad straight into a banger
     this._cookN = (this._cookN || 0) + 1;
@@ -1137,8 +1160,8 @@ class Engine extends Emitter {
       if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 2.4 : kc >= 0.6 ? 0.6 : -2.5; }
       else if (kA) sc -= 0.4; // a song whose key we know beats a gamble
       // same vibe: genre, era
-      const gB = genres(t);
-      if (gA.size && gB.size) sc += [...gB].some((g) => gA.has(g)) ? 2.5 : -2;
+      const fB = t.genreFamily;
+      if (fA && fB) sc += fA === fB ? 2.5 : GENRE_NEAR[fA]?.includes(fB) ? 0.6 : -2;
       const yB = +t.year || 0;
       if (yA && yB) sc += Math.abs(yA - yB) <= 3 ? 0.5 : Math.abs(yA - yB) > 15 ? -0.5 : 0;
       // energy flow
@@ -1850,7 +1873,15 @@ class Engine extends Emitter {
         if (!ok || this.plan !== p) return;
       }
     }
-    if (!rolling) { try { await B.el.play(); } catch (e) { if (e.name !== 'AbortError') { this.onEnded(); return; } } }
+    if (!rolling) {
+      const tokA = A.token;
+      let ok = true;
+      try { await B.el.play(); } catch (e) {
+        if (e.name !== 'AbortError') { await new Promise((r) => setTimeout(r, 400)); try { await B.el.play(); } catch (e2) { ok = e2.name === 'AbortError'; } }
+      }
+      if (A.token !== tokA || this.plan !== p || !this.playing) return;
+      if (!ok) { this.onEnded(); return; }
+    }
     const t0 = this.ctx ? this.ctx.currentTime + 0.01 : 0;
     const D = p.overlap || p.outDelay + p.outDur;
     const sh = p.shape;

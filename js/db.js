@@ -73,3 +73,37 @@ export const kv = {
   set: (k, v) => put('kv', v, k),
   del: (k) => del('kv', k),
 };
+
+// Shared by every account on this device: song analysis (BPM, key, beat grid, energy) and online tempos
+// describe the song, not the listener — so switching accounts never measures a song twice.
+let _sh;
+function openShared() {
+  if (_sh) return _sh;
+  _sh = new Promise((res) => {
+    let r;
+    try { r = indexedDB.open('nasplayer-shared', 1); } catch (e) { res(null); return; }
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains('analysis')) d.createObjectStore('analysis', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
+    };
+    r.onsuccess = () => { const d = r.result; d.onversionchange = () => d.close(); res(d); };
+    r.onerror = () => res(null);
+  });
+  return _sh;
+}
+async function sstore(name, mode = 'readonly') { const d = await openShared(); return d ? d.transaction(name, mode).objectStore(name) : null; }
+export const shared = {
+  async all(name) { const s = await sstore(name); return s ? req(s.getAll()) : []; },
+  async get(name, key) { const s = await sstore(name); return s ? req(s.get(key)) : undefined; },
+  async put(name, val, key) { const s = await sstore(name, 'readwrite'); if (s) return req(key === undefined ? s.put(val) : s.put(val, key)); },
+  async putMany(name, vals) {
+    const d = await openShared(); if (!d || !vals.length) return;
+    return new Promise((res) => { const tx = d.transaction(name, 'readwrite'); const s = tx.objectStore(name); for (const v of vals) s.put(v); tx.oncomplete = () => res(); tx.onerror = () => res(); });
+  },
+  async clear(name) { const s = await sstore(name, 'readwrite'); if (s) return req(s.clear()); },
+};
+export const skv = {
+  get: async (k) => { const v = await shared.get('kv', k).catch(() => undefined); return v !== undefined ? v : get('kv', k); },
+  set: (k, v) => shared.put('kv', v, k).catch(() => put('kv', v, k)),
+};

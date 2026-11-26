@@ -30,6 +30,46 @@ async function gunz(b64) {
   return new Response(ds).text();
 }
 
+// ---------- song analysis (BPM, key, beat grid, energy) ----------
+// Saved once for the whole Plex server (it describes the songs, not a listener), so a new phone, a
+// cleared app or another account starts with every song already measured instead of measuring again.
+let merging = false;
+const AN_MAGIC = 'PLAYERAN1:';
+const AN_TITLE = 'Player analysis';
+const AN_FILE = 'player-analysis.json';
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+// the loudness curve (2 points a second, 0–100) is kept as one character per second
+function packLoud(L) {
+  if (!L?.length) return '';
+  let s = '';
+  for (let i = 0; i < L.length; i += 2) { const a = L[i] || 0, b = i + 1 < L.length ? L[i + 1] || 0 : a; s += B64[Math.min(63, Math.round(((a + b) / 2) * 63 / 100))]; }
+  return s;
+}
+function unpackLoud(s) { const out = []; for (const c of s || '') { const v = Math.round(Math.max(0, B64.indexOf(c)) * 100 / 63); out.push(v, v); } return out; }
+export function packAnalysis() {
+  const t = {};
+  for (const a of library.analysis.values()) {
+    if (!a?.id || !a.bpm) continue;
+    const { wave, loud, id, ...rest } = a;
+    t[id] = { ...rest, L: packLoud(loud) };
+  }
+  return t;
+}
+// merge: a song you tapped in yourself wins, then the newest measurement; nothing on this device is lost
+export function mergeAnalysis(t) {
+  let n = 0;
+  const put = [];
+  for (const [id, r] of Object.entries(t || {})) {
+    const mine = library.analysis.get(id);
+    if (mine && (mine.tapped && !r.tapped || (mine.at || 0) >= (r.at || 0) && !(r.tapped && !mine.tapped))) continue;
+    const { L, ...rest } = r;
+    const rec = { ...rest, id, loud: L ? unpackLoud(L) : mine?.loud };
+    library.analysis.set(id, rec); put.push(rec); n++;
+  }
+  if (put.length) { db.shared.putMany('analysis', put).catch(() => {}); merging = true; try { for (const r of put.slice(0, 200)) library.emit('analysis', r.id); } finally { merging = false; } }
+  return n;
+}
+
 class Cloud extends Emitter {
   constructor() { super(); this.state = { at: 0, where: '', error: '' }; this._t = null; this.busy = false; }
 
@@ -42,9 +82,9 @@ class Cloud extends Emitter {
     library.on('likes', later); library.on('playlists', later);
     library.on('played', () => this.schedule(90000)); // stats are backed up automatically too
     friends.on('change', later); friends.on('message', () => this.schedule(60000));
-    library.on('analysis', (id) => { if (library.analysis.get(id)?.tapped) later(); });
+    library.on('analysis', (id) => { if (merging) return; if (library.analysis.get(id)?.tapped) later(); this.scheduleAn(); });
     settings.on('change', (k) => { if (!LOCAL_ONLY.has(k)) later(); });
-    addEventListener('pagehide', () => { if (this._t) this.push(); });
+    addEventListener('pagehide', () => { if (this._t) this.push(); if (this._anT) this.pushAnalysis(); });
   }
   get enabled() { return settings.get('cloudSync') !== false; }
   get available() { return (plex.connected && !!library.plexAnyKey?.()) || !!this.ghToken; }
@@ -70,6 +110,113 @@ class Cloud extends Emitter {
     await library.loadPlayLog();
     out.statsBy = { ...(this.remoteStats || {}), [deviceId()]: { name: deviceName(), at: Date.now(), plays: library.playLog } };
     return out;
+  }
+
+  // ---------- song analysis store ----------
+  scheduleAn(ms = 180000) {
+    if (!this.enabled) return;
+    this._anDirty = true;
+    clearTimeout(this._anT);
+    this._anT = setTimeout(() => this.pushAnalysis(), ms);
+  }
+  async anPlexLists() {
+    const mc = await plex.api('/playlists', { playlistType: 'audio' });
+    return (mc.Metadata || []).filter((p) => p.title === AN_TITLE || p.title.startsWith(AN_TITLE + ' ('));
+  }
+  async anPlexRead() {
+    const lists = await this.anPlexLists();
+    const parts = [];
+    for (const pl of lists) {
+      let sum = pl.summary;
+      if (sum == null) { const mc = await plex.api(`/playlists/${pl.ratingKey}`); sum = mc.Metadata?.[0]?.summary || ''; }
+      const i = (sum || '').indexOf(AN_MAGIC);
+      if (i < 0) continue;
+      const m = sum.slice(i + AN_MAGIC.length).match(/^(\d+)\/(\d+)\/(\d+):([\s\S]*)$/);
+      if (m) parts.push({ i: +m[1], n: +m[2], at: +m[3], b: m[4].trim() });
+    }
+    if (!parts.length) return null;
+    // the newest complete set of pieces
+    const at = Math.max(...parts.map((p) => p.at));
+    const set = parts.filter((p) => p.at === at).sort((a, b) => a.i - b.i);
+    if (set.length !== set[0].n) return null;
+    return JSON.parse(await gunz(set.map((p) => p.b).join('')));
+  }
+  async anPlexWrite(data) {
+    const b = await gz(JSON.stringify(data));
+    let lists = await this.anPlexLists();
+    const key = library.plexAnyKey();
+    if (!key) throw new Error('No Plex songs yet');
+    const uri = `server://${plex.cfg.server.id}/com.plexapp.plugins.library/library/metadata/${key}`;
+    // Plex keeps it in playlist descriptions; long ones are split into pieces, as small as the server needs
+    let size = (await db.kv.get('cloud:anChunk')) || 400000;
+    const at = Date.now();
+    for (;;) {
+      const n = Math.ceil(b.length / size);
+      if (n > 40) throw new Error('Too much analysis for Plex');
+      try {
+        for (let i = 0; i < n; i++) {
+          const title = i ? `${AN_TITLE} (${i + 1})` : AN_TITLE;
+          let pl = lists.find((p) => p.title === title);
+          if (!pl) {
+            const mc = await plex.api('/playlists', { type: 'audio', title, smart: 0, uri }, 'POST');
+            pl = mc.Metadata?.[0]; if (!pl) throw new Error('create');
+            lists.push(pl);
+          }
+          await plex.api(`/playlists/${pl.ratingKey}`, { summary: `Song BPMs & keys measured by Player — shared by all your devices. Please don’t delete.\n\n${AN_MAGIC}${i}/${n}/${at}:${b.slice(i * size, (i + 1) * size)}` }, 'PUT');
+        }
+        // pieces left over from a bigger save
+        for (const pl of lists) { const m = pl.title.match(/\((\d+)\)$/); if (m && +m[1] > n) await plex.api(`/playlists/${pl.ratingKey}`, {}, 'DELETE').catch(() => {}); }
+        await db.kv.set('cloud:anChunk', size);
+        return;
+      } catch (e) {
+        if (size <= 12000) throw e;
+        size = Math.floor(size / 2);
+        lists = await this.anPlexLists();
+      }
+    }
+  }
+  async anGhRead() {
+    const id = await this.ghFindGist();
+    if (!id) return null;
+    const g = await this.ghReq('/gists/' + id);
+    const f = g.files?.[AN_FILE];
+    let txt = f?.content || '';
+    if (f?.truncated && f.raw_url) txt = await (await fetch(f.raw_url)).text();
+    return txt ? JSON.parse(txt) : null;
+  }
+  async anGhWrite(data) {
+    const id = await this.ghFindGist();
+    if (!id) return; // created with the account sync
+    await this.ghReq('/gists/' + id, { method: 'PATCH', body: JSON.stringify({ files: { [AN_FILE]: { content: JSON.stringify(data) } } }) });
+  }
+  // bring the cloud's measurements onto this device (on launch) — songs measured anywhere play mixed here
+  async pullAnalysis() {
+    if (!this.enabled || !this.available) return 0;
+    let n = 0;
+    const got = [];
+    if (plex.connected) got.push(this.anPlexRead().catch(() => null));
+    if (this.ghToken) got.push(this.anGhRead().catch(() => null));
+    for (const d of await Promise.all(got)) if (d?.t) { n += mergeAnalysis(d.t); this._anRemote = Math.max(this._anRemote || 0, Object.keys(d.t).length); }
+    this._anPulled = true;
+    return n;
+  }
+  async pushAnalysis() {
+    clearTimeout(this._anT); this._anT = null;
+    if (!this.enabled || !this.available || this._anBusy) return false;
+    this._anBusy = true;
+    try {
+      if (!this._anPulled) await this.pullAnalysis();
+      const t = packAnalysis();
+      if (!Object.keys(t).length) return false;
+      const data = { v: 1, at: Date.now(), t };
+      if (plex.connected && library.plexAnyKey()) await this.anPlexWrite(data);
+      if (this.ghToken) await this.anGhWrite(data);
+      this._anDirty = false;
+      this.state = { ...this.state, anAt: data.at, anN: Object.keys(t).length };
+      await db.kv.set('cloud', this.state);
+      return true;
+    } catch (e) { console.warn('analysis sync', e); return false; }
+    finally { this._anBusy = false; }
   }
 
   // ---------- where it's saved ----------
@@ -301,6 +448,7 @@ class Cloud extends Emitter {
     const other = mine && (mine.did ? mine.did !== deviceId() : mine.device !== deviceName());
     if (mine && other && (mine.at || 0) > (this.state.pulledAt || 0)) { await this.apply(mine); this.state.pulledAt = mine.at; await db.kv.set('cloud', this.state); }
     await this.push();
+    this.pullAnalysis().then((n) => { if (n) { library.emit('change'); this.emit('analysis', n); } if (this._anDirty || !this._anRemote) this.scheduleAn(8000); }).catch(() => {});
     return mine ? r : null;
   }
   async setGithub(token) {

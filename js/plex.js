@@ -395,6 +395,9 @@ class Plex extends Emitter {
             artist: a.parentTitle, loved: (a.userRating || 0) >= 8,
           });
         }
+        // the artist's genres: the fallback for albums Plex has no genre for
+        const artistG = new Map();
+        try { for (const a of await this.pageAll(`/library/sections/${sid}/all`, { type: 8 })) artistG.set(String(a.ratingKey), (a.Genre || []).map((g) => g.tag).join('; ')); } catch (e) { /* older servers */ }
         p.phase = 'Reading songs';
         const items = await this.pageAll(`/library/sections/${sid}/all`, { type: 10 }, (n, total) => {
           p.done = n; p.total = isFinite(total) ? total : n; this.emit('progress', p);
@@ -426,6 +429,7 @@ class Plex extends Emitter {
             disc: it.parentIndex || 1, discTotal: 0,
             year: it.parentYear || al?.year || it.year || 0,
             genre: al?.genre || '',
+            artistGenre: artistG.get(String(it.grandparentRatingKey)) || '',
             bpm: old?.bpm || 0,
             compilation: false,
             rgTrack: st?.rgTrack, rgAlbum: st?.rgAlbum, rgTrackPeak: st?.rgTrackPeak, rgAlbumPeak: st?.rgAlbumPeak,
@@ -482,7 +486,7 @@ class Plex extends Emitter {
     try { mc = await this.api('/playlists', { playlistType: 'audio' }); } catch (e) { return; }
     const keep = new Set();
     for (const pl of mc.Metadata || []) {
-      if (pl.title === 'Player sync') continue; // where your Player account is kept (cloud.js), not music
+      if (pl.title === 'Player sync' || /^Player analysis( \(\d+\))?$/.test(pl.title)) continue; // where your Player account is kept (cloud.js), not music
       try {
         const items = await this.pageAll(`/playlists/${pl.ratingKey}/items`, {});
         const ids = items.map((it) => 'px' + hash(server.id + ':' + it.ratingKey));

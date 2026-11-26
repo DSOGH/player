@@ -640,7 +640,7 @@ async function doAction(a, el, e) {
     case 'clear-covers': await caches.delete('plexart-v1'); toast('Cover cache cleared'); render({ keepScroll: true }); break;
     case 'clear-analysis':
       if (await confirmSheet('Clear BPM & transition analysis for all songs?', 'Clear Analysis', true)) {
-        await db.clear('analysis'); library.analysis.clear(); toast('Analysis cleared');
+        await db.clear('analysis'); await db.shared.clear('analysis').catch(() => {}); library.analysis.clear(); toast('Analysis cleared');
       }
       break;
     case 'export': {
@@ -1175,11 +1175,10 @@ function cookSheet() {
   }).filter((G) => G.n >= 4).sort((a, b) => b.n - a.n).slice(0, 24);
   const allArts = [...new Set(vis.map((t) => library.album(t.albumId)?.artId).filter(Boolean))].sort(() => Math.random() - 0.5).slice(0, 4);
   const cur = engine.track;
-  const curG = new Set(String(cur?.genre || '').split(/[;,/]/).map((g) => g.trim().toLowerCase()).filter(Boolean));
   const picked = new Set();
   const sheet = $('#sheet');
   const lv = () => settings.get('cookLevel') || 'smooth';
-  const likePool = () => { const p = vis.filter((t) => t.artist === cur.artist || String(t.genre || '').split(/[;,/]/).some((x) => curG.has(x.trim().toLowerCase()))); return p.length < 8 ? vis : p; };
+  const likePool = () => { const p = vis.filter((t) => t.artist === cur.artist || (cur.genreFamily && t.genreFamily === cur.genreFamily)); return p.length < 8 ? vis : p; };
   const count = () => {
     if (picked.has('@cur') && cur) return likePool().length;
     if (!picked.size) return vis.length;

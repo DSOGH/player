@@ -195,11 +195,12 @@ async function act(a, el) {
     case 'idle-shuffle': { const all = [...library.tracks.values()].filter((x) => library.visible(x)); if (all.length) engine.playTracks(all, -1, { shuffle: true, context: { type: 'library', name: 'All songs' } }); break; }
     case 'hear-mix': {
       // jump to just before the next mix (and plan it first if it isn't planned yet)
+      if (engine.transition) break; // already mixing: you're hearing it
       if (!engine.plan) engine.prepareNext();
       const p = engine.plan;
       if (!p) { toast(engine.queue.length > engine.index + 1 ? 'Still working out the next mix — try again in a second' : 'Nothing is up next'); break; }
       const at = p.style === 'gapless' ? Math.max(0, engine.duration - 8) : Math.max(0, p.mixStart - 6);
-      engine.seek(at); haptic(10);
+      engine.hearMix(at); haptic(10);
       toast(p.style === 'gapless' ? 'Same album: these two play back-to-back (no mix)' : '6 seconds before the mix');
       break;
     }
@@ -780,7 +781,8 @@ function startPulse() {
       else level *= 0.82;
       apply(art, glow);
     }
-    if (vizOn) drawViz(buf);
+    // the bars run at ~24 fps (half that while two songs are mixing) — the audio always comes first
+    if (vizOn) { if (now - (loop._vz || 0) >= (engine.transition ? 80 : 40)) { loop._vz = now; drawViz(buf); } }
     else if (viz.dataset.on === '1') { vctx.clearRect(0, 0, viz.width, viz.height); viz.dataset.on = '0'; }
   };
   function apply(art, glow) {
@@ -802,6 +804,7 @@ function startPulse() {
     const bw = (w - gap * (bars - 1)) / bars;
     const hz = engine.ctx.sampleRate / engine.analyser.fftSize;
     vctx.fillStyle = 'rgba(255,255,255,0.16)';
+    vctx.beginPath(); // one shape for all bars: a single fill per frame
     for (let i = 0; i < bars; i++) {
       // log-spaced bands 40 Hz – 14 kHz
       const f0 = 40 * Math.pow(350, i / bars), f1 = 40 * Math.pow(350, (i + 1) / bars);
@@ -809,10 +812,9 @@ function startPulse() {
       for (let k = Math.floor(f0 / hz); k <= Math.ceil(f1 / hz); k++) m = Math.max(m, b[k] || 0);
       const bh = Math.max(2, (m / 255) ** 2.2 * h);
       const x = i * (bw + gap);
-      vctx.beginPath();
-      vctx.roundRect ? vctx.roundRect(x, h - bh, bw, bh, Math.min(3, bw / 2)) : vctx.rect(x, h - bh, bw, bh);
-      vctx.fill();
+      vctx.rect(x, h - bh, bw, bh);
     }
+    vctx.fill();
   }
   requestAnimationFrame(loop);
 }

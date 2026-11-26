@@ -26,6 +26,56 @@ export function trackEdition(t) {
 }
 const splitArtists = (s) => String(s || '').split(/\s+(?:feat\.?|ft\.?|featuring|with)\s+|;\s*/i).map((x) => x.trim()).filter(Boolean);
 
+// ---- genres ----
+// Ordered most specific first; a tag is matched as a whole ("Pop/Rock" is one tag, not "Pop" + "Rock").
+export const GENRE_FAMILIES = [
+  { id: 'holiday', name: 'Holiday', re: /christmas|holiday|xmas/ },
+  { id: 'kids', name: 'Kids', re: /child|kids|nursery|lullab/ },
+  { id: 'comedy', name: 'Comedy & Spoken', re: /comedy|spoken|podcast|audiobook|poetry|stand.?up/ },
+  { id: 'soundtrack', name: 'Soundtracks', re: /soundtrack|\bscore\b|film|movie|musical|show ?tunes|video ?game|\bost\b|cast recording/ },
+  { id: 'gospel', name: 'Gospel & Christian', re: /gospel|christian|worship|praise|\bccm\b|spiritual|inspirational/ },
+  { id: 'kpop', name: 'K-Pop & J-Pop', re: /k-?pop|j-?pop|c-?pop|mandopop|cantopop|korean|japanese|anime|j-?rock/ },
+  { id: 'latin', name: 'Latin', re: /latin|reggaeton|regga?eton|salsa|bachata|cumbia|regional mexican|mexican|corrido|banda|norte[nñ]o|urbano|tropical|merengue|dembow|tango|flamenco|bossa|brazil|sertanejo|funk carioca|mpb/ },
+  { id: 'afro', name: 'Afrobeats & Reggae', re: /afro|amapiano|reggae|dancehall|\bska\b|\bdub\b|soca|caribbean|african|highlife|kizomba/ },
+  { id: 'hiphop', name: 'Hip-Hop & Rap', re: /hip.?hop|\brap\b|rap\b|trap|dirty south|west coast|east coast|drill|grime|crunk|boom.?bap|gangsta|bounce|horrorcore|phonk/ },
+  { id: 'rnb', name: 'R&B & Soul', re: /r&b|r ?& ?b|\brnb\b|r'n'b|rhythm (and|&) blues|soul|funk|motown|new jack|quiet storm|doo.?wop/ },
+  { id: 'metal', name: 'Metal', re: /metal|deathcore|grindcore|djent|thrash|doom/ },
+  { id: 'country', name: 'Country', re: /country|americana|bluegrass|western|honky|outlaw/ },
+  { id: 'electronic', name: 'Dance & Electronic', re: /electr|\bedm\b|dance|house|techno|trance|dubstep|drum ?(and|&|'n'|n) ?bass|\bdnb\b|garage|disco|synth|club|bass music|jungle|breakbeat|hardstyle|ambient|downtempo|chill|lo-?fi|\bidm\b|big room|eurodance|electro/ },
+  { id: 'jazz', name: 'Jazz & Blues', re: /jazz|blues|swing|bebop|big band|bop\b/ },
+  { id: 'classical', name: 'Classical', re: /classical|orchestr|symphon|opera|baroque|chamber|romantic era|concerto|choral/ },
+  { id: 'indie', name: 'Indie & Alternative', re: /indie|alternative|\balt\b|alt-|new wave|dream pop|bedroom|shoegaze|post-punk|emo\b|lo.?fi/ },
+  { id: 'rock', name: 'Rock', re: /rock|punk|grunge|hardcore|britpop|psychedel|garage rock/ },
+  { id: 'folk', name: 'Folk & Acoustic', re: /folk|acoustic|singer.?songwriter|celtic|traditional/ },
+  { id: 'pop', name: 'Pop', re: /pop|top 40|teen|adult contemporary|easy listening|vocal|ballad/ },
+];
+// AllMusic-style catch-alls Plex puts on almost everything: only used when nothing better is there
+const WEAK_TAG = /^(pop\/rock|pop ?& ?rock|rock\/pop|music|other|unknown|misc|various|general|genre|none)$/i;
+const famCache = new Map();
+export function genreFamily(tags, strict = false) {
+  const key = String(tags || '');
+  if (!key) return null;
+  if (strict) { const f = genreFamily(key); return f && f._weak ? null : f; }
+  if (famCache.has(key)) return famCache.get(key);
+  const list = key.split(/[;,|]/).map((s) => s.trim()).filter(Boolean);
+  let out = null;
+  for (const pass of [0]) {
+    for (const g of list) {
+      if (WEAK_TAG.test(g)) continue;
+      const lo = g.toLowerCase();
+      const f = GENRE_FAMILIES.find((x) => x.re.test(lo));
+      if (f) { out = f; break; }
+    }
+    if (out) break;
+  }
+  // a tag that fits none of them keeps its own name
+  if (!out) { const g = list.find((x) => !WEAK_TAG.test(x)); if (g) out = { id: norm(g), name: g }; }
+  // only catch-alls ("Pop/Rock"): Pop, but a better tag (e.g. the artist's) is preferred
+  if (!out && list.length) out = { ...GENRE_FAMILIES.find((x) => x.id === 'pop'), _weak: true };
+  famCache.set(key, out);
+  return out;
+}
+
 class Library extends Emitter {
   constructor() {
     super();
@@ -53,7 +103,13 @@ class Library extends Emitter {
     this.mixesDone = mixes || {};
     this.tracks = new Map(tracks.map((t) => [t.id, t]));
     this.playlists = new Map(pls.map((p) => [p.id, p]));
-    this.analysis = new Map(an.map((a) => [a.id, a]));
+    // song analysis lives in the device-wide store (shared by every account); older copies kept in
+    // this account are merged in once
+    const sh = await db.shared.all('analysis').catch(() => []);
+    this.analysis = new Map(sh.map((a) => [a.id, a]));
+    const move = [];
+    for (const a of an) { const o = this.analysis.get(a.id); if (!o || (a.at || 0) > (o.at || 0) || (a.tapped && !o.tapped)) { this.analysis.set(a.id, a); move.push(a); } }
+    if (move.length) db.shared.putMany('analysis', move).catch(() => {});
     this.likes = new Set(likes || []);
     this.stats = stats || {};
     this.recentSearches = rs || [];
@@ -141,15 +197,29 @@ class Library extends Emitter {
     this.groupEditions(albums);
     this.plexThumbs = new Map();
     for (const t of this.tracks.values()) if (t.plexThumb && t.artId) this.plexThumbs.set(t.artId, t.plexThumb);
+    // every song goes in ONE genre: its tags (album, then artist) are read as a whole and mapped onto a
+    // short list of real genres, so "Pop/Rock", "Hip Hop", "Rap" and "Trap" don't scatter or overlap
     const genres = new Map();
+    const byArtist = new Map();
+    const fam = new Map();
     for (const t of this.tracks.values()) {
-      for (const g of String(t.genre || '').split(/[;,/]/).map((s) => s.trim()).filter(Boolean)) {
-        const k = norm(g);
-        let G = genres.get(k);
-        if (!G) { G = { id: k, name: g, tracks: [], albums: new Set() }; genres.set(k, G); }
-        G.tracks.push(t);
-        G.albums.add(t.albumId);
+      const f = genreFamily(t.genre, true) || genreFamily(t.artistGenre, true) || genreFamily(t.genre) || genreFamily(t.artistGenre);
+      if (f) { fam.set(t.id, f); const k = norm(t.albumArtist || t.artist); const m = byArtist.get(k) || new Map(); m.set(f.id, (m.get(f.id) || 0) + 1); byArtist.set(k, m); }
+    }
+    for (const t of this.tracks.values()) {
+      let f = fam.get(t.id);
+      if (!f) {
+        // no tags: the genre this artist's other songs have
+        const m = byArtist.get(norm(t.albumArtist || t.artist));
+        const best = m && [...m.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (best) f = GENRE_FAMILIES.find((x) => x.id === best[0]) || { id: best[0], name: best[0] };
       }
+      if (!f) continue;
+      t.genreFamily = f.id;
+      let G = genres.get(f.id);
+      if (!G) { G = { id: f.id, name: f.name, tracks: [], albums: new Set() }; genres.set(f.id, G); }
+      G.tracks.push(t);
+      G.albums.add(t.albumId);
     }
     this.albums = albums;
     this.artists = artists;
@@ -533,7 +603,7 @@ class Library extends Emitter {
   // ---- analysis ----
   setAnalysis(a) {
     this.analysis.set(a.id, a);
-    db.put('analysis', a);
+    db.shared.put('analysis', a).catch(() => db.put('analysis', a));
     this.emit('analysis', a.id);
   }
 

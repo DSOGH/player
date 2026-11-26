@@ -49,7 +49,7 @@ export async function computeStats(range = '4w', source = 'all') {
   const tracks = tally(inR, (t) => t.id).map((v) => ({ ...v, track: library.track(v.key) }));
   const artists = tally(inR, (t) => t.artistId).map((v) => ({ ...v, artist: library.artists.get(v.key) })).filter((v) => v.artist);
   const albums = tally(inR, (t) => t.albumId).map((v) => ({ ...v, album: library.album(v.key) })).filter((v) => v.album);
-  const genres = tally(inR, (t) => (t.genre ? String(t.genre).split(/[;,/]/).map((g) => g.trim()).filter(Boolean).slice(0, 2) : [])).slice(0, 8);
+  const genres = tally(inR, (t) => { const G = t.genreFamily && library.genres.get(t.genreFamily); return G ? [G.name] : []; }).slice(0, 8);
   const decades = tally(inR, (t) => (t.year ? `${Math.floor(t.year / 10) * 10}s` : null)).sort((a, b) => a.key.localeCompare(b.key));
 
   // timeline: daily (4 weeks), weekly (6 months), monthly (longer)

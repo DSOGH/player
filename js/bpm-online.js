@@ -1,7 +1,7 @@
 // Looks a song's tempo up online (Deezer's public catalogue) the first time it's needed and keeps the
 // answer on the device forever, so the DJ starts from the real BPM instead of a half-/double-time guess.
 // Deezer's API has no CORS headers, so it's read through JSONP (a <script> tag), which needs no key.
-import { kv } from './db.js';
+import { skv as kv } from './db.js';
 import { settings } from './settings.js';
 
 const TTL_MISS = 30 * 864e5;     // retry songs Deezer didn't know after a month
