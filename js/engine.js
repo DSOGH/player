@@ -961,8 +961,49 @@ class Engine extends Emitter {
     if (B.track !== nx.track) { this.loadDeck(B, nx.track, p.bStart || 0); this.applyDeckGain(B); this.setFade(B, 0); }
     const at = p.style === 'gapless' ? Math.max(0, this.duration - 8) : Math.max(0, p.mixStart - 6 * (this.cur.el.playbackRate || 1));
     this._hearing = true;
-    try { this.seek(at); } finally { this._hearing = false; }
+    try {
+      const d = this.cur;
+      // iPhone: jumping far inside a song that's streaming can stall (the clock stops, the mix never
+      // comes). Reopening the song right at that spot is what starting a song mid-way does — reliable.
+      if (IOS && d.track && !d.track.demo && d.fx && this.playing) this.reopenAt(d, at);
+      else this.seek(at);
+    } finally { this._hearing = false; }
     return p;
+  }
+  // open the playing song again at a given spot (quick fade so there's no click)
+  reopenAt(d, at) {
+    const t = d.track;
+    this.stopPreroll(); clearTimeout(this.planTimer); this.planTimer = null;
+    if (this.plan) this.plan.aRamped = false;
+    this.lateSeek = false; this._lateGo = false;
+    this._seekTo = at; this._seekAt = performance.now(); this._seekDeck = d; this._seekRetried = false; this._pm = null;
+    this.fade(d, 0, 0.04, { shape: 'linear' });
+    const tok = d.token;
+    setTimeout(() => {
+      if (d.token !== tok || d !== this.cur) return;
+      d.load(t, at, (d.el.currentSrc || '').split('#')[0] || null);
+      this.applyDeckGain(d); this.setFade(d, 0);
+      const el = d.el;
+      const up = () => { if (d === this.cur && d.track === t) this.fade(d, 1, 0.15, { shape: 'equalpower' }); };
+      el.addEventListener('playing', up, { once: true });
+      setTimeout(up, 2500);
+      el.play().catch(() => {});
+      this.emit('time'); this.updatePosition(); this.saveState();
+    }, 45);
+  }
+  // the clock stopped while the song should be playing (stream stalled on iPhone / slow Plex):
+  // after 7 s with nothing coming in, reopen the song at that spot (once per spot)
+  checkStall(d) {
+    const el = d.el;
+    if (!this.playing || el.paused || this.transition || this.cooking || d.switching || !d.track || d.track.demo || d.recovering) { this._stall = null; return; }
+    const ct = el.currentTime || 0, now = performance.now();
+    if (!this._stall || this._stall.d !== d || Math.abs(this._stall.ct - ct) > 0.05) { this._stall = { d, ct, at: now }; return; }
+    if (now - this._stall.at < 7000 || el.readyState >= 3 && !el.seeking) return;
+    if (this._stall.done === ct) return;
+    this._stall.done = ct; this._stall.at = now;
+    console.warn('playback stalled; reopening at', ct.toFixed(1));
+    const at = this._seekDeck === d && this._seekTo != null ? this._seekTo : ct;
+    this.reopenAt(d, at);
   }
   // a seek that hangs (stream stalled on a slow connection): reopen the song right at that spot
   checkSeek(d) {
@@ -1941,10 +1982,23 @@ class Engine extends Emitter {
     if (!rolling) {
       const tokA = A.token;
       let ok = true;
-      try { await B.el.play(); } catch (e) {
-        if (e.name !== 'AbortError') { await new Promise((r) => setTimeout(r, 400)); try { await B.el.play(); } catch (e2) { ok = e2.name === 'AbortError'; } }
-      }
+      const tokB = B.token;
+      const started = (async () => {
+        try { await B.el.play(); } catch (e) {
+          if (e.name !== 'AbortError') { await new Promise((r) => setTimeout(r, 400)); try { await B.el.play(); } catch (e2) { ok = e2.name === 'AbortError'; } }
+        }
+        return true;
+      })();
+      const inTime = await Promise.race([started, new Promise((r) => setTimeout(() => r(false), 3000))]);
       if (A.token !== tokA || this.plan !== p || !this.playing) return;
+      if (!inTime) {
+        // the next song didn't start: no half-started mix — keep this song going and move on
+        // cleanly at its end (the next song keeps loading meanwhile)
+        console.warn('next song did not start in time; mixing at the end instead');
+        if (B.token === tokB) { try { B.el.pause(); } catch (e) { /* */ } this.setFade(B, 0); }
+        this.lateSeek = true; this._lateGo = false;
+        return;
+      }
       if (!ok) { this.onEnded(); return; }
     }
     const t0 = this.ctx ? this.ctx.currentTime + 0.01 : 0;
@@ -2224,6 +2278,7 @@ class Engine extends Emitter {
     const d = this.cur;
     if (!d.track) return;
     this.checkSeek(d);
+    this.checkStall(d);
     const ctNow = d.el.currentTime || 0;
     if (!this._clk || this._clk.d !== d || this._clk.ct !== ctNow || !this.playing) this._clk = { d, ct: ctNow, at: performance.now() };
     this.syncPlayState(d);
