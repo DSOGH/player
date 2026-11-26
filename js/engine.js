@@ -1041,11 +1041,12 @@ class Engine extends Emitter {
       if (bA && bB) {
         let r = bB / bA; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2;
         const d = Math.abs(r - 1);
-        sc += d <= 0.02 ? 4 : d <= 0.04 ? 3 : d <= 0.06 ? 1.5 : d <= 0.1 ? 0.3 : -1.5;
+        sc += d <= 0.015 ? 4.5 : d <= 0.03 ? 3.5 : d <= 0.05 ? 1.5 : d <= 0.08 ? 0.2 : -1.5;
       } else if (!bB && lookup.length < 10) lookup.push(t);
       // keys that sit together
       const kB = library.analysis.get(t.id)?.camelot;
-      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 1.5 : kc >= 0.6 ? 0.5 : -0.5; }
+      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 2.4 : kc >= 0.6 ? 0.6 : -2.5; }
+      else if (kA) sc -= 0.4; // a song whose key we know beats a gamble
       // same vibe: genre, era
       const gB = genres(t);
       if (gA.size && gB.size) sc += [...gB].some((g) => gA.has(g)) ? 2.5 : -2;
@@ -1145,7 +1146,7 @@ class Engine extends Emitter {
       }
       return gapless();
     }
-    if (cont && s.gaplessAlbums) {
+    if (cont && s.gaplessAlbums && !this.cookMode) { // (a DJ set mixes everything, even album neighbours)
       // only stay gapless when the songs really run into each other (live albums, DJ mixes, segues)
       const runsIn = !aA || !aB || (dur - (aA.tailOut || dur) < 0.6 && (aB.leadIn || 0) < 0.6 && (aA.tailOut - aA.fadeOutStart) < 2);
       if (runsIn || s.transition !== 'smart') return gapless('Gapless · same album');
@@ -1255,7 +1256,9 @@ class Engine extends Emitter {
     const kc = s.harmonicMix !== false ? keyCompat(aA?.camelot, aB?.camelot) : 0.8;
     // tempo sync: the incoming song matches the outgoing one; for bigger gaps both meet in the middle
     // (Cook It Up blends allow a bigger tempo change: it's a DJ set, the songs are bent to fit)
-    const maxEach = cookBlend && !IOS ? Math.max(0.07, (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100) : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
+    // (Cook It Up keeps tempo changes small: stretching a song further makes it warble, and bringing it
+    // back to speed is a hiccup — its song picking finds tempos that are close anyway)
+    const maxEach = cookBlend ? Math.min(0.03, (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100) : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
     // iPhone: every speed change of a playing song can click, so only the incoming song changes speed (once, before it's heard)
     if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 1.6 + 0.005) && end > 20) {
       let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
@@ -1263,7 +1266,7 @@ class Engine extends Emitter {
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
       // (Cook It Up: long, slow blends — a set should feel like one continuous song)
-      let beats = cookBlend ? (kc < 0.5 ? 24 : 32) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
+      let beats = cookBlend ? (kc < 0.6 ? 16 : 32) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
       while (beats > 8 && beats * beat > Math.min(dur * 0.4, durB * 0.45, 28)) beats -= 8;
       const overlapTrack = beats * beat;
       const overlap = overlapTrack / aRate; // real seconds
@@ -1325,7 +1328,11 @@ class Engine extends Emitter {
           Object.assign(out, { cookKind: 'blend', throwEcho: cookBlend.throwEcho, label: `Cook It Up · Slow EQ blend${cookBlend.throwEcho ? ' + echo throw' : ''} · ${out.label.replace(/^Beat match · /, '')}` });
           // Stem swaps — what DJs do with acapellas/stems: one song's vocal rides on the other song's beat
           // for a while, so the change is carried by the music instead of a fade.
-          if (fx && this.voxReady && vA && vB) {
+          // clashing keys: shorter, and only one song's melody is heard at a time (mids/highs handed over)
+          if (kc < 0.6) Object.assign(out, { keySafe: true, label: out.label.replace('Slow EQ blend', 'Key-safe EQ blend') });
+          // back to normal speed in one step on the next phrase after the mix, where the beat hides it
+          if (Math.abs(bRate - 1) > 0.002) out.returnAfter = overlapR + (16 * beat) / bRate;
+          if (fx && this.voxReady && vA && vB && kc >= 0.85 && Math.abs(bRate - 1) <= 0.025 && Math.abs((aRate || 1) - 1) <= 0.01) {
             const ovT = bt * beat, ovB = overlapR * bRate, bS0 = pick.bS;
             const sing = (sp, t0, t1) => { let x = 0; for (const [a, b] of sp) x += Math.max(0, Math.min(b, t1) - Math.max(a, t0)); return x; };
             const aSings = sing(vA, ms + ovT * 0.3, ms + ovT * 0.85), bIntroQuiet = sing(vB, bS0, bS0 + ovB) < 0.3;
@@ -1754,8 +1761,14 @@ class Engine extends Emitter {
           this.hold(A.bass.gain, t0); A.bass.gain.setValueAtTime(0, swap); A.bass.gain.linearRampToValueAtTime(BASS_CUT, swap + swapLen);
           // three-band mixing: the incoming song's mids sit back too, and swap with the bass on the same beat
           if (B.mid && A.mid) {
-            this.hold(B.mid.gain, t0); B.mid.gain.setValueAtTime(-7, t0); B.mid.gain.setValueAtTime(-7, swap); B.mid.gain.linearRampToValueAtTime(0, swap + swapLen * 2);
-            this.hold(A.mid.gain, t0); A.mid.gain.setValueAtTime(0, swap); A.mid.gain.linearRampToValueAtTime(-6, swap + swapLen * 2);
+            const mc = p.keySafe ? -15 : -7;
+            this.hold(B.mid.gain, t0); B.mid.gain.setValueAtTime(mc, t0); B.mid.gain.setValueAtTime(mc, swap); B.mid.gain.linearRampToValueAtTime(0, swap + swapLen * 2);
+            this.hold(A.mid.gain, t0); A.mid.gain.setValueAtTime(0, swap); A.mid.gain.linearRampToValueAtTime(p.keySafe ? -15 : -6, swap + swapLen * 2);
+            if (p.keySafe) {
+              // the incoming song's top end (its lead / high notes) waits for the handover too
+              this.hold(B.lp.frequency, t0); B.lp.frequency.setValueAtTime(2500, t0); B.lp.frequency.setValueAtTime(2500, swap); B.lp.frequency.exponentialRampToValueAtTime(LP_OFF, swap + swapLen * 2);
+              this.hold(A.lp.frequency, t0); A.lp.frequency.setValueAtTime(LP_OFF, swap); A.lp.frequency.exponentialRampToValueAtTime(2500, swap + swapLen * 2);
+            }
           }
           this.hold(A.hp.frequency, t0); A.hp.frequency.setValueAtTime(HP_OFF, t0 + D * 0.55); A.hp.frequency.exponentialRampToValueAtTime(380, t0 + D);
           // incoming highs open up over the first ~40% (hats and vocals don't pile on top of the outgoing song)
@@ -1849,7 +1862,7 @@ class Engine extends Emitter {
       const tokB = B.token;
       // back to the song's real speed as soon as the old song is basically gone (not seconds later)
       // the moment the old song is gone, the new one goes back to its real speed (quickly, no hanging)
-      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, IOS ? 0 : (p.returnAfter ? 4 : 2)); }, (p.returnAfter || D) * 1000);
+      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, p.cookKind || IOS ? 0 : (p.returnAfter ? 4 : 2)); }, (p.returnAfter || D) * 1000);
     }
     this.afterTrackChange(p);
   }
