@@ -1330,7 +1330,7 @@ class Engine extends Emitter {
       } else if (!bB && lookup.length < 10) lookup.push(t);
       // keys that sit together
       const kB = library.analysis.get(t.id)?.camelot;
-      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 3.2 : kc >= 0.6 ? 1 : -3.5; // (in key = the songs sound related) }
+      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 3.2 : kc >= 0.6 ? 1 : -3.5; } // (in key = the songs sound related)
       else if (kA) sc -= 0.4; // a song whose key we know beats a gamble
       // same vibe: genre, era
       const fB = t.genreFamily;
