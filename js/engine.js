@@ -1102,7 +1102,7 @@ class Engine extends Emitter {
     // the song you skipped to is already loaded and buffered on the other deck (that's how mixes start
     // instantly): just switch to it — no new download, no waiting
     const o = this.other, up = this.upcoming;
-    if (autoplay && up && up.track === t && o.track === t && o.el.readyState >= 3 && Math.abs((o.el.currentTime || 0) - startAt) < (startAt ? 1.5 : 0.8) && !this.transition) {
+    if (autoplay && up && up.track === t && o.track === t && !(IOS && document.visibilityState === 'hidden') && o.el.readyState >= 3 && Math.abs((o.el.currentTime || 0) - startAt) < (startAt ? 1.5 : 0.8) && !this.transition) {
       clearTimeout(this.planTimer); this.planTimer = null;
       if (this.cooking && this.plan) { this.plan._aborted = true; this.cookAbort(this.cur); }
       const prer = this.plan?.prerolled;
@@ -1411,6 +1411,7 @@ class Engine extends Emitter {
       const ov = Math.max(p.overlap || 0, 12), ms = Math.max(1, (p.mixStart || 0) + (p.overlap || 0) - ov);
       p = { ...p, style: 'filter', type: 'smart', label: 'Cook It Up · Slow filter blend', mixStart: ms, overlap: ov, inDur: ov * 0.6, outDur: ov * 0.7, outDelay: ov * 0.3 };
     }
+    if (this.cookMode && p && p.style === 'filter' && /^DJ mix/.test(p.label || '')) p = { ...p, label: 'Cook It Up · Slow filter blend' };
     const old = this.plan;
     this.plan = p;
     // re-seek the preloaded deck if the start point moved
@@ -1608,7 +1609,21 @@ class Engine extends Emitter {
         if (drop) { const st = drop - bt * beatB; if (st > bS + beatB && st <= 75) starts.push({ bS: Math.max(0, st), dropOn: true }); }
         // Cook It Up can also bring the next song in at one of its later phrases (its first chorus /
         // a big moment), so a high-energy exit meets a high-energy entrance, and a soft one a soft one
-        if (cookBlend) for (let ph = 1; ph <= 6; ph++) { const st = bS + ph * 16 * beatB; if (st > durB * 0.4) break; starts.push({ bS: st, dropOn: false, phrase: ph }); }
+        if (cookBlend) {
+          // every 8-bar point in the first half of the next song is a way in; the ones where a new section
+          // starts (a chorus / a drop: the music gets bigger right there) are marked — that's where a DJ
+          // drops the next song in instead of playing its intro
+          for (let ph = 1; ph <= 24; ph++) {
+            const st = bS + ph * 8 * beatB;
+            if (st > durB * 0.5) break;
+            const pre = loudAt(aB, st - 6, st), post = loudAt(aB, st, st + 6);
+            const section = pre != null && post != null && post - pre >= 7;
+            if (ph % 2 && !section) continue; // (off-phrase points only when a section starts there)
+            starts.push({ bS: st, dropOn: false, phrase: ph, section });
+            // or start it so that big part hits right as the old song finishes leaving
+            if (section) { const early = st - bt * beatB; if (early > bS + beatB) starts.push({ bS: early, dropOn: false, phrase: ph, section: true, land: true }); }
+          }
+        }
         for (const st of starts) {
           for (let k = 0; k < (cookBlend?.club ? 24 : cookBlend ? 8 : 4); k++) {
             const ms = last - k * bar * 4; // whole phrases earlier (16 beats each)
@@ -1634,8 +1649,11 @@ class Engine extends Emitter {
               if (eA != null && after != null) cookS += after < eA - 6 ? -1.2 : after > eA + 6 ? 1.2 : 0;
               // never start the next song in the middle of a sung line
               if (vB && vB.some(([a, b]) => a < st.bS - 0.1 && b > st.bS + 0.2)) cookS += 3;
-              // starting later in the next song costs a little (its intro is usually the smoothest way in)
-              cookS += (st.phrase || 0) * 0.15;
+              // coming in where the next song's new section starts (its chorus / drop) — the big way in when
+              // the outgoing song is leaving strong; a quiet intro only suits a quiet exit
+              if (st.section) cookS -= (eA != null && avgB != null && eA >= avgB - 4 ? 2 : 0.8) + (st.land ? 0.4 : 0);
+              if (!st.phrase && eA != null && eB != null && eA - eB > 8) cookS += 1.5;
+              cookS += (st.phrase || 0) * 0.03;
               // never fade the outgoing singer out in the middle of a line: the blend ends between lines
               if (vA && vA.some(([a, b]) => a < ms + ovT * 0.7 && b > ms + ovT * 0.9)) cookS += cookBlend.club ? 3 : 2;
               // the blend finishes right where the outgoing song changes section (verse→chorus, chorus→break):
@@ -1646,7 +1664,7 @@ class Engine extends Emitter {
               const bPre = loudAt(aB, st.bS - 6, st.bS), bPost = loudAt(aB, st.bS, st.bS + 6);
               if (st.phrase && bPre != null && bPost != null && bPost - bPre >= 8) cookS -= 0.5;
             }
-            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn,
+            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn, land: st.land,
               score: clash * 6 + (cookBlend ? 0 : eGap) + cookS + (st.dropOn ? -2 : 0) + k * (cookBlend?.club ? 0.04 : cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
           }
         }
@@ -1655,7 +1673,7 @@ class Engine extends Emitter {
       const pick = tries[0];
       if (pick) {
         const { ms, ov: overlapR, bt } = pick;
-        const dropTxt = pick.dropOn ? ' · drop on the mix' : '';
+        const dropTxt = (pick.dropOn ? ' · drop on the mix' : pick.land ? ' · chorus hits as it leaves' : '') + (cookBlend && pick.bS > 8 ? ` · in at ${Math.floor(pick.bS / 60)}:${String(Math.floor(pick.bS % 60)).padStart(2, '0')}` : '');
         const T = bpmA * aRate;
         const tempoTxt = Math.abs(aRate - 1) > 0.002 ? `${Math.round(bpmA)}→${Math.round(T)}←${Math.round(aB.bpm)} BPM` : `${Math.round(bpmA)} BPM`;
         // still two voices at once? take the outgoing song's vocals out and blend just its music and beat
@@ -1985,6 +2003,16 @@ class Engine extends Emitter {
   // Start the incoming song ~3 s early with its volume at zero, already at the right speed, and keep
   // nudging its *position* (silently) until it's beat-locked. At the mix point only volumes/filters move,
   // so there's no start-up stutter and no audible speed corrections.
+  bgSwitch(pl, half) {
+    pl._bgDone = true;
+    const nx = this.upcoming;
+    if (!nx) return;
+    // where the next song would be at this point of the blend (so it comes in on the same beat)
+    const at = Math.max(0, (pl.bStart || 0) + half * (pl.rate || 1) / (this.cur.el.playbackRate || 1));
+    dlog('bg-switch', { from: this.track?.title, to: nx.track?.title, at });
+    try { this.other.el.pause(); } catch (e) { /* */ }
+    this.playIndex(nx.index, { mode: 'quick', startAt: at });
+  }
   // the next song plays silently for a moment at its entry point, then waits there: the phone has
   // fetched it, so at the mix it starts the instant it's asked to (no waiting on Plex mid-mix)
   warmNext(p) {
@@ -2498,14 +2526,21 @@ class Engine extends Emitter {
       const o = this.other, nt = this.upcoming.track;
       this.loadDeck(o, nt, pl?.bStart || 0); this.applyDeckGain(o); this.setFade(o, 0);
     }
-    if (pl && !pl._warm && !this.transition && this.upcoming && this.other.track === this.upcoming.track && pl.style !== 'gapless'
+    // app in the background on iPhone: no second player (it may not be allowed to start, and timers run
+    // late) — the next song takes over this player at the mix point, on the phrase, with a quick fade
+    const bg = IOS && document.visibilityState === 'hidden';
+    if (bg && pl && !this.transition && this.upcoming && !pl._bgDone && pl.style !== 'gapless' && !this.cooking) {
+      const half = (pl.overlap || 8) * 0.5 * (d.el.playbackRate || 1);
+      if (t >= pl.mixStart + half - 0.15) { this.bgSwitch(pl, half); return; }
+    }
+    if (!bg && pl && !pl._warm && !this.transition && this.upcoming && this.other.track === this.upcoming.track && pl.style !== 'gapless'
       && t >= pl.mixStart - 20 * (d.el.playbackRate || 1) && t < pl.mixStart - 6 * (d.el.playbackRate || 1)) this.warmNext(pl);
-    if (pl && !pl.prerolled && !pl.noPreroll && ['blend', 'under', 'filter', 'crossfade'].includes(pl.style) && t >= pl.mixStart - 3 * (d.el.playbackRate || 1)) this.preroll(pl);
+    if (!bg && pl && !pl.prerolled && !pl.noPreroll && ['blend', 'under', 'filter', 'crossfade'].includes(pl.style) && t >= pl.mixStart - 3 * (d.el.playbackRate || 1)) this.preroll(pl);
     if (pl && pl.aRate && Math.abs(pl.aRate - 1) > 0.001 && !pl.aRamped && t >= pl.mixStart - (pl.preroll || 4)) {
       pl.aRamped = true;
       this.rampRate(d, pl.aRate, Math.max(0.5, (pl.mixStart - t) / (d.el.playbackRate || 1)));
     }
-    if (this.plan && !this.planTimer) {
+    if (this.plan && !this.planTimer && !bg) {
       const dt = (this.plan.mixStart - t) / (d.el.playbackRate || 1);
       if (dt <= 1.2 && !this.plan._starting) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
     }
