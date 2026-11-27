@@ -1577,6 +1577,8 @@ class Engine extends Emitter {
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
       // (Cook It Up: long, slow blends — a set should feel like one continuous song)
       let beats = cookBlend?.club ? 16 : cookBlend ? (kc < 0.6 || cookBlend.throwEcho ? 16 : 24) : clamp(Math.round(Math.max(D * 2, 16 * beat) / beat / 8) * 8, 16, kc >= 0.85 ? 32 : kc < 0.5 ? 16 : 24);
+      // (fast songs: 16 beats is only 5 s — that's a cut, not a blend; keep at least ~8 s)
+      if (cookBlend) while (beats * beat < 8 && beats < 32) beats += 8;
       while (beats > 8 && beats * beat > Math.min(dur * 0.4, durB * 0.45, 28)) beats -= 8;
       const overlapTrack = beats * beat;
       const overlap = overlapTrack / aRate; // real seconds
@@ -1598,7 +1600,7 @@ class Engine extends Emitter {
       // loudness around a point (0..100), from the analysis loudness map (2 points per second)
       const loudAt = (an, t0, t1) => { const L = an?.loud; if (!L) return null; let sum = 0, c = 0; for (let i = Math.max(0, Math.floor(t0 * 2)); i < Math.min(L.length, Math.ceil(t1 * 2)); i++) { sum += L[i]; c++; } return c ? sum / c : null; };
       const tries = [];
-      for (let bt = beats; bt >= 16; bt -= 8) {
+      for (let bt = beats, minBt = cookBlend ? Math.max(16, Math.ceil(8 / beat / 8) * 8) : 16; bt >= minBt; bt -= 8) {
         const ovT = bt * beat;
         const last = off + Math.floor((end - ovT - off - msShift) / bar) * bar + msShift;
         // where the next song comes in: from its first beat, or timed so its drop lands as the blend ends
@@ -1983,6 +1985,23 @@ class Engine extends Emitter {
   // Start the incoming song ~3 s early with its volume at zero, already at the right speed, and keep
   // nudging its *position* (silently) until it's beat-locked. At the mix point only volumes/filters move,
   // so there's no start-up stutter and no audible speed corrections.
+  // the next song plays silently for a moment at its entry point, then waits there: the phone has
+  // fetched it, so at the mix it starts the instant it's asked to (no waiting on Plex mid-mix)
+  warmNext(p) {
+    p._warm = true;
+    const B = this.other, el = B.el, tok = B.token, at = Math.max(0, p.bStart || 0);
+    if (!B.track || (el.readyState >= 3 && !el.paused)) return;
+    if (!B.fx) return; // (a song with no silent fader would be heard)
+    this.setFade(B, 0);
+    try { el.currentTime = at; } catch (e) { /* */ }
+    const done = () => {
+      if (B.token !== tok || B === this.cur || this.transition) return;
+      try { el.pause(); el.currentTime = at; } catch (e) { /* */ }
+      dlog('warmed', { song: B.track?.title, rs: el.readyState });
+    };
+    el.play().then(() => setTimeout(done, 700)).catch(() => {});
+    setTimeout(done, 6000);
+  }
   preroll(p) {
     const A = this.cur, B = this.other, nx = this.upcoming;
     if (!nx || !this.ctx || !A.fx || this.transition) { p.noPreroll = true; return; }
@@ -2083,6 +2102,8 @@ class Engine extends Emitter {
       }
     }
     if (!rolling) {
+      if (p._starting) return; // (already waiting for this mix's next song — never start it twice)
+      p._starting = true;
       const tokA = A.token;
       let ok = true;
       const tokB = B.token;
@@ -2092,16 +2113,34 @@ class Engine extends Emitter {
         }
         return true;
       })();
-      const inTime = await Promise.race([started, new Promise((r) => setTimeout(() => r(false), 3000))]);
+      // the next song gets as long as this one can spare (up to 10 s) — a late start is lined back up on
+      // the beat by the beat lock, which beats giving the mix up
+      const spare = ((this.durationOf(A) || A.el.duration || 0) - (A.el.currentTime || 0)) / (A.el.playbackRate || 1) - (p.overlap || 8) - 1;
+      const inTime = await Promise.race([started, new Promise((r) => setTimeout(() => r(false), clamp(spare, 3, 10) * 1000))]);
       if (A.token !== tokA || this.plan !== p || !this.playing) return;
       if (!inTime) {
-        // the next song didn't start: no half-started mix — keep this song going and move on
-        // cleanly at its end (the next song keeps loading meanwhile)
-        console.warn('next song did not start in time; mixing at the end instead');
+        // still nothing: no half-started mix and no cut — the mix moves to the next good spot in this song
+        // (the next song keeps loading meanwhile); only if there's no room left does it go at the end
         dlog('mix-no-start', { from: A.track?.title, to: B.track?.title, rs: B.el.readyState });
-        if (B.token === tokB) { try { B.el.pause(); } catch (e) { /* */ } this.setFade(B, 0); }
-        this.lateSeek = true; this._lateGo = false;
-        return;
+        const now = A.el.currentTime || 0;
+        this.computePlan({ force: true, floor: now + 6 });
+        if (this.plan && this.plan !== p && this.plan.mixStart > now + 4 && this.plan.mixStart < (this.durationOf(A) || 1e9) - 4) {
+          if (B.token === tokB) { try { B.el.pause(); } catch (e) { /* */ } this.setFade(B, 0); }
+          this.plan.prerolled = false; this.plan._warm = false; clearTimeout(this.planTimer); this.planTimer = null;
+          return;
+        }
+        // no later spot: keep waiting for it until this song runs out, then mix the moment it starts
+        // (the beat lock lines it up) — a cut only if it never comes
+        this.plan = p;
+        const left = Math.max(0.5, ((this.durationOf(A) || 0) - (A.el.currentTime || 0)) / (A.el.playbackRate || 1) - 0.4);
+        const late = await Promise.race([started, new Promise((r) => setTimeout(() => r(false), left * 1000))]);
+        if (A.token !== tokA || this.plan !== p || !this.playing) return;
+        if (!late) {
+          if (B.token === tokB) { try { B.el.pause(); } catch (e) { /* */ } this.setFade(B, 0); }
+          this.lateSeek = true; this._lateGo = false;
+          return;
+        }
+        dlog('mix-late', { from: A.track?.title, to: B.track?.title });
       }
       if (!ok) { this.onEnded(); return; }
     }
@@ -2459,6 +2498,8 @@ class Engine extends Emitter {
       const o = this.other, nt = this.upcoming.track;
       this.loadDeck(o, nt, pl?.bStart || 0); this.applyDeckGain(o); this.setFade(o, 0);
     }
+    if (pl && !pl._warm && !this.transition && this.upcoming && this.other.track === this.upcoming.track && pl.style !== 'gapless'
+      && t >= pl.mixStart - 20 * (d.el.playbackRate || 1) && t < pl.mixStart - 6 * (d.el.playbackRate || 1)) this.warmNext(pl);
     if (pl && !pl.prerolled && !pl.noPreroll && ['blend', 'under', 'filter', 'crossfade'].includes(pl.style) && t >= pl.mixStart - 3 * (d.el.playbackRate || 1)) this.preroll(pl);
     if (pl && pl.aRate && Math.abs(pl.aRate - 1) > 0.001 && !pl.aRamped && t >= pl.mixStart - (pl.preroll || 4)) {
       pl.aRamped = true;
@@ -2466,7 +2507,7 @@ class Engine extends Emitter {
     }
     if (this.plan && !this.planTimer) {
       const dt = (this.plan.mixStart - t) / (d.el.playbackRate || 1);
-      if (dt <= 1.2) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
+      if (dt <= 1.2 && !this.plan._starting) this.planTimer = setTimeout(() => this.runPlan(), Math.max(0, dt * 1000 - 12));
     }
     if (Math.floor(t) % 5 === 0) this.saveState();
   }
