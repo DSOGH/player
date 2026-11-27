@@ -523,11 +523,11 @@ class Engine extends Emitter {
   }
   // Speed glides use a few discrete steps: every playbackRate change re-tunes the browser's
   // pitch-preserving stretcher and can click, so fewer, bigger steps sound cleaner than many tiny ones.
-  rampRate(d, to, sec) {
+  rampRate(d, to, sec, { fine = false } = {}) {
     clearInterval(d.rateTimer);
     const from = d.el.playbackRate;
     if (Math.abs(from - to) < 0.001) return;
-    const steps = IOS ? 1 : Math.max(1, Math.min(4, Math.round(Math.abs(to - from) / 0.012)));
+    const steps = fine ? Math.max(1, Math.min(10, Math.ceil(Math.abs(to - from) / 0.01))) : IOS ? 1 : Math.max(1, Math.min(4, Math.round(Math.abs(to - from) / 0.012)));
     let k = 0;
     const step = () => {
       k++;
@@ -1326,11 +1326,11 @@ class Engine extends Emitter {
       if (bA && bB) {
         let r = bB / bA; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2;
         const d = Math.abs(r - 1);
-        sc += d <= 0.015 ? 4.5 : d <= 0.03 ? 3.5 : d <= 0.05 ? 1 : d <= 0.08 ? -1.5 : -5; // (a pair that can't be beat-matched only gets a fade: avoid it)
+        sc += d <= 0.015 ? 4.5 : d <= 0.04 ? 3.8 : d <= 0.08 ? 2.6 : (!IOS && d <= 0.12) ? 0.5 : -6; // (beat-matchable within 8%: the tempo gets bent to fit; beyond that it can't lock — avoid it)
       } else if (!bB && lookup.length < 10) lookup.push(t);
       // keys that sit together
       const kB = library.analysis.get(t.id)?.camelot;
-      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 2.4 : kc >= 0.6 ? 0.6 : -2.5; }
+      if (kA && kB) { const kc = keyCompat(kA, kB); sc += kc >= 0.85 ? 3.2 : kc >= 0.6 ? 1 : -3.5; // (in key = the songs sound related) }
       else if (kA) sc -= 0.4; // a song whose key we know beats a gamble
       // same vibe: genre, era
       const fB = t.genreFamily;
@@ -1566,11 +1566,13 @@ class Engine extends Emitter {
     // (Cook It Up blends allow a bigger tempo change: it's a DJ set, the songs are bent to fit)
     // (Cook It Up keeps tempo changes small: stretching a song further makes it warble, and bringing it
     // back to speed is a hiccup — its song picking finds tempos that are close anyway)
-    const maxEach = cookBlend ? Math.min(0.03, (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100) : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
+    // (Cook It Up bends tempos up to 8% — pitch kept — so the beats always lock together, like a DJ riding
+    // the pitch fader; the song is eased back to its own speed bit by bit afterwards)
+    const maxEach = cookBlend ? 0.08 : (s.tempoMatch ? s.tempoMatchMax : 1.5) / 100;
     // iPhone: every speed change of a playing song can click, so only the incoming song changes speed (once, before it's heard)
-    if (s.beatMatch && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 1.6 + 0.005) && end > 20) {
-      let aRate = 1, bRate = s.tempoMatch ? ratio : 1;
-      if (!IOS && s.tempoMatch && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
+    if ((s.beatMatch || cookBlend) && ratio && Math.abs(ratio - 1) <= (IOS ? maxEach + 0.005 : maxEach * 1.6 + 0.005) && end > 20) {
+      let aRate = 1, bRate = s.tempoMatch || cookBlend ? ratio : 1;
+      if (!IOS && (s.tempoMatch || cookBlend) && Math.abs(ratio - 1) > maxEach) { const T = Math.sqrt(bpmA * bpmB); aRate = T / bpmA; bRate = T / bpmB; }
       const beat = 60 / bpmA, bar = beat * 4; // A's beat grid in A's own track time
       // long overlays: 16 beats minimum, 24 normally, 32 when the keys agree
       // (Cook It Up: long, slow blends — a set should feel like one continuous song)
@@ -1671,7 +1673,7 @@ class Engine extends Emitter {
           if (kc < 0.6) Object.assign(out, { keySafe: true, label: out.label.replace('Slow EQ blend', 'Key-safe EQ blend') });
           // back to normal speed in one step on the next phrase after the mix, where the beat hides it
           if (Math.abs(bRate - 1) > 0.002) out.returnAfter = overlapR + (16 * beat) / bRate;
-          if (fx && this.voxReady && vA && vB && kc >= 0.85 && Math.abs(bRate - 1) <= 0.025 && Math.abs((aRate || 1) - 1) <= 0.01) {
+          if (fx && this.voxReady && vA && vB && kc >= 0.6 && Math.abs(bRate - 1) <= 0.085 && Math.abs((aRate || 1) - 1) <= 0.085) {
             const ovT = bt * beat, ovB = overlapR * bRate, bS0 = pick.bS;
             const sing = (sp, t0, t1) => { let x = 0; for (const [a, b] of sp) x += Math.max(0, Math.min(b, t1) - Math.max(a, t0)); return x; };
             const aSings = sing(vA, ms + ovT * 0.3, ms + ovT * 0.85), bIntroQuiet = sing(vB, bS0, bS0 + ovB) < 0.3;
@@ -1683,6 +1685,10 @@ class Engine extends Emitter {
               // the incoming song's vocal arrives over the outgoing song's beat, then the beats swap
               Object.assign(out, { stems: 'bva', stripA: false, inDur: 0.05, outDelay: overlapR * 0.5, outDur: overlapR * 0.22, label: `Cook It Up · Beat swap: ${B.title}’s vocal over ${A.title}’s beat · ${tempoTxt} · ${bt} beats` });
             }
+          }
+          // otherwise (and whenever there are no lyrics to go on): voices handed over at the halfway point
+          if (!out.stems && fx && this.voxReady && settings.get('vocalStrip') !== false) {
+            Object.assign(out, { stems: 'binst', stripA: false, label: out.label.replace(/ · vocals (out, beat in|clear)/, '') + ' · voices handed over' });
           }
         }
         return out;
@@ -2170,6 +2176,22 @@ class Engine extends Emitter {
             this.hold(B.voxGain.gain, t0); B.voxGain.gain.setValueAtTime(0, t0); B.voxGain.gain.linearRampToValueAtTime(0.95, t0 + b * 4);
             B.voxGain.gain.setValueAtTime(0.95, t0 + D * 0.82); B.voxGain.gain.linearRampToValueAtTime(0, t0 + D * 0.82 + b * 2);
           }
+          // voices handed over (no lyrics needed): the next song comes in as its music only, under the old
+          // song; halfway the old song's voice is taken out and the new song's voice comes in — never two
+          // singers at once, and the beats carry the change
+          if (p.stems === 'binst' && B.vox && B.instV && B.dry) {
+            const b = p.beat || 0.5, sw = t0 + D * 0.55, len = Math.max(0.3, Math.min(1.4, b * 2));
+            this.voxActive(B, true);
+            this.hold(B.dry.gain, t0); B.dry.gain.setValueAtTime(0, t0); B.dry.gain.setValueAtTime(0, sw); B.dry.gain.linearRampToValueAtTime(1, sw + len);
+            this.hold(B.instV.gain, t0); B.instV.gain.setValueAtTime(1, t0); B.instV.gain.setValueAtTime(1, sw); B.instV.gain.linearRampToValueAtTime(0, sw + len);
+            if (B.voxGain) { this.hold(B.voxGain.gain, t0); B.voxGain.gain.setValueAtTime(0, t0); }
+            if (A.vox && A.instV && A.dry) {
+              this.voxActive(A, true);
+              const ta = sw - len;
+              this.hold(A.dry.gain, t0); A.dry.gain.setValueAtTime(1, ta); A.dry.gain.linearRampToValueAtTime(0, ta + len);
+              this.hold(A.instV.gain, t0); A.instV.gain.setValueAtTime(0, ta); A.instV.gain.linearRampToValueAtTime(1.05, ta + len);
+            }
+          }
           // vocals would clash: the outgoing song drops its vocals (keeps its music and beat) as the next one comes in
           if (p.stripA && A.vox && A.instV && A.dry) {
             this.voxActive(A, true);
@@ -2224,7 +2246,9 @@ class Engine extends Emitter {
       const tokB = B.token;
       // back to the song's real speed as soon as the old song is basically gone (not seconds later)
       // the moment the old song is gone, the new one goes back to its real speed (quickly, no hanging)
-      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, p.cookKind || IOS ? 0 : (p.returnAfter ? 4 : 2)); }, (p.returnAfter || D) * 1000);
+      // eased back to its own speed in small steps (≤1% each) across 8 bars — you don't hear the tempo move
+      const back = Math.abs((B.el.playbackRate || 1) - 1) > 0.012 ? 32 * ((p.beat || 0.5)) : (p.cookKind || IOS ? 0 : (p.returnAfter ? 4 : 2));
+      setTimeout(() => { if (B.token === tokB) this.rampRate(B, 1, back, { fine: true }); }, (p.returnAfter || D) * 1000);
     }
     this.afterTrackChange(p);
   }
