@@ -1617,7 +1617,9 @@ class Engine extends Emitter {
             const st = bS + ph * 8 * beatB;
             if (st > durB * 0.5) break;
             const pre = loudAt(aB, st - 6, st), post = loudAt(aB, st, st + 6);
-            const section = pre != null && post != null && post - pre >= 7;
+            // (only where the big part really starts — not again a bar into it)
+            const prior = loudAt(aB, st - 8 * beatB - 6, st - 8 * beatB);
+            const section = pre != null && post != null && post - pre >= 7 && !(prior != null && post - prior >= 7 && pre - prior >= 7);
             if (ph % 2 && !section) continue; // (off-phrase points only when a section starts there)
             starts.push({ bS: st, dropOn: false, phrase: ph, section });
             // or start it so that big part hits right as the old song finishes leaving
@@ -1777,8 +1779,12 @@ class Engine extends Emitter {
     if (after) pool = pool.filter((k) => k !== 'blend'); // after a jump there's no room planning a long blend
     if (!pool.length) pool = Object.keys(W).filter((k) => !exclude.includes(k) && k !== 'blend');
     if (!pool.length) pool = ['dub'];
-    let tot = pool.reduce((s, k) => s + W[k], 0), x = rnd() * tot, kind = pool[0];
-    for (const k of pool) { x -= W[k]; if (x <= 0) { kind = k; break; } }
+    // keys that clash: effects that let the old song ring on over the new one (echo tails, risers, washes)
+    // would sound off — clean exits (cut, brake, spin-back, loop) are favoured instead
+    const kcW = keyCompat(aA?.camelot, aB?.camelot);
+    const wOf = (k) => W[k] * (kcW < 0.6 ? ({ dub: 0.25, washout: 0.3, riser: 0.4 }[k] || 1.5) : 1);
+    let tot = pool.reduce((s, k) => s + wOf(k), 0), x = rnd() * tot, kind = pool[0];
+    for (const k of pool) { x -= wOf(k); if (x <= 0) { kind = k; break; } }
     // the classic beat-matched blend (the regular DJ engine) with a Cook It Up echo throw at the end
     if (kind === 'blend') return { cookBlend: true, throwEcho: rnd() < (level === 'smooth' ? 0.35 : 0.6), cookKind: 'blend' };
 
@@ -1811,13 +1817,43 @@ class Engine extends Emitter {
     const bb = aB?.bpm ? 60 / aB.bpm : 0;
     if (bb && aB.beatOffset != null) bS = Math.max(0, aB.beatOffset - Math.ceil(Math.max(0, aB.beatOffset - (aB.leadIn || 0)) / bb - 1e-6) * bb);
     const slam = ['cut', 'roll', 'brake', 'backspin', 'riser'].includes(kind);
-    const useDrop = drop && drop < (durB || 240) * 0.55 && (slam ? rnd() < 0.75 : rnd() < 0.4);
-    if (useDrop) bS = drop;
-    const entry = kind === 'washout' || kind === 'dub' ? 'rise' : useDrop ? 'slam' : pickOf(['slam', 'slam', 'rise']);
+    // where it comes in keeps the vibe: the energy the old song is leaving with, met by the same energy
+    // in the new one — a big moment slams into its chorus / drop on the 1, a soft one opens up gently.
+    // Every 8 bars in its first 60% is a way in (not just its first beat), never in the middle of a word.
+    const eOut = loud(C - L - 2, C);
+    const loudB = (t0, t1) => { const Lm = aB?.loud; if (!Lm) return null; let s2 = 0, c2 = 0; for (let i = Math.max(0, Math.floor(t0 * 2)); i < Math.min(Lm.length, Math.ceil(t1 * 2)); i++) { s2 += Lm[i]; c2++; } return c2 ? s2 / c2 : null; };
+    const vB = vocalSpans(cachedLyrics(B));
+    const ways = [{ t: bS, k: 0 }];
+    if (bb) for (let k = 1; k <= 30; k++) {
+      const t = bS + k * 8 * bb;
+      if (t > (durB || 240) * 0.6) break;
+      const pre = loudB(t - 6, t), post = loudB(t, t + 6), prior = loudB(t - 8 * bb - 6, t - 8 * bb);
+      const section = pre != null && post != null && post - pre >= 7 && !(prior != null && pre - prior >= 7);
+      if (k % 2 && !section) continue;
+      ways.push({ t, k, section });
+    }
+    if (drop && drop < (durB || 240) * 0.6) ways.push({ t: drop, k: 99, section: true, drop: true });
+    const rising = kind === 'washout' || kind === 'dub';
+    const wayScore = (w) => {
+      const eIn = loudB(w.t, w.t + 8);
+      let sc = rnd() * 0.8 + (w.k === 99 ? 0 : w.k) * 0.02;
+      if (eIn != null) sc += Math.abs(eIn - (rising ? eOut - 6 : eOut)) / 8; // same energy (a rise starts a touch under)
+      if (w.section) sc -= slam ? 1.8 : 0.6;                                 // a new section right on the 1
+      if (w.drop && slam) sc -= 0.8;
+      if (vB && vB.some(([a, b]) => a < w.t - 0.1 && b > w.t + 0.2)) sc += 3; // never mid-word
+      if (!w.k && eIn != null && eOut - eIn > 10) sc += 1.5;                 // a quiet intro after a loud exit: flat
+      return sc;
+    };
+    const way = ways.map((w) => ({ w, sc: wayScore(w) })).sort((x2, y2) => x2.sc - y2.sc)[0].w;
+    bS = way.t;
+    const useDrop = !!way.drop;
+    const entry = rising ? 'rise' : 'slam';
     const rate = sync && kind !== 'washout' ? ratio : 1;
     const echoTime = beat * pickOf([0.75, 0.75, 0.5, 1.5]);
-    const tail = kind === 'dub' ? 2.8 : kind === 'washout' ? bar : kind === 'cut' ? 2.4 : 0.6;
-    const entryTxt = useDrop ? 'straight into the drop' : entry === 'rise' ? 'opens up' : 'on the 1';
+    // (clashing keys: the old song's echo tail is kept short so the two never ring together)
+    const tail = (kind === 'dub' ? 2.8 : kind === 'washout' ? bar : kind === 'cut' ? 2.4 : 0.6) * (kcW < 0.6 ? 0.55 : 1);
+    const inAt = bS > 8 ? ` at ${Math.floor(bS / 60)}:${String(Math.floor(bS % 60)).padStart(2, '0')}` : '';
+    const entryTxt = (useDrop ? 'straight into the drop' : way.section && slam ? 'into its chorus' : entry === 'rise' ? 'opens up' : 'on the 1') + inAt;
     return {
       ...base, type: 'cook', style: 'cook', cook: kind, cookKind: kind, fx: true, entry, echoTime, beat, bar, sync: !!sync,
       label: `Cook It Up · ${NAMES[kind]} · next ${entryTxt}${sync && rate !== 1 ? ` · ${Math.round(bpmA)} BPM` : ''}`,
