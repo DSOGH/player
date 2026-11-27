@@ -183,6 +183,7 @@ class Engine extends Emitter {
     this.playing = false;
     this.autoplayFrom = -1;
     this.decks.forEach((d) => this.wireDeck(d));
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { try { this.onVisibility(); } catch (e) { console.warn(e); } });
     this.tickTimer = setInterval(() => this.tick(), 200);
     settings.on('change', (k) => this.onSetting(k));
     library.on('analysis', (id) => this.onAnalysis(id));
@@ -365,13 +366,61 @@ class Engine extends Emitter {
     for (const n of ['node', 'rg', 'lat', 'bass', 'hp', 'lp', 'fade', 'send', 'vox', 'voxGain', 'instGain', 'voxSend']) { try { d[n]?.disconnect(); } catch (e) { /* */ } d[n] = null; }
   }
   // Swap a deck's <audio> element when it needs to change between Web Audio (CORS) and raw mode.
+  // iPhone with the screen off / CarPlay with the phone locked: iOS stops the app's audio processing
+  // (Web Audio), but a plain audio player keeps going like any music app — so that's what plays then
+  get bgMode() { return IOS && typeof document !== 'undefined' && document.visibilityState === 'hidden'; }
   prepareDeck(d, track, forceRaw = false) {
-    const raw = forceRaw || settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors);
+    const raw = forceRaw || settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors) || (this.bgMode && !track?.demo);
     if (d.raw === raw) return;
-    try { d.el.pause(); d.el.removeAttribute('src'); d.el.load(); } catch (e) { /* */ }
+    // (iPhone: a player is only ever paused, never emptied — emptying one can end the music session)
+    try { d.el.pause(); if (!IOS) { d.el.removeAttribute('src'); d.el.load(); } } catch (e) { /* */ }
     d.make(raw);
     if (!raw && this.ctx) this.attachNodes(d);
     d.el.volume = d.fx ? 1 : clamp(d.rgLin * d.fadeVal * this.volume, 0, 1);
+  }
+  // move the playing song to the other kind of player at exactly the same spot: the new one starts
+  // first, the old one stops once it's playing — no gap, no "pause" for iOS to notice
+  handover(d, raw, why = '') {
+    if (!d.track || d.track.demo || d.raw === raw || (!raw && !this.ctx)) return false;
+    const from = d.el, pos = this.resumePos(d), src = (from.currentSrc || from.src || '').split('#')[0];
+    if (!src) return false;
+    const wasPlaying = this.playing && !from.paused;
+    if (this.transition) this.finishTransition();
+    const t = d.track;
+    d.make(raw);
+    if (!raw && this.ctx && !d.node) this.attachNodes(d);
+    d.load(t, pos, src);
+    if (d.fx) { this.applyDeckGain(d); this.setFade(d, 1); } else d.el.volume = clamp(this.volume, 0, 1);
+    this._seekTo = pos; this._seekAt = performance.now(); this._seekDeck = d; this._pm = null;
+    const stop = () => { try { from.pause(); } catch (e) { /* */ } };
+    if (wasPlaying) {
+      d.el.play().catch(() => {});
+      d.el.addEventListener('playing', stop, { once: true });
+      setTimeout(stop, 2500);
+    } else stop();
+    dlog('handover', { song: t.title, to: raw ? 'plain player (background)' : 'mixing engine', at: pos, why });
+    this.reassertNowPlaying?.();
+    return true;
+  }
+  onVisibility() {
+    if (!IOS || !this.cur?.track) return;
+    if (document.visibilityState === 'hidden') {
+      if (!this.playing) return;
+      // screen off / CarPlay: onto the plain player; the next song (silently warming on the other
+      // player) is let go — it'll take over this same player at the mix point
+      this.stopPreroll();
+      if (this.handover(this.cur, true, 'screen off')) {
+        const o = this.other;
+        for (const e of Object.values(o.els)) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } }
+        o.track = null; o.token++;
+        if (this.plan) { this.plan.prerolled = false; this.plan._warm = false; }
+      }
+    } else if (this.cur.raw && settings.get('engine') === 'enhanced' && !(this.cur.track?.plex && this.plexNoCors)) {
+      // back in the app: back to the mixing engine (mixes, effects, beat lock)
+      this.resume();
+      this.handover(this.cur, false, 'app open');
+      if (this.upcoming) { const u = this.upcoming; this.upcoming = null; this.plan = null; this.prepareNext(); if (!this.upcoming) this.upcoming = u; }
+    }
   }
   loadDeck(d, track, startAt = 0) {
     this.prepareDeck(d, track);
@@ -609,6 +658,13 @@ class Engine extends Emitter {
     for (const el of Object.values(d.els)) this.wireEl(d, el);
   }
   wireEl(d, el) {
+    // in the background the app's timers can stall, but the player's own progress events keep coming:
+    // they drive the clock checks (mix point, stalls, next song) then
+    el.addEventListener('timeupdate', () => {
+      if (el !== d.el || d !== this.cur || !this.bgMode) return;
+      const n = performance.now();
+      if (n - (this._bgTick || 0) > 300) { this._bgTick = n; try { this.tick(); } catch (e) { /* */ } }
+    });
     el.addEventListener('ended', () => {
       if (el !== d.el || d !== this.cur || this.transition) return;
       // a stream that "ends" well before the song does (iPhone, after a far jump on a slow connection)
@@ -1023,6 +1079,15 @@ class Engine extends Emitter {
     } finally { this._hearing = false; }
     return p;
   }
+  // where to pick a song back up after a hiccup: the spot you jumped to, else the last spot it was
+  // really playing at (never earlier than that)
+  resumePos(d) {
+    const ct = d.el.currentTime || 0;
+    const good = d._good && d._good.id === d.track?.id ? d._good : null;
+    // a jump that hasn't played yet wins; once it has played, the spot it got to
+    if (this._seekDeck === d && this._seekTo != null && (!good || good.at < this._seekAt)) return this._seekTo;
+    return Math.max(ct, good?.pos || 0) || d.wantStart || 0;
+  }
   // open the playing song again at a given spot (quick fade so there's no click)
   reopenAt(d, at) {
     const t = d.track;
@@ -1134,6 +1199,8 @@ class Engine extends Emitter {
     // iPhone: Now Playing (lock screen / Dynamic Island / CarPlay) follows the audio element, so a skip
     // keeps the same element — quick fade out, switch songs, fade in — and iOS never sees a "pause".
     let fadeIn = false;
+    // (background: never a second player — the next song takes over this one)
+    if (mode === 'quick' && this.bgMode && !old.fx) mode = 'cut';
     if (mode === 'quick' && IOS && old.track && !old.el.paused && old.fx) {
       // a 25 ms dip is enough to avoid a click — you don't hear a gap
       const tok = ++this.skipToken;
@@ -1178,7 +1245,7 @@ class Engine extends Emitter {
 
   afterTrackChange(transitionPlan = null) {
     const t = this.track;
-    this._changedAt = performance.now(); this._mixKick = 0;
+    this._changedAt = performance.now(); this._mixKick = 0; this._bgSwitching = 0;
     this.lateSeek = false; this._lateGo = false;
     this.emit('track', t, transitionPlan);
     this.emit('state');
@@ -2041,13 +2108,15 @@ class Engine extends Emitter {
   // so there's no start-up stutter and no audible speed corrections.
   bgSwitch(pl, half) {
     pl._bgDone = true;
+    if (this._bgSwitching && performance.now() - this._bgSwitching < 8000) return;
+    this._bgSwitching = performance.now();
     const nx = this.upcoming;
     if (!nx) return;
     // where the next song would be at this point of the blend (so it comes in on the same beat)
     const at = Math.max(0, (pl.bStart || 0) + half * (pl.rate || 1) / (this.cur.el.playbackRate || 1));
     dlog('bg-switch', { from: this.track?.title, to: nx.track?.title, at });
     try { this.other.el.pause(); } catch (e) { /* */ }
-    this.playIndex(nx.index, { mode: 'quick', startAt: at });
+    this.playIndex(nx.index, { mode: this.cur.raw ? 'cut' : 'quick', startAt: at });
   }
   // the next song plays silently for a moment at its entry point, then waits there: the phone has
   // fetched it, so at the mix it starts the instant it's asked to (no waiting on Plex mid-mix)
@@ -2565,7 +2634,7 @@ class Engine extends Emitter {
     // app in the background on iPhone: no second player (it may not be allowed to start, and timers run
     // late) — the next song takes over this player at the mix point, on the phrase, with a quick fade
     const bg = IOS && document.visibilityState === 'hidden';
-    if (bg && pl && !this.transition && this.upcoming && !pl._bgDone && pl.style !== 'gapless' && !this.cooking) {
+    if (bg && pl && !this.transition && this.upcoming && !pl._bgDone && pl.style !== 'gapless' && !this.cooking && !d.track?.demo) {
       const half = (pl.overlap || 8) * 0.5 * (d.el.playbackRate || 1);
       if (t >= pl.mixStart + half - 0.15) { this.bgSwitch(pl, half); return; }
     }
