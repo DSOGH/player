@@ -160,6 +160,7 @@ const GENRE_NEAR = {
 };
 
 class Engine extends Emitter {
+  _aheadRun = 0;
   constructor() {
     super();
     this.decks = [new Deck('A'), new Deck('B')];
@@ -187,7 +188,7 @@ class Engine extends Emitter {
     library.on('analysis', (id) => this.onAnalysis(id));
     // background downloads wait while a mix runs and for the first 20 s of every song (or while it's
     // still loading) — that's when the music needs the whole connection
-    setBusyCheck(() => this.playing && (!!this.transition || performance.now() - (this._changedAt || 0) < 20000 || this.cur.el.readyState < 3));
+    setBusyCheck(() => this.playing && (performance.now() - (this._changedAt || 0) < 3000 || (this.cur.el.readyState < 2 && !this.cur.el.paused)));
     plex.on?.('connection', () => { this._corsOk = undefined; });
     this.saveState = this.debouncedSave();
     this.skipToken = 0;
@@ -201,8 +202,12 @@ class Engine extends Emitter {
   get currentTime() {
     const d = this.cur;
     // (a seek / a start point is shown right away, also while the song is still loading)
-    if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 4000
-      && (d.el.seeking || performance.now() - this._seekAt < 250 || (d.el.readyState < 2 && performance.now() - this._seekAt < 4000))) return this._seekTo;
+    // (iPhone applies a start point only once the song is actually running, so until the player's own
+    // position has reached it, the spot it's going to is what's shown — lyrics never flash back to 0:00)
+    if (this._seekTo != null && this._seekDeck === d && performance.now() - this._seekAt < 8000) {
+      const off = Math.abs((d.el.currentTime || 0) - this._seekTo) > 1.5;
+      if (d.el.seeking || performance.now() - this._seekAt < 250 || d.el.readyState < 2 || (off && performance.now() - this._seekAt < 6000)) return this._seekTo;
+    }
     const ct = d.el.currentTime || 0;
     const now = performance.now(), r = d.el.playbackRate || 1;
     // A smooth clock for the scrubber, lyrics and the DJ: iPhone reports the position in coarse, uneven
@@ -644,7 +649,7 @@ class Engine extends Emitter {
       if (this.playing && !el.seeking && !d.switching && (el.currentTime || 0) > 1.5) {
         const now = performance.now();
         this._starve = (this._starve || []).filter((x) => now - x < 30000); this._starve.push(now);
-        holdBackground(this._starve.length > 1 ? 150000 : 60000);
+        holdBackground(this._starve.length > 1 ? 45000 : 20000);
         dlog('stutter', { song: d.track?.title, at: el.currentTime, rs: el.readyState, n: this._starve.length });
       }
     });
@@ -986,18 +991,21 @@ class Engine extends Emitter {
     if (!this.upcoming) this.prepareNext();
     const nx = this.upcoming, A = this.cur.track;
     if (!nx || !A) return null;
-    // the mix point depends on both songs' beat grids: measure whatever isn't measured yet first,
-    // otherwise the plan changes after the jump and the mix happens somewhere else
-    const need = this.wantsAnalysis() ? [A, nx.track].filter((t) => !isAnalyzed(t)) : [];
-    if (need.length) {
-      this.emit('hear-wait', true);
-      await Promise.race([Promise.all(need.map((t) => analyze(t, { urgent: true }).catch(() => null))), new Promise((r) => setTimeout(r, 20000))]);
-      this.emit('hear-wait', false);
-      if (this.upcoming !== nx || this.cur.track !== A || this.transition) return null;
+    const ready = () => !this.wantsAnalysis() || (isAnalyzed(A) && isAnalyzed(nx.track));
+    let p = this.plan;
+    // already worked out with both songs measured (the usual case now): use it exactly as shown — instant,
+    // and the marked spot can't move
+    if (!(p && ready() && p.aId === A.id && p.bId === nx.track.id)) {
+      const need = this.wantsAnalysis() ? [A, nx.track].filter((t) => !isAnalyzed(t)) : [];
+      if (need.length) {
+        this.emit('hear-wait', true);
+        await Promise.race([Promise.all(need.map((t) => analyze(t, { urgent: true }).catch(() => null))), new Promise((r) => setTimeout(r, 12000))]);
+        this.emit('hear-wait', false);
+        if (this.upcoming !== nx || this.cur.track !== A || this.transition) return null;
+      }
+      this.computePlan({ force: true, floor: 0 });
+      p = this.plan;
     }
-    // the best mix point for these two songs (wherever it is), held still until it has played
-    this.computePlan({ force: true, floor: 0 });
-    const p = this.plan;
     if (!p) return null;
     p._locked = true;
     const B = this.other;
@@ -1005,22 +1013,15 @@ class Engine extends Emitter {
     const at = p.style === 'gapless' ? Math.max(0, this.duration - 8) : Math.max(0, p.mixStart - 6 * (this.cur.el.playbackRate || 1));
     this._hearing = true;
     try {
-      const d = this.cur;
-      // iPhone: jumping far inside a song that's streaming can stall (the clock stops, the mix never
-      // comes). Reopening the song right at that spot is what starting a song mid-way does — reliable.
-      if (IOS && d.track && !d.track.demo && d.fx && this.playing) this.reopenAt(d, at);
+      const d = this.cur, el = d.el;
+      let buffered = false;
+      try { for (let k = 0; k < el.buffered.length; k++) if (el.buffered.start(k) <= at && el.buffered.end(k) >= at + 3) buffered = true; } catch (e) { /* */ }
+      // a plain jump when that part is already on the phone (instant); on iPhone a jump into a part
+      // that hasn't loaded can stall, so the song is reopened right at the spot instead
+      if (IOS && !buffered && d.track && !d.track.demo && d.fx && this.playing) this.reopenAt(d, at);
       else this.seek(at);
     } finally { this._hearing = false; }
     return p;
-  }
-  // where to pick a song back up after a hiccup: the spot you jumped to, else the last spot it was
-  // really playing at (never earlier than that)
-  resumePos(d) {
-    const ct = d.el.currentTime || 0;
-    const good = d._good && d._good.id === d.track?.id ? d._good : null;
-    // a jump that hasn't played yet wins; once it has played, the spot it got to
-    if (this._seekDeck === d && this._seekTo != null && (!good || good.at < this._seekAt)) return this._seekTo;
-    return Math.max(ct, good?.pos || 0) || d.wantStart || 0;
   }
   // open the playing song again at a given spot (quick fade so there's no click)
   reopenAt(d, at) {
@@ -1063,10 +1064,12 @@ class Engine extends Emitter {
     const age = performance.now() - this._seekAt;
     const el = d.el;
     // landed (or the browser reports a position near the target): done
-    if (!el.seeking || Math.abs(el.currentTime - this._seekTo) < 1 || age > 15000) {
+    // (a start point iPhone hasn't applied yet — position still near 0 — isn't "landed")
+    if (Math.abs(el.currentTime - this._seekTo) < 1 || age > 15000 || (!el.seeking && el.readyState >= 3 && age > 3000)) {
       if (age > 250) this._seekTo = null;
       return;
     }
+    if (!el.seeking) return;
     // only a song that should be playing, is stuck seeking, and has nothing to play gets reopened at that spot
     if (!this._seekRetried && this.playing && age > 6000 && el.readyState < 2) {
       this._seekRetried = true;
@@ -1090,8 +1093,8 @@ class Engine extends Emitter {
     if (i < 0 || i >= this.queue.length) return;
     if (autoplay) this.unlockDecks();
     const t = library.track(this.queue[i]);
-    // a song is starting: every background download stops so it gets the whole connection
-    if (autoplay && t && !t.demo) holdBackground(20000);
+    // a song is starting: new background downloads wait 3 s so it gets a head start (none are cut off)
+    if (autoplay && t && !t.demo) holdBackground(3000, { abort: false });
     if (!t) { this.queue.splice(i, 1); return this.playIndex(Math.min(i, this.queue.length - 1), { mode, autoplay }); }
     this.ensureGraph();
     if (autoplay) await this.resume();
@@ -1197,6 +1200,23 @@ class Engine extends Emitter {
       if (n) (n !== this.upcoming?.track ? prefetchTrack(n) : Promise.resolve()).then(() => { if (isAnalyzed(n)) verifyBpm(n); });
       if (isAnalyzed(t)) verifyBpm(t, { reanalyze: false }); // the playing song is only re-measured later (when it comes up next / library analysis)
     }, 4000);
+    this.analyzeAhead(t);
+  }
+  // measure the next songs in the queue now (two at a time), so every mix — and Hear it — has real beats
+  // the moment it's needed
+  analyzeAhead(t) {
+    const run = ++this._aheadRun;
+    const ids = [];
+    for (let k = 1; k <= 8 && ids.length < 5; k++) { const id = this.queue[this.index + k]; const n = id && library.track(id); if (!n) break; if (!isAnalyzed(n) && !n.demo) ids.push(n); }
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length && run === this._aheadRun && this.track === t) {
+        const n = ids[next++];
+        await analyze(n).catch(() => null);
+        if (this.upcoming?.track === n && !this.transition) this.computePlan();
+      }
+    };
+    worker(); worker();
   }
   // measure the next few songs in the queue one at a time while this one plays (small copies, so it's
   // quick), so every upcoming mix is planned with real beats — never a fallback fade
@@ -1232,14 +1252,14 @@ class Engine extends Emitter {
       if (this.playing && (el.paused || el.readyState < 3 || backgroundHeld())) { this._anTimer = setTimeout(go, 1500); return; }
       // a big lossless song that's streaming: wait until most of it has come in (so it isn't downloaded
       // twice at once), at most until 45 s in
-      if (big && this.playing && performance.now() - t0 < 40000) {
+      if (false && big && this.playing && performance.now() - t0 < 40000) {
         const b = el.buffered, end = b.length ? b.end(b.length - 1) : 0;
         if (end < (this.duration || t.duration || 1) * 0.9) { this._anTimer = setTimeout(go, 2000); return; }
       }
       this._anCtl = new AbortController(); this._anFor = t.id;
       analyze(t, { signal: this._anCtl.signal }).then(() => this.warmNext(t));
     };
-    this._anTimer = setTimeout(go, 6000); // (give the song a head start on the connection first)
+    this._anTimer = setTimeout(go, 1200); // (a moment's head start for the song itself)
   }
   wantsAnalysis() {
     const s = settings.v;
@@ -2396,7 +2416,9 @@ class Engine extends Emitter {
     // marked on the scrubber — long before it comes, and scrubbing to just before it always works
     // (Club and Wild can leave a song early, so they plan early — on iPhone a little later, to keep the start smooth)
     const lvl = this.cookMode && settings.get('cookLevel');
-    if (!this.upcoming && (remaining < 90 || ((lvl === 'wild' || lvl === 'club') && t > (IOS ? Math.min(60, this.duration * 0.3) : 10)))) this.prepareNext();
+    // everything is ready early: the next song + its mix are worked out 3 s into every song, so Hear it,
+    // skips and the mix itself are instant (it uses more data — that's the point)
+    if (!this.upcoming && (t > 3 || remaining < 90)) this.prepareNext();
     // Cook It Up loops / brakes need the decoded song: only fetched shortly before they're used
     const cp = this.plan;
     if (cp?.needsBuf && !cp._slice && !cp._slicing && t > cp.mixStart - 25) this.cookPrepare(cp, this.cur.track);
