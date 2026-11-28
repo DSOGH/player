@@ -366,11 +366,10 @@ class Engine extends Emitter {
     for (const n of ['node', 'rg', 'lat', 'bass', 'hp', 'lp', 'fade', 'send', 'vox', 'voxGain', 'instGain', 'voxSend']) { try { d[n]?.disconnect(); } catch (e) { /* */ } d[n] = null; }
   }
   // Swap a deck's <audio> element when it needs to change between Web Audio (CORS) and raw mode.
-  // iPhone with the screen off / CarPlay with the phone locked: iOS stops the app's audio processing
-  // (Web Audio), but a plain audio player keeps going like any music app — so that's what plays then
+  // iPhone with the screen off / CarPlay with the phone locked (see onVisibility)
   get bgMode() { return IOS && typeof document !== 'undefined' && document.visibilityState === 'hidden'; }
   prepareDeck(d, track, forceRaw = false) {
-    const raw = forceRaw || settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors) || (this.bgMode && !track?.demo);
+    const raw = forceRaw || settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors);
     if (d.raw === raw) return;
     // (iPhone: a player is only ever paused, never emptied — emptying one can end the music session)
     try { d.el.pause(); if (!IOS) { d.el.removeAttribute('src'); d.el.load(); } } catch (e) { /* */ }
@@ -402,25 +401,41 @@ class Engine extends Emitter {
     this.reassertNowPlaying?.();
     return true;
   }
+  // Screen off / CarPlay with the phone locked. One rule: the song keeps playing exactly as it was — same
+  // player, same sound (moving it to another player changed the volume) — and nothing else touches the
+  // phone: no second player, no warm-ups, no downloads ahead. The next song takes over this same player.
   onVisibility() {
-    if (!IOS || !this.cur?.track) return;
+    if (!IOS) return;
     if (document.visibilityState === 'hidden') {
-      if (!this.playing) return;
-      // screen off / CarPlay: onto the plain player; the next song (silently warming on the other
-      // player) is let go — it'll take over this same player at the mix point
+      this._ctxBad = 0;
       this.stopPreroll();
-      if (this.handover(this.cur, true, 'screen off')) {
+      if (!this.transition) {
         const o = this.other;
         for (const e of Object.values(o.els)) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } }
-        o.track = null; o.token++;
+        if (o.track && o !== this.cur) { o.token++; o.track = null; }
         if (this.plan) { this.plan.prerolled = false; this.plan._warm = false; }
       }
-    } else if (this.cur.raw && settings.get('engine') === 'enhanced' && !(this.cur.track?.plex && this.plexNoCors)) {
-      // back in the app: back to the mixing engine (mixes, effects, beat lock)
+      holdBackground(3600000);
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* */ }
+      if (this.ctx && this.ctx.state !== 'running') this.resume();
+      dlog('screen-off', { song: this.track?.title, audio: this.ctx?.state, playing: this.playing });
+    } else {
+      holdBackground(0, { release: true });
       this.resume();
-      this.handover(this.cur, false, 'app open');
-      if (this.upcoming) { const u = this.upcoming; this.upcoming = null; this.plan = null; this.prepareNext(); if (!this.upcoming) this.upcoming = u; }
+      // (only if the emergency backup had to be used: back to the normal player at the same spot)
+      if (this.cur.raw && this.cur.track && settings.get('engine') === 'enhanced' && !(this.cur.track.plex && this.plexNoCors)) this.handover(this.cur, false, 'app open');
+      dlog('screen-on', { song: this.track?.title, audio: this.ctx?.state });
+      if (this.playing && !this.transition) { this.plan = null; this.upcoming = null; this.prepareNext(); }
     }
+  }
+  // emergency backup: iPhone silenced the app's audio (it stays 'suspended' while the song is meant to
+  // play) — only then does the song move to a plain player, so there's sound at all
+  checkBgAudio(d) {
+    if (!this.bgMode || !this.playing || !d.fx || !this.ctx) { this._ctxBad = 0; return; }
+    if (this.ctx.state === 'running') { this._ctxBad = 0; return; }
+    const n = performance.now();
+    if (!this._ctxBad) { this._ctxBad = n; this.resume(); return; }
+    if (n - this._ctxBad > 1500) { this._ctxBad = 0; this.handover(d, true, 'audio silenced by iPhone'); }
   }
   loadDeck(d, track, startAt = 0) {
     this.prepareDeck(d, track);
@@ -663,7 +678,13 @@ class Engine extends Emitter {
     el.addEventListener('timeupdate', () => {
       if (el !== d.el || d !== this.cur || !this.bgMode) return;
       const n = performance.now();
-      if (n - (this._bgTick || 0) > 300) { this._bgTick = n; try { this.tick(); } catch (e) { /* */ } }
+      if (n - (this._bgTick || 0) > 300) { this._bgTick = n; try { this.checkBgAudio(d); this.tick(); } catch (e) { /* */ } }
+    });
+    // a song that's loaded but didn't start (iPhone in the background, or a slow stream): start it the
+    // moment it's able to
+    el.addEventListener('canplay', () => {
+      if (el !== d.el || d !== this.cur || !this.playing || !el.paused || d.switching || this.transition || this._pausing) return;
+      el.play().then(() => dlog('started-when-ready', { song: d.track?.title })).catch(() => {});
     });
     el.addEventListener('ended', () => {
       if (el !== d.el || d !== this.cur || this.transition) return;
@@ -1198,9 +1219,17 @@ class Engine extends Emitter {
     this._seekTo = null; this._pm = null; // a new song: forget the old one's seek / clock
     // iPhone: Now Playing (lock screen / Dynamic Island / CarPlay) follows the audio element, so a skip
     // keeps the same element — quick fade out, switch songs, fade in — and iOS never sees a "pause".
-    let fadeIn = false;
+    let fadeIn = false, bgFadeIn = false;
     // (background: never a second player — the next song takes over this one)
-    if (mode === 'quick' && this.bgMode && !old.fx) mode = 'cut';
+    if (this.bgMode && old.track && !old.el.paused) {
+      if (old.fx) {
+        const tok = ++this.skipToken;
+        this.fade(old, 0, 0.3, { shape: 'equalpower' });
+        await new Promise((r) => setTimeout(r, 300));
+        if (tok !== this.skipToken) return;
+        mode = 'cut'; bgFadeIn = true;
+      } else mode = 'cut';
+    } else if (mode === 'quick' && this.bgMode) mode = 'cut';
     if (mode === 'quick' && IOS && old.track && !old.el.paused && old.fx) {
       // a 25 ms dip is enough to avoid a click — you don't hear a gap
       const tok = ++this.skipToken;
@@ -1227,15 +1256,20 @@ class Engine extends Emitter {
       if (IOS) { const o = this.other; o.token++; o.track = null; clearInterval(o.fadeTimer); clearInterval(o.rateTimer); for (const e of Object.values(o.els)) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } } } else this.other.unload();
       this.loadDeck(old, t, startAt);
       this.applyDeckGain(old);
+      if (bgFadeIn) fadeIn = true;
       this.setFade(old, fadeIn ? 0 : 1);
       if (fadeIn) {
-        const tokL = old.token;
-        old.el.addEventListener('playing', () => { if (old.token === tokL) this.fade(old, 1, 0.06, { shape: 'equalpower' }); }, { once: true });
+        const tokL = old.token, len = this.bgMode ? 0.35 : 0.06;
+        const up = () => { if (old.token === tokL && old.fade && old.fade.gain.value < 0.5) this.fade(old, 1, len, { shape: 'equalpower' }); };
+        old.el.addEventListener('playing', up, { once: true });
+        setTimeout(up, 4000); // (never left silent)
       }
       if (autoplay) {
         this.playing = true;
         old.el.play().catch((e) => {
-          if (e.name === 'NotAllowedError') { this.playing = false; this.emit('state'); }
+          if (e.name !== 'NotAllowedError') return;
+          if (this.bgMode) { dlog('start-refused-bg', { song: t.title }); return; } // (the 'canplay' retry starts it)
+          this.playing = false; this.emit('state');
         });
       } else this.playing = false;
     }
@@ -1273,8 +1307,9 @@ class Engine extends Emitter {
   // the moment it's needed
   analyzeAhead(t) {
     const run = ++this._aheadRun;
+    if (this.bgMode) return;
     const ids = [];
-    for (let k = 1; k <= 8 && ids.length < 5; k++) { const id = this.queue[this.index + k]; const n = id && library.track(id); if (!n) break; if (!isAnalyzed(n) && !n.demo) ids.push(n); }
+    for (let k = 1; k <= 6 && ids.length < 2; k++) { const id = this.queue[this.index + k]; const n = id && library.track(id); if (!n) break; if (!isAnalyzed(n) && !n.demo) ids.push(n); }
     let next = 0;
     const worker = async () => {
       while (next < ids.length && run === this._aheadRun && this.track === t) {
@@ -1448,6 +1483,7 @@ class Engine extends Emitter {
     // one download per song: when the next song is being downloaded to be measured, its player waits
     // and then plays that copy from the phone (streaming it at the same time doubled the data and made
     // the playing song stutter). The tick loads it anyway 35 s before the mix if the download is slow.
+    if (this.bgMode && !t.demo) return; // (in the background only the plan is made: the song takes over this player)
     if (!willFetch) load();
     if (this.wantsAnalysis()) {
       analyze(t, refresh ? { force: true } : undefined).then(() => { if (this.upcoming?.track === t && !this.transition) { this.computePlan(); load(); } });
@@ -2579,6 +2615,7 @@ class Engine extends Emitter {
     // (a hiccuping stream on iPhone can briefly report position 0 or its start point)
     if (!d.el.paused && d.el.readyState >= 3 && !d.el.seeking && (d.el.currentTime || 0) > 0.5) d._good = { id: d.track.id, pos: d.el.currentTime, at: performance.now() };
     this.checkStall(d);
+    this.checkBgAudio(d);
     // (and check every couple of seconds, in case the wake-up didn't take)
     if (this.playing && this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed' && performance.now() - (this._wakeAt || 0) > 2000) { this._wakeAt = performance.now(); this.resume(); }
     const ctNow = d.el.currentTime || 0;
@@ -2627,7 +2664,7 @@ class Engine extends Emitter {
       return;
     }
     const pl = this.plan;
-    if (this.upcoming && this.other.track !== this.upcoming.track && !this.transition && (!pl || t > pl.mixStart - 35 * (d.el.playbackRate || 1) || remaining < 40)) {
+    if (!this.bgMode && this.upcoming && this.other.track !== this.upcoming.track && !this.transition && (!pl || t > pl.mixStart - 35 * (d.el.playbackRate || 1) || remaining < 40)) {
       const o = this.other, nt = this.upcoming.track;
       this.loadDeck(o, nt, pl?.bStart || 0); this.applyDeckGain(o); this.setFade(o, 0);
     }

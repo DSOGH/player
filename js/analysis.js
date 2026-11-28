@@ -39,7 +39,8 @@ function networkOk() {
 // stopped and held back for a while, so the whole connection goes to what you're hearing.
 let holdUntil = 0;
 const bgCtls = new Set();
-export function holdBackground(ms = 90000, { abort = true } = {}) {
+export function holdBackground(ms = 90000, { abort = true, release = false } = {}) {
+  if (release) { holdUntil = Date.now(); return; }
   holdUntil = Math.max(holdUntil, Date.now() + ms);
   if (!abort) return;
   dlog('hold-downloads', { s: ms / 1000, stopped: bgCtls.size });
@@ -95,7 +96,7 @@ export async function prefetchTrack(t) {
   const mode = settings.get('prefetch');
   if (mode === 'off') return;
   if (mode === 'wifi' && navigator.connection?.type === 'cellular') return;
-  if (t.size > 200e6) return; // a huge lossless file: the player streams it itself (a full copy only fights the music)
+  if (t.size > 40e6) return; // a huge lossless file: the player streams it itself (a full copy only fights the music)
   try { await fetchTrackBuffer(t); } catch (e) { /* ignore */ }
 }
 
@@ -185,7 +186,7 @@ export function analyze(t, { force = false, signal = null, urgent = false } = {}
         try { ab = await fetchLite(t, signal, urgent); lite = true; } catch (e) {
           if (signal?.aborted) throw e;
           // no small copy: only a moderately sized original is downloaded instead (never a 100 MB one)
-          if ((t.size || 0) > 200e6) { dlog('measure-skip', { song: t.title, mb: (t.size || 0) / 1e6, why: e?.message || e?.name }); return null; }
+          if ((t.size || 0) > 40e6) { dlog('measure-skip', { song: t.title, mb: (t.size || 0) / 1e6, why: e?.message || e?.name }); return null; }
         }
       }
       if (!ab) ab = await fetchTrackBuffer(t, signal, { urgent });
