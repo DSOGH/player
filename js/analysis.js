@@ -7,6 +7,7 @@ import { plex } from './plex.js';
 import { onlineBpm, tempoRelation } from './bpm-online.js';
 import { skv } from './db.js';
 import { dlog } from './diag.js';
+import { soundAI } from './sound-ai.js';
 
 const SR = 11025;
 const WIN = 256;               // ~23 ms envelope windows
@@ -162,6 +163,29 @@ async function calibrate(t, liteRec) {
   } catch (e) { /* try again another time */ } finally { calibrating = false; }
 }
 
+// ---- the sound AI ----
+function listenTo(t, buf) {
+  soundAI.add(t, buf, (ai) => {
+    const a = library.analysis.get(t.id);
+    if (a) library.setAnalysis({ ...a, ai });
+  });
+}
+// a song that's measured but hasn't been listened to by the sound AI yet: fetch a copy for it
+// (the small Plex copy, or the file if it's on the phone / not huge) — the playing and next songs only
+const aiAsked = new Set();
+export async function hearWithAI(t) {
+  if (!soundAI.on || !t || t.demo || aiAsked.has(t.id)) return;
+  const a = library.analysis.get(t.id);
+  if (!a || a.ai?.v) return;
+  aiAsked.add(t.id);
+  try {
+    let ab = await cachedOriginal(t);
+    if (!ab && useLite(t)) { try { ab = await fetchLite(t); } catch (e) { /* */ } }
+    if (!ab && (t.size || 0) < 40e6) ab = await fetchTrackBuffer(t, null, { store: true });
+    if (ab) listenTo(t, ab);
+  } catch (e) { aiAsked.delete(t.id); }
+}
+
 // songs measured from a copy (here or on another device) before the delay was known get corrected
 export async function fixLite() {
   const d = await getDelay();
@@ -194,6 +218,8 @@ export function analyze(t, { force = false, signal = null, urgent = false } = {}
       const tag = t.bpm >= 40 && t.bpm <= 250 ? t.bpm : 0;
       const hint = online || tag;
       const tA = performance.now();
+      // (the sound AI listens to its own copy: measuring uses this one up)
+      const forAI = soundAI.on && ab.byteLength < 45e6 ? ab.slice(0) : null;
       let res = await analyzeBuffer(ab, hint);
       dlog('measured', { song: t.title, mb: ab.byteLength / 1e6, ms: performance.now() - tA, bpm: res?.bpm || 0 });
       if (!res) return null;
@@ -210,7 +236,9 @@ export function analyze(t, { force = false, signal = null, urgent = false } = {}
         Object.assign(rec, { bpm: old.bpm, bpmConf: 1, tapped: true });
         if (Math.abs(r - 1) > 0.03) rec.beatOffset = old.beatOffset ?? rec.beatOffset;
       }
+      if (old?.ai) rec.ai = old.ai;
       library.setAnalysis(rec);
+      if (forAI && !rec.ai) listenTo(t, forAI);
       return rec;
     } catch (e) {
       if (e?.name !== 'AbortError') console.warn('analysis failed', t.title, e);

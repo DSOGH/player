@@ -1561,3 +1561,9 @@ body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filte
 
 @media (min-width: 700px) { .ck-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .ck-note { margin-bottom: 4px; }
+
+/* v1.40 — rate the last mix */
+.np-rate { display: flex; align-items: center; justify-content: center; gap: 10px; height: 0; overflow: hidden; opacity: 0; transition: height .25s, opacity .25s; font-size: 13px; color: var(--muted, rgba(255,255,255,.7)); }
+.np-rate.show { height: 40px; opacity: 1; }
+.np-rate button { font-size: 18px; width: 40px; height: 32px; border-radius: 16px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: inherit; }
+.np-rate button:active { transform: scale(.92); background: rgba(255,255,255,.2); }

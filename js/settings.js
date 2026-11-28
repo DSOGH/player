@@ -9,6 +9,9 @@ export const DEFAULTS = {
   djStyle: 'beats',           // 'beats' | 'auto' | 'wordplay' (DJ Cook It Up is its own mode)
   djPrevStyle: 'beats',
   cookLevel: 'smooth',        // DJ Cook It Up: 'smooth' | 'hype' | 'wild'
+  djLearn: true,              // AI DJ: learn from 👍/👎, skips, likes
+  soundAI: true,              // AI DJ: MusiCNN listens to songs (downloads ~4.5 MB once)
+  djBrain: null,              // AI DJ: what it has learned (synced with the profile)
   harmonicMix: true,          // use musical key (Camelot) to choose blend length
   onlineLyrics: true,         // look up lyrics by title + artist (LRCLIB)
   fadeCurve: 'equalpower',    // 'equalpower' | 'linear' | 'scurve'

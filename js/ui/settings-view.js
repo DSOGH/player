@@ -11,10 +11,12 @@ import { saveSource, loadSource, testSource } from '../sources.js';
 import * as db from '../db.js';
 import { pageHeader, actionSheet, toast, confirmSheet } from './components.js';
 import { plex } from '../plex.js';
+import { brain } from '../dj-brain.js';
+import { soundAI } from '../sound-ai.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.39.0';
+export const APP_VERSION = '1.40.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">
@@ -277,6 +279,11 @@ function playback() {
     ${tm === 'smart' ? group('DJ Cook It Up', html`
       ${button('cook-it-up', 'sparkle', 'Start DJ Cook It Up', { sub: 'Your whole library as a DJ set — songs picked to fit each other, mixed on the beat' })}
       ${seg('cookLevel', 'Style', [['smooth', 'Smooth'], ['club', 'Club'], ['hype', 'Hype'], ['wild', 'Wild']], { club: 'Like a club DJ: songs picked to fit, mixed on the beat — and it isn’t afraid to leave a song as early as halfway when that’s the best moment.', smooth: 'A real DJ set: each next song is picked to fit (tempo, key, genre, energy) and mixed slowly on the beat — long EQ blends, vocal bridges (one song singing over the other’s beat) and beat swaps. No cuts, no slides.', hype: 'Keeps the energy up: leaves songs early on a strong part, comes in on the next song’s big part, short tight blends and echo throws.', wild: 'Party tricks: loop rolls, brakes, spin-backs, risers, at random points in songs.' }[settings.get('cookLevel') || 'smooth'])}
+    `) : ''}
+    ${tm === 'smart' ? group('AI DJ', html`
+      ${toggle('djLearn', 'Learn my taste', `A small AI on this phone learns from 👍 / 👎 on mixes, skips, likes and what you let play — and picks songs and mixes the way you like. ${(() => { const sm = brain.summary(); return sm ? `Learned from ${sm.n} mixes${sm.likes.length ? ` · you like ${sm.likes.join(', ')}` : ''}${sm.dislikes.length ? ` · not ${sm.dislikes.join(', ')}` : ''}.` : 'Still learning — rate a few mixes.'; })()}`)}
+      ${toggle('soundAI', 'Sound AI', `A music neural network (MusiCNN) listens to each song on the phone: how it sounds, party / dance / mood / vocals — so songs that belong together get played together. Downloads ~4.5 MB once. ${soundAI.state === 'ready' ? `Ready · ${[...library.analysis.values()].filter((a) => a.ai?.v).length} songs heard.` : soundAI.state === 'error' ? `Couldn’t load: ${soundAI.err}` : soundAI.state === 'loading' ? 'Loading…' : ''}`)}
+      ${button('reset-dj-brain', 'refresh', 'Forget what it learned', { sub: 'The DJ goes back to its own rules' })}
     `) : ''}
     ${group('Playing', html`
       ${toggle('skipFade', 'Fade when skipping', 'Off = the next song starts instantly when you press ⏭ / ⏮')}

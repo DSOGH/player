@@ -12,6 +12,9 @@ import { artUrl, lockScreenArtwork } from './art.js';
 import { findCue, findHandoff, titleEntry, keyCompat } from './dj.js';
 import { getLyrics, cachedLyrics } from './lyrics.js';
 import { plex } from './plex.js';
+import { brain } from './dj-brain.js';
+import { soundSim, soundAI } from './sound-ai.js';
+import { hearWithAI } from './analysis.js';
 
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 // 0.1s of silence, used to unlock audio elements inside a tap (iOS only lets elements started by a tap play later on their own)
@@ -187,6 +190,8 @@ class Engine extends Emitter {
     this.tickTimer = setInterval(() => this.tick(), 200);
     settings.on('change', (k) => this.onSetting(k));
     library.on('analysis', (id) => this.onAnalysis(id));
+    soundAI.setBusy(() => !!this.transition || this.bgMode);
+    library.on('liked', (id, on) => { const p = brain.pending; if (on && p && !p.done && p.toId === id) { brain.rate(true, 'like'); this.emit('mix-rate', false); } });
     // background downloads wait while a mix runs and for the first 20 s of every song (or while it's
     // still loading) — that's when the music needs the whole connection
     setBusyCheck(() => this.playing && (performance.now() - (this._changedAt || 0) < 3000 || (this.cur.el.readyState < 2 && !this.cur.el.paused)));
@@ -986,6 +991,13 @@ class Engine extends Emitter {
   toggle() { return this.playing ? this.pause() : this.play(); }
   next() {
     if (this.track && this.currentTime < 30 && !this.transition) library.noteSkip(this.track.id);
+    // a skip is the clearest answer the taste AI gets: during the mix = bad mix; right after = bad pick
+    const pen = brain.pending;
+    if (pen && !pen.done && this.track?.id === pen.toId) {
+      const since = Date.now() - (pen.endAt || Date.now());
+      const how = this.transition ? 'skip-during' : since < 25000 ? 'skip-soon' : this.currentTime < (this.duration || 1e9) * 0.5 ? 'skip-later' : null;
+      if (how) { brain.rate(false, how); this.emit('mix-rate', false); }
+    }
     const i = this.index + 1 < this.queue.length ? this.index + 1 : this.nextIndex(false);
     if (i < 0) {
       // end of the queue: stop at the start of the last track
@@ -1100,6 +1112,30 @@ class Engine extends Emitter {
     } finally { this._hearing = false; }
     return p;
   }
+  // ---- the taste AI's memory of each mix ----
+  rememberMix(A, B, p) {
+    try {
+      const ta = A.track, tb = B.track;
+      if (!ta || !tb || p.style === 'gapless') return;
+      const aA = library.analysis.get(ta.id), aB = library.analysis.get(tb.id);
+      const lo = (a, t0, t1) => { const L = a?.loud; if (!L) return null; let s2 = 0, c = 0; for (let i = Math.max(0, Math.floor(t0 * 2)); i < Math.min(L.length, Math.ceil(t1 * 2)); i++) { s2 += L[i]; c++; } return c ? s2 / c : null; };
+      const durA = this.durationOf(A) || ta.duration || 1;
+      const eA = lo(aA, p.mixStart || 0, (p.mixStart || 0) + 8), eB = lo(aB, p.bStart || 0, (p.bStart || 0) + 8);
+      const mixF = brain.mixFeatures({
+        energyGap: eA != null && eB != null ? eB - eA : null, leaveStrong: eA != null && aA?.loud ? eA >= lo(aA, 0, durA) : false,
+        enterSection: !!p.enterSection, enterLand: !!p.enterLand, enterIntro: (p.bStart || 0) < 4, exitFrac: (p.mixStart || 0) / durA,
+        beats: p.beats || (p.overlap && p.beat ? Math.round(p.overlap / p.beat) : 0), stretch: Math.abs((p.rate || 1) - 1),
+        keyFit: aA?.camelot && aB?.camelot ? keyCompat(aA.camelot, aB.camelot) : null,
+        kind: p.cookKind || p.style, stems: p.stems, keySafe: p.keySafe, echo: p.throwEcho, club: /Club/.test(p.label || ''), level: this.cookMode ? settings.get('cookLevel') : 'dj',
+      });
+      const pickF = this._pickF?.id === tb.id ? this._pickF.f : null;
+      brain.mixStarted({ from: ta.title, to: tb.title, toId: tb.id, pickF, mixF, label: p.label });
+      if (brain.pending) brain.pending.toId = tb.id;
+      this.emit('mix-rate', true);
+    } catch (e) { /* learning never gets in the way of the music */ }
+  }
+  // 👍 / 👎 on the last mix
+  rateMix(good) { const ok = brain.rate(good, 'thumb'); this.emit('mix-rate', false); return ok; }
   // where to pick a song back up after a hiccup: the spot you jumped to, else the last spot it was
   // really playing at (never earlier than that)
   resumePos(d) {
@@ -1308,6 +1344,8 @@ class Engine extends Emitter {
   analyzeAhead(t) {
     const run = ++this._aheadRun;
     if (this.bgMode) return;
+    // the sound AI listens to the playing song and the next two (already measured ones too)
+    setTimeout(() => { if (this.track !== t || this.bgMode) return; for (let k = 0; k <= 2; k++) { const id = this.queue[this.index + k]; const n = id && library.track(id); if (n) hearWithAI(n); } }, 5000);
     const ids = [];
     for (let k = 1; k <= 6 && ids.length < 2; k++) { const id = this.queue[this.index + k]; const n = id && library.track(id); if (!n) break; if (!isAnalyzed(n) && !n.demo) ids.push(n); }
     let next = 0;
@@ -1417,7 +1455,8 @@ class Engine extends Emitter {
     const target = eA == null ? null : eA + 2 + 3 * Math.cos(this._cookN / 3);
     const recent = this.queue.slice(Math.max(0, this.index - 5), this.index + 1).map((id) => library.track(id)).filter(Boolean);
     const recentArtists = new Set(recent.map((t) => t.artist)), recentAlbums = new Set(recent.map((t) => t.albumId));
-    let best = -1, bestS = -Infinity;
+    let best = -1, bestS = -Infinity, bestF = null;
+    const aCur = library.analysis.get(cur.id);
     const lookup = [];
     for (let j = i; j < Math.min(this.queue.length, i + 40); j++) {
       const t = library.track(this.queue[j]);
@@ -1452,12 +1491,36 @@ class Engine extends Emitter {
       if (st?.p) sc += Math.min(1.2, Math.log2(1 + st.p) * 0.35);
       if (st?.k) sc -= Math.min(2.5, st.k * (st.p ? 0.4 : 0.8));
       // a song we know everything about (tempo, key, energy, where it sings) mixes best
-      if (library.analysis.get(t.id)?.bpm) sc += 1;
-      if (sc > bestS) { bestS = sc; best = j; }
+      const aT = library.analysis.get(t.id);
+      if (aT?.bpm) sc += 1;
+      // the sound AI: songs that SOUND like they belong together (its fingerprint), and the same mood —
+      // a party song into a party song, never a sad ballad straight after an aggressive banger
+      const sim = soundSim(aCur, aT), mA = aCur?.ai, mB = aT?.ai;
+      if (sim != null) sc += clamp((sim - 0.78) * 12, -2.5, 2.5);
+      if (mA && mB) {
+        if (mA.party != null && mB.party != null) sc -= Math.abs(mA.party - mB.party) * 2;
+        if (mA.dance != null && mB.dance != null) sc -= Math.abs(mA.dance - mB.dance) * 1.5;
+        if (mA.aggr != null && mB.aggr != null) sc -= Math.abs(mA.aggr - mB.aggr) * 1.5;
+        if (mA.relax != null && mB.relax != null) sc -= Math.abs(mA.relax - mB.relax) * 1;
+      }
+      // the taste AI: what it has learned you think makes a good next song
+      let r2 = bA && bB ? bB / bA : 0; if (r2 > 1.4) r2 /= 2; else if (r2 && r2 < 0.7) r2 *= 2;
+      const pf = brain.pickFeatures({
+        tempoGap: r2 ? Math.abs(r2 - 1) : null, keyFit: kA && kB ? keyCompat(kA, kB) : null,
+        energyGap: eA != null && eB != null ? eB - eA : null, energyDrop: eA != null && eB != null && eB < eA ? eA - eB : 0,
+        sameGenre: fA && fB && fA === fB, nearGenre: fA && fB && GENRE_NEAR[fA]?.includes(fB), yearGap: yA && yB ? Math.abs(yA - yB) : null,
+        sameArtist: t.artist === cur.artist, liked: library.likes.has(t.id), plays: st?.p, skips: st?.k,
+        soundSim: sim, partyGap: mA && mB ? (mB.party ?? 0) - (mA.party ?? 0) : null, danceGap: mA && mB ? (mB.dance ?? 0) - (mA.dance ?? 0) : null,
+        moodGap: mA && mB ? (mB.happy ?? 0) - (mA.happy ?? 0) : null, voiceGap: mA && mB ? (mB.voice ?? 0) - (mA.voice ?? 0) : null,
+        level: settings.get('cookLevel') || 'smooth',
+      });
+      sc += brain.bonus('pick', pf, 4);
+      if (sc > bestS) { bestS = sc; best = j; bestF = pf; }
     }
     // tempos for songs nobody has measured yet are looked up online, so the next picks are better
     for (const t of lookup) onlineBpm(t).catch(() => {});
     if (best > i) { const [id] = this.queue.splice(best, 1); this.queue.splice(i, 0, id); this.emit('queue'); }
+    if (best >= i) this._pickF = { id: this.queue[i], f: bestF };
   }
   prepareNext() {
     if (this.upcoming || this.transition || this.sleepEndOfTrack) return;
@@ -1769,8 +1832,12 @@ class Engine extends Emitter {
               const bPre = loudAt(aB, st.bS - 6, st.bS), bPost = loudAt(aB, st.bS, st.bS + 6);
               if (st.phrase && bPre != null && bPost != null && bPost - bPre >= 8) cookS -= 0.5;
             }
-            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn, land: st.land,
-              score: clash * 6 + (cookBlend ? 0 : eGap) + cookS + (st.dropOn ? -2 : 0) + k * (cookBlend?.club ? 0.04 : cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
+            // the taste AI: how you've rated mixes like this one (where it leaves, where it comes in, how long)
+            const aiS = cookBlend ? brain.bonus('mix', brain.mixFeatures({ energyGap: eA != null && eB != null ? eB - eA : null, leaveStrong: eA != null && eA >= (loudAt(aA, 0, dur) ?? 0),
+              enterSection: !!st.section, enterLand: !!st.land, enterIntro: !st.phrase, exitFrac: ms / dur, beats: bt, stretch: Math.abs(bRate - 1), keyFit: kc,
+              kind: 'blend', club: !!cookBlend.club, level: settings.get('cookLevel') }), 2.5) : 0;
+            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn, land: st.land, section: !!st.section,
+              score: clash * 6 + (cookBlend ? 0 : eGap) + cookS - aiS + (st.dropOn ? -2 : 0) + k * (cookBlend?.club ? 0.04 : cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
           }
         }
       }
@@ -1789,6 +1856,7 @@ class Engine extends Emitter {
           label: `Beat match · ${tempoTxt}${aA.camelot && aB.camelot ? ` · ${aA.camelot}→${aB.camelot}` : ''}${kc >= 0.85 ? ' · harmonic' : ''}${vocalTxt}${dropTxt} · ${bt} beats`,
           mixStart: ms, overlap: overlapR, inDur: overlapR * 0.5, outDur: overlapR * 0.62, outDelay: overlapR * 0.38,
           bStart: pick.bS, rate: bRate, aRate, preroll: bar * 2, beat: beat / aRate, vocalClash: pick.clash, stripA, dropAt: pick.dropOn ? drop : null,
+          enterSection: pick.section, enterLand: !!pick.land, beats: bt, keyFit: kc,
         };
         if (cookBlend) {
           Object.assign(out, { cookKind: 'blend', throwEcho: cookBlend.throwEcho, label: `Cook It Up · ${cookBlend.club && ms < dur * 0.8 ? `Club mix at ${Math.round((ms / dur) * 100)}%` : 'Slow EQ blend'}${cookBlend.throwEcho ? ' + echo throw' : ''} · ${out.label.replace(/^Beat match · /, '')}` });
@@ -1885,7 +1953,7 @@ class Engine extends Emitter {
     // keys that clash: effects that let the old song ring on over the new one (echo tails, risers, washes)
     // would sound off — clean exits (cut, brake, spin-back, loop) are favoured instead
     const kcW = keyCompat(aA?.camelot, aB?.camelot);
-    const wOf = (k) => W[k] * (kcW < 0.6 ? ({ dub: 0.25, washout: 0.3, riser: 0.4 }[k] || 1.5) : 1);
+    const wOf = (k) => W[k] * (kcW < 0.6 ? ({ dub: 0.25, washout: 0.3, riser: 0.4 }[k] || 1.5) : 1) * brain.kindLean(k);
     let tot = pool.reduce((s, k) => s + wOf(k), 0), x = rnd() * tot, kind = pool[0];
     for (const k of pool) { x -= wOf(k); if (x <= 0) { kind = k; break; } }
     // the classic beat-matched blend (the regular DJ engine) with a Cook It Up echo throw at the end
@@ -2440,6 +2508,7 @@ class Engine extends Emitter {
     this.notePlayed(A);
     const total = (p.style === 'echo' ? 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
     this.transition = { from: A, to: B, plan: p, at: performance.now(), total: 0 };
+    this.rememberMix(A, B, p);
     dlog('mix', { from: A.track?.title, to: B.track?.title, at: A.el.currentTime, plan: p.mixStart, style: p.label, bReady: B.el.readyState });
     queueMicrotask(() => this.emit('transition', true));
     this.ai = 1 - this.ai;
@@ -2561,6 +2630,7 @@ class Engine extends Emitter {
     this.notePlayed(A);
     library.addMix('acapella');
     this.transition = { from: A, to: B, plan: p, at: performance.now(), total: 0 };
+    this.rememberMix(A, B, p);
     queueMicrotask(() => this.emit('transition', true));
     this.ai = 1 - this.ai;
     this.index = nx.index;
@@ -2574,6 +2644,7 @@ class Engine extends Emitter {
   }
   finishTransition() {
     if (!this.transition) return;
+    if (brain.pending && !brain.pending.endAt) brain.pending.endAt = Date.now();
     dlog('mix-done', { song: this.transition.to?.track?.title, at: this.transition.to?.el.currentTime, playing: !this.transition.to?.el.paused });
     this._changedAt = performance.now(); this._mixKick = 0;
     clearTimeout(this.transitionTimer);

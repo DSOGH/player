@@ -7,6 +7,8 @@ import { keyCompat, info, findCue } from '../dj.js';
 import { cachedLyrics } from '../lyrics.js';
 import { isAnalyzed } from '../analysis.js';
 import { art } from './components.js';
+import { brain } from '../dj-brain.js';
+import { soundSim } from '../sound-ai.js';
 
 const pct = (r) => `${r >= 1 ? '+' : '−'}${Math.abs((r - 1) * 100).toFixed(1)}%`;
 const STYLE_ICON = { cook: 'sparkle', acapella: 'lyrics', blend: 'bpm', echo: 'smart', under: 'crossfade', filter: 'eq', crossfade: 'crossfade', gapless: 'gapless' };
@@ -107,6 +109,15 @@ export function explain(p, A, B) {
     default:
       out.push(p.label || 'Gapless');
   }
+  // the AI DJ: how alike the two sound, their moods, and what it has learned you like
+  const aA = library.analysis.get(A.id), aB = library.analysis.get(B.id);
+  const sim = soundSim(aA, aB);
+  if (sim != null) {
+    const mood = (x) => [x.party >= 0.6 && 'party', x.dance >= 0.6 && 'danceable', x.aggr >= 0.6 && 'hard', x.relax >= 0.6 && 'chill', x.happy >= 0.6 && 'happy'].filter(Boolean).join(', ') || 'mellow';
+    out.push(`Sound AI: they sound ${sim >= 0.9 ? 'very alike' : sim >= 0.8 ? 'alike' : sim >= 0.7 ? 'related' : 'different'} (${Math.max(0, Math.round(sim * 100))}%) · ${mood(aA.ai)} → ${mood(aB.ai)}`);
+  }
+  const sm = brain.summary();
+  if (sm) out.push(`Taste AI (learned from ${sm.n} mixes)${sm.likes.length ? `: you like ${sm.likes.join(' and ')}` : ''}${sm.dislikes.length ? `${sm.likes.length ? ', ' : ': '}not ${sm.dislikes.join(' or ')}` : ''}`);
   return out;
 }
 

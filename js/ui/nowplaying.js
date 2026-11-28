@@ -75,6 +75,7 @@ export function initNowPlaying(h) {
         <button class="icon-btn np-q" data-np="queue" aria-label="Queue">${icon('queue')}</button>
       </div>
       <div class="np-next-hint"></div>
+      <div class="np-rate" aria-live="polite"><span>How was that mix?</span><button data-np="rate-up" aria-label="Good mix">👍</button><button data-np="rate-down" aria-label="Bad mix">👎</button></div>
     </div>`;
 
   mini.addEventListener('click', (e) => {
@@ -112,6 +113,14 @@ export function initNowPlaying(h) {
   engine.on('state', renderState);
   engine.on('time', renderTime);
   engine.on('queue', () => { if (mode === 'queue') renderQueue(); });
+  let rateT = null;
+  engine.on('mix-rate', (show) => {
+    const r = $('#np .np-rate');
+    if (!r) return;
+    clearTimeout(rateT);
+    r.classList.toggle('show', !!show);
+    if (show) rateT = setTimeout(() => r.classList.remove('show'), 45000);
+  });
   engine.on('hear-wait', (on) => { const b = $('#np .hear-mix'); if (b) { b.textContent = on ? 'Measuring…' : 'Hear it'; b.disabled = !!on; } if (on) toast('Measuring both songs so the mix lands right…'); });
   engine.on('plan', () => { preloadArt(engine.upcoming?.track?.artId, [200, 360, 640]); });
   engine.on('plan', () => { renderHint(); renderWaveMarks(); if (mode === 'booth') renderBooth($('#np .np-booth')); if (mode === 'lyrics' && lyrics) markCue(); });
@@ -194,6 +203,11 @@ async function act(a, el) {
     case 'booth': setMode('booth'); break;
     case 'idle-cook': if (engine.cookItUp()) { haptic(20); toast('🔥 DJ Cook It Up'); } else toast('Add some music first'); break;
     case 'idle-shuffle': { const all = [...library.tracks.values()].filter((x) => library.visible(x)); if (all.length) engine.playTracks(all, -1, { shuffle: true, context: { type: 'library', name: 'All songs' } }); break; }
+    case 'rate-up': case 'rate-down': {
+      const good = a === 'rate-up';
+      if (engine.rateMix(good)) { haptic(8); toast(good ? 'Got it — more mixes like that' : 'Got it — fewer mixes like that'); }
+      break;
+    }
     case 'hear-mix': {
       // jump to just before the next mix (both songs are measured and the mix point is fixed first)
       if (engine.transition) break; // already mixing: you're hearing it

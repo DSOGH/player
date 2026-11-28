@@ -646,6 +646,11 @@ async function doAction(a, el, e) {
       catch (e) { await actionSheet({ title: 'Playback report', items: [{ icon: 'copy', label: 'Select the text below and copy it', value: '' }], text: txt }).catch(() => {}); }
       break;
     }
+    case 'reset-dj-brain': {
+      const { brain } = await import('./dj-brain.js');
+      if (await confirmSheet('Forget what the AI DJ learned? It goes back to its own rules and learns again from scratch.', 'Forget', true)) { brain.reset(); toast('The AI DJ starts fresh'); }
+      break;
+    }
     case 'clear-analysis':
       if (await confirmSheet('Clear BPM & transition analysis for all songs?', 'Clear Analysis', true)) {
         await db.clear('analysis'); await db.shared.clear('analysis').catch(() => {}); library.analysis.clear(); toast('Analysis cleared');
