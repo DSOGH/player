@@ -802,7 +802,7 @@ class Engine extends Emitter {
     // Cook It Up only applies to this queue: your normal DJ settings aren't touched
     if (settings.get('transition') !== 'smart') { this._cookPrevTransition = settings.get('transition'); settings.set('transition', 'smart'); }
     this.cookSalt = Math.random().toString(36).slice(2);
-    this.cookHist = []; this._cookPicked = new Set(); this._userNext = new Set(); this._cookN = 0;
+    this.cookHist = []; this.cookHistLong = []; this._cookPicked = new Set(); this._userNext = new Set(); this._cookN = 0;
     (async () => { for (const t of all.slice(1, 60)) { if (!this.cookMode) break; if (!library.bpmOf(t)) await onlineBpm(t).catch(() => 0); } })();
     if (cur && this.playing) {
       // keep the song that's playing; the set continues from it
@@ -1988,7 +1988,9 @@ class Engine extends Emitter {
     const W = {
       smooth: sync ? { blend: 7, cut: 2, dub: 2, roll: 1, washout: 1 } : { dub: 3, washout: 3, brake: 1, roll: 1 },
       hype: sync ? { blend: 4, cut: 2, roll: 2, backspin: 1, brake: 1, dub: 2, riser: 1, washout: 1 } : { roll: 1, backspin: 2, brake: 2, dub: 3, riser: 1, washout: 2 },
-      wild: sync ? { blend: 3, cut: 2, roll: 3, backspin: 2, brake: 1, dub: 2, riser: 1, washout: 1 } : { roll: 2, backspin: 3, brake: 2, dub: 3, riser: 2, washout: 2 },
+      // Wild = a real DJ with tricks: still mostly blends; a trick when the moment's right
+      // (tempos that won't match: mostly a smooth filter blend, sometimes an echo out / filter wash)
+      wild: sync ? { blend: 10, cut: 1.5, dub: 1.5, roll: 1, washout: 1, riser: 0.7, backspin: 0.4, brake: 0.4 } : { blend: 6, dub: 2, washout: 1.5, cut: 0.6, brake: 0.25, backspin: 0.25 },
     }[level] || {};
     // Smooth & Hype are a DJ set: every transition is a real beat-matched blend (the songs are picked so
     // tempos line up, and Cook It Up allows a bigger tempo change), Hype sometimes throws in a cut or a
@@ -1997,8 +1999,23 @@ class Engine extends Emitter {
     // bass swap, vocals kept apart, drop landed) — what makes it a set is the song picking (cookPickNext).
     // Hype adds the odd echo throw; the stand-alone effects are Wild only.
     if (level !== 'wild' && !after) return { cookBlend: true, club: level === 'club' || level === 'hype', throwEcho: level === 'hype' && rnd() < 0.35, cookKind: 'blend' };
-    const recent = this.cookHist || [];
-    let pool = Object.keys(W).filter((k) => !recent.includes(k) && !exclude.includes(k));
+    const recent = this.cookHist || [], hist = this.cookHistLong || [];
+    // (the same trick twice in a row is avoided — a blend can follow a blend as often as it likes)
+    let pool = Object.keys(W).filter((k) => (k === 'blend' || !recent.includes(k)) && !exclude.includes(k));
+    if (level === 'wild' && !after) {
+      // how a real DJ uses tricks: spaced out (at least two plain blends in between), and only where they
+      // make sense — a loop roll or riser leads into a drop at a peak; a brake / spin-back is a rare,
+      // once-in-a-while move at a peak; echo outs and filter washes are for songs whose tempos won't match
+      const sinceFx = hist.length - 1 - hist.map((k) => k !== 'blend').lastIndexOf(true);
+      const Lm = aA?.loud, avg = Lm?.length ? Lm.reduce((x2, y2) => x2 + y2, 0) / Lm.length : null;
+      const tailE = Lm?.length ? Lm.slice(Math.floor(Lm.length * 0.6), Math.floor(Lm.length * 0.92)).reduce((x2, y2) => x2 + y2, 0) / Math.max(1, Math.floor(Lm.length * 0.32)) : null;
+      const peak = avg != null && tailE != null && tailE >= avg;
+      const hasDrop = !!(aB && findDrop(aB, aB.bpm));
+      if (hist.length < 2 || sinceFx < 2) pool = pool.filter((k) => k === 'blend'); // (and never on the set's first two changes)
+      if (!peak || !hasDrop) pool = pool.filter((k) => k !== 'roll' && k !== 'riser');
+      if (!peak || hist.slice(-6).some((k) => k === 'brake' || k === 'backspin')) pool = pool.filter((k) => k !== 'brake' && k !== 'backspin');
+      if (!pool.length) pool = ['blend'];
+    }
     if (after) pool = pool.filter((k) => k !== 'blend'); // after a jump there's no room planning a long blend
     if (!pool.length) pool = Object.keys(W).filter((k) => !exclude.includes(k) && k !== 'blend');
     if (!pool.length) pool = ['dub'];
@@ -2009,9 +2026,10 @@ class Engine extends Emitter {
     let tot = pool.reduce((s, k) => s + wOf(k), 0), x = rnd() * tot, kind = pool[0];
     for (const k of pool) { x -= wOf(k); if (x <= 0) { kind = k; break; } }
     // the classic beat-matched blend (the regular DJ engine) with a Cook It Up echo throw at the end
-    if (kind === 'blend') return { cookBlend: true, throwEcho: rnd() < (level === 'smooth' ? 0.35 : 0.6), cookKind: 'blend' };
+    if (kind === 'blend') return { cookBlend: true, club: level === 'wild', throwEcho: rnd() < (level === 'smooth' ? 0.35 : level === 'wild' ? 0.25 : 0.6), cookKind: 'blend' };
 
-    const beatsOf = { cut: 1, roll: level === 'wild' ? pickOf([4, 8]) : 4, brake: pickOf([1, 2]), backspin: 2, dub: pickOf([2, 4]), riser: pickOf([8, 16]), washout: pickOf([8, 16]) }[kind];
+    // (short, tasteful: a DJ's trick lasts a bar or two, not half a minute)
+    const beatsOf = { cut: 1, roll: 4, brake: 2, backspin: 2, dub: 2, riser: 8, washout: 8 }[kind];
     const L = beatsOf * beat;
     // where the outgoing song goes out: a phrase line, nobody mid-word, at a strong moment
     const vA = vocalSpans(cachedLyrics(A));
@@ -2566,7 +2584,7 @@ class Engine extends Emitter {
     }
     if (p.style === 'blend') this.startBeatLock(A, B, p);
     if (p.style !== 'gapless') library.addMix(p.style);
-    if (p.cookKind) this.cookHist = [...(this.cookHist || []), p.cookKind].slice(-2);
+    if (p.cookKind) { this.cookHist = [...(this.cookHist || []), p.cookKind].slice(-2); this.cookHistLong = [...(this.cookHistLong || []), p.cookKind].slice(-12); }
     this.notePlayed(A);
     const total = (p.style === 'echo' ? 4.2 : Math.max(p.outDelay + p.outDur, D)) * 1000;
     this.transition = { from: A, to: B, plan: p, at: performance.now(), total: 0 };

@@ -1200,7 +1200,7 @@ const COOK_STYLES = [
   ['smooth', 'wave', 'Smooth', 'Plays songs out, long slow blends'],
   ['club', 'bpm', 'Club', 'Leaves songs early on the phrase'],
   ['hype', 'flame', 'Hype', 'Cuts early, keeps the energy up, echo throws'],
-  ['wild', 'bolt', 'Wild', 'Rolls, brakes, spin-backs'],
+  ['wild', 'bolt', 'Wild', 'Blends + a trick when the moment’s right'],
 ];
 function cookSheet() {
   const vis = [...library.tracks.values()].filter((t) => library.visible(t));
