@@ -374,6 +374,9 @@ class Engine extends Emitter {
   // Swap a deck's <audio> element when it needs to change between Web Audio (CORS) and raw mode.
   // iPhone with the screen off / CarPlay with the phone locked (see onVisibility)
   get bgMode() { return IOS && typeof document !== 'undefined' && document.visibilityState === 'hidden'; }
+  // locked, and iPhone has refused to start a second player while locked before: then each next song
+  // takes over the one player instead (a real two-song mix is tried first, every time it can be)
+  get bgSafe() { return this.bgMode && (!!this._bgMixFailed || settings.get('bgMix') === false); }
   prepareDeck(d, track, forceRaw = false) {
     const raw = forceRaw || settings.get('engine') !== 'enhanced' || !!(track?.plex && this.plexNoCors);
     if (d.raw === raw) return;
@@ -414,8 +417,10 @@ class Engine extends Emitter {
     if (!IOS) return;
     if (document.visibilityState === 'hidden') {
       this._ctxBad = 0;
-      this.stopPreroll();
-      if (!this.transition) {
+      // the next song, fetched whole to the phone now, so it starts instantly (from storage, not the network)
+      if (this.upcoming?.track) prefetchTrack(this.upcoming.track, { next: true });
+      if (this.bgSafe) this.stopPreroll();
+      if (this.bgSafe && !this.transition) {
         const o = this.other;
         for (const e of Object.values(o.els)) { e._silentTail = false; try { e.pause(); } catch (er) { /* */ } }
         if (o.track && o !== this.cur) { o.token++; o.track = null; }
@@ -427,6 +432,7 @@ class Engine extends Emitter {
       dlog('screen-off', { song: this.track?.title, audio: this.ctx?.state, playing: this.playing });
     } else {
       holdBackground(0, { release: true });
+      this._bgMixFailed = false;
       this.resume();
       // (only if the emergency backup had to be used: back to the normal player at the same spot)
       if (this.cur.raw && this.cur.track && settings.get('engine') === 'enhanced' && !(this.cur.track.plex && this.plexNoCors)) this.handover(this.cur, false, 'app open');
@@ -1461,7 +1467,12 @@ class Engine extends Emitter {
     const cur = this.cur.track;
     if (!cur) return;
     const tempo = (t) => library.bpmOf(t) || onlineBpmCached(t) || 0;
-    const energy = (t) => { const L = library.analysis.get(t.id)?.loud; if (!L?.length) return null; let s2 = 0; for (const v of L) s2 += v; return s2 / L.length; };
+    // a song's energy: measured when it has been (its loudness curve), otherwise worked out from what's
+    // known about it (genre, tempo, lyrics, the sound AI) — so an unmeasured ballad can't sneak in after
+    // a banger just because nobody measured it
+    const energyM = (t) => { const L = library.analysis.get(t.id)?.loud; if (!L?.length) return null; let s2 = 0; for (const v of L) s2 += v; return s2 / L.length; };
+    const energyEst = (t) => { const m = moodOf(t); if (!m) return null; return 38 + 48 * (Math.max(m.party, m.hype) * 0.65 + (1 - m.chill) * 0.35); };
+    const energy = (t) => energyM(t) ?? energyEst(t);
     const bA = tempo(cur), kA = library.analysis.get(cur.id)?.camelot, fA = cur.genreFamily, eA = energy(cur), yA = +cur.year || 0;
     // a set breathes: energy rises and falls in a slow wave, a few points per song — never a hard drop
     // or a ballad straight into a banger
@@ -1483,8 +1494,11 @@ class Engine extends Emitter {
       // tempo the DJ can match without anyone noticing
       const bB = tempo(t);
       if (bA && bB) {
-        let r = bB / bA; if (r > 1.4) r /= 2; else if (r < 0.7) r *= 2;
+        let r = bB / bA, folded = false; if (r > 1.4) { r /= 2; folded = true; } else if (r < 0.7) { r *= 2; folded = true; }
         const d = Math.abs(r - 1);
+        // 70 and 140 BPM line up on the beat — but a slow jam into a double-time banger is still a jump:
+        // only fine when both FEEL alike (same energy)
+        if (folded) { const ga = energy(cur), gb = energy(t); sc -= ga != null && gb != null && Math.abs(gb - ga) > 8 ? 4 : 1; }
         sc += d <= 0.015 ? 4.5 : d <= 0.04 ? 3.8 : d <= 0.08 ? 2.6 : (!IOS && d <= 0.12) ? 0.5 : -6; // (beat-matchable within 8%: the tempo gets bent to fit; beyond that it can't lock — avoid it)
       } else if (!bB && lookup.length < 10) lookup.push(t);
       // keys that sit together
@@ -1497,9 +1511,14 @@ class Engine extends Emitter {
       const yB = +t.year || 0;
       if (yA && yB) sc += Math.abs(yA - yB) <= 3 ? 0.5 : Math.abs(yA - yB) > 15 ? -0.5 : 0;
       // energy flow
-      const eB = energy(t);
-      if (target != null && eB != null) { sc -= Math.abs(eB - target) / 6; if (eB < eA - 8) sc -= 2.5 + (eA - 8 - eB) / 4; else if (eB - eA > 18) sc -= 2; }
-      else if (eA != null) sc -= 0.8; // unknown energy is a gamble
+      const eB = energy(t), measured = energyM(t) != null && energyM(cur) != null;
+      if (target != null && eB != null) {
+        sc -= Math.abs(eB - target) / 6;
+        if (eB < eA - 8) sc -= 2.5 + (eA - 8 - eB) / 4;
+        // never a big jump in one step, up OR down (a mood journey gets there a song at a time)
+        const jump = Math.abs(eB - eA);
+        if (jump > 13) sc -= (measured ? 4 : 2.5) + (jump - 13) / 2;
+      } else if (eA != null) sc -= 0.8; // unknown energy is a gamble
       // variety: not the same artist or album again so soon
       if (t.artist === cur.artist) sc -= 3; else if (recentArtists.has(t.artist)) sc -= 1.5;
       if (recentAlbums.has(t.albumId)) sc -= 1;
@@ -1575,7 +1594,8 @@ class Engine extends Emitter {
     // one download per song: when the next song is being downloaded to be measured, its player waits
     // and then plays that copy from the phone (streaming it at the same time doubled the data and made
     // the playing song stutter). The tick loads it anyway 35 s before the mix if the download is slow.
-    if (this.bgMode && !t.demo) return; // (in the background only the plan is made: the song takes over this player)
+    if (this.bgMode && !t.demo) prefetchTrack(t, { next: true }); // (locked: fetched whole so it starts instantly)
+    if (this.bgSafe && !t.demo) return; // (single-player mode: only the plan is made, the song takes over this player)
     if (!willFetch) load();
     if (this.wantsAnalysis()) {
       analyze(t, refresh ? { force: true } : undefined).then(() => { if (this.upcoming?.track === t && !this.transition) { this.computePlan(); load(); } });
@@ -2385,8 +2405,18 @@ class Engine extends Emitter {
       // the next song gets as long as this one can spare (up to 10 s) — a late start is lined back up on
       // the beat by the beat lock, which beats giving the mix up
       const spare = ((this.durationOf(A) || A.el.duration || 0) - (A.el.currentTime || 0)) / (A.el.playbackRate || 1) - (p.overlap || 8) - 1;
-      const inTime = await Promise.race([started, new Promise((r) => setTimeout(() => r(false), clamp(spare, 3, 10) * 1000))]);
+      const inTime = await Promise.race([started, new Promise((r) => setTimeout(() => r(false), (this.bgMode ? 2 : clamp(spare, 3, 10)) * 1000))]);
       if (A.token !== tokA || this.plan !== p || !this.playing) return;
+      if (!inTime && this.bgMode) {
+        // locked and iPhone won't start the second player: the next song takes over this one right now,
+        // on the beat — and from now on while locked it goes straight to that (no waiting at mix points)
+        this._bgMixFailed = true;
+        dlog('bg-mix-refused', { from: A.track?.title, to: B.track?.title });
+        if (B.token === tokB) { try { B.el.pause(); } catch (e) { /* */ } this.setFade(B, 0); }
+        p._starting = false;
+        this.bgSwitch(p, 0);
+        return;
+      }
       if (!inTime) {
         // still nothing: no half-started mix and no cut — the mix moves to the next good spot in this song
         // (the next song keeps loading meanwhile); only if there's no room left does it go at the end
@@ -2767,13 +2797,13 @@ class Engine extends Emitter {
       return;
     }
     const pl = this.plan;
-    if (!this.bgMode && this.upcoming && this.other.track !== this.upcoming.track && !this.transition && (!pl || t > pl.mixStart - 35 * (d.el.playbackRate || 1) || remaining < 40)) {
+    if (!this.bgSafe && this.upcoming && this.other.track !== this.upcoming.track && !this.transition && (!pl || t > pl.mixStart - 35 * (d.el.playbackRate || 1) || remaining < 40)) {
       const o = this.other, nt = this.upcoming.track;
       this.loadDeck(o, nt, pl?.bStart || 0); this.applyDeckGain(o); this.setFade(o, 0);
     }
     // app in the background on iPhone: no second player (it may not be allowed to start, and timers run
     // late) — the next song takes over this player at the mix point, on the phrase, with a quick fade
-    const bg = IOS && document.visibilityState === 'hidden';
+    const bg = this.bgSafe;
     if (bg && pl && !this.transition && this.upcoming && !pl._bgDone && pl.style !== 'gapless' && !this.cooking && !d.track?.demo) {
       const half = (pl.overlap || 8) * 0.5 * (d.el.playbackRate || 1);
       if (t >= pl.mixStart + half - 0.15) { this.bgSwitch(pl, half); return; }

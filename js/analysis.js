@@ -92,13 +92,15 @@ export async function fetchTrackBuffer(t, signal, { store = true, urgent = false
   return blob.arrayBuffer();
 }
 
-export async function prefetchTrack(t) {
+export async function prefetchTrack(t, { next = false } = {}) {
   if (!t || t.demo) return;
   const mode = settings.get('prefetch');
-  if (mode === 'off') return;
-  if (mode === 'wifi' && navigator.connection?.type === 'cellular') return;
-  if (t.size > 40e6) return; // a huge lossless file: the player streams it itself (a full copy only fights the music)
-  try { await fetchTrackBuffer(t); } catch (e) { /* ignore */ }
+  if (mode === 'off' && !next) return;
+  if (mode === 'wifi' && navigator.connection?.type === 'cellular' && !next) return;
+  // (the very next song while the phone is locked: always fetched whole, so it starts instantly —
+  // the phone can't buffer it in the background otherwise; anything else over 40 MB just streams)
+  if (t.size > (next ? 150e6 : 40e6)) return;
+  try { await fetchTrackBuffer(t, null, { urgent: next }); } catch (e) { /* ignore */ }
 }
 
 // ---- fast measuring ----
