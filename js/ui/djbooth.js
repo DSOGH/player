@@ -9,6 +9,7 @@ import { isAnalyzed } from '../analysis.js';
 import { art } from './components.js';
 import { brain } from '../dj-brain.js';
 import { soundSim } from '../sound-ai.js';
+import { moodOf, moodName, moodTarget, lyricThemeFit } from '../mood.js';
 
 const pct = (r) => `${r >= 1 ? '+' : '−'}${Math.abs((r - 1) * 100).toFixed(1)}%`;
 const STYLE_ICON = { cook: 'sparkle', acapella: 'lyrics', blend: 'bpm', echo: 'smart', under: 'crossfade', filter: 'eq', crossfade: 'crossfade', gapless: 'gapless' };
@@ -116,6 +117,15 @@ export function explain(p, A, B) {
     const mood = (x) => [x.party >= 0.6 && 'party', x.dance >= 0.6 && 'danceable', x.aggr >= 0.6 && 'hard', x.relax >= 0.6 && 'chill', x.happy >= 0.6 && 'happy'].filter(Boolean).join(', ') || 'mellow';
     out.push(`Sound AI: they sound ${sim >= 0.9 ? 'very alike' : sim >= 0.8 ? 'alike' : sim >= 0.7 ? 'related' : 'different'} (${Math.max(0, Math.round(sim * 100))}%) · ${mood(aA.ai)} → ${mood(aB.ai)}`);
   }
+  // the vibe: each song's strongest moods, where a mood journey is, lyrics about the same things
+  const topMood = (t) => { const m = moodOf(t); return m ? Object.entries(m).sort((x, y) => y[1] - x[1]).slice(0, 1).map(([k]) => moodName(k).toLowerCase())[0] : null; };
+  const ma = topMood(A), mb = topMood(B);
+  if (engine.cookMoods?.length) {
+    const mt = moodTarget(engine.cookMoods, engine._cookN || 0, engine.cookJourney || 10);
+    out.push(engine.cookMoods.length === 2 ? `Mood journey ${engine.cookMoods.map(moodName).join(' → ')}: ${Math.round((mt?.progress || 0) * 100)}% of the way · ${ma} → ${mb}` : `Mood: staying ${moodName(engine.cookMoods[0]).toLowerCase()} · ${ma} → ${mb}`);
+  } else if (ma && mb) out.push(`Vibe: ${ma} → ${mb}`);
+  const lt = lyricThemeFit(A, B);
+  if (lt != null && lt >= 0.3) out.push(`Their lyrics are about the same things (${Math.round(lt * 100)}% overlap)`);
   const sm = brain.summary();
   if (sm) out.push(`Taste AI (learned from ${sm.n} mixes)${sm.likes.length ? `: you like ${sm.likes.join(' and ')}` : ''}${sm.dislikes.length ? `${sm.likes.length ? ', ' : ': '}not ${sm.dislikes.join(' or ')}` : ''}`);
   return out;

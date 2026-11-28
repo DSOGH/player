@@ -12,6 +12,7 @@ export const DEFAULTS = {
   djLearn: true,              // AI DJ: learn from 👍/👎, skips, likes
   soundAI: true,              // AI DJ: MusiCNN listens to songs (downloads ~4.5 MB once)
   djBrain: null,              // AI DJ: what it has learned (synced with the profile)
+  cookLast: null,             // Cook It Up: last genres / moods / journey picked
   harmonicMix: true,          // use musical key (Camelot) to choose blend length
   onlineLyrics: true,         // look up lyrics by title + artist (LRCLIB)
   fadeCurve: 'equalpower',    // 'equalpower' | 'linear' | 'scurve'

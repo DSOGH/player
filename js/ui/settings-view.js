@@ -16,7 +16,7 @@ import { soundAI } from '../sound-ai.js';
 import { plexPage, plexLogo } from './plex-view.js';
 import { current as dualInfo } from './dual.js';
 
-export const APP_VERSION = '1.40.0';
+export const APP_VERSION = '1.41.0';
 
 // ---------- controls ----------
 const toggle = (k, label, sub = '') => html`<label class="set-row">

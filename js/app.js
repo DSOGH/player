@@ -23,6 +23,7 @@ import { friendsView, chatView, acceptView, drafts } from './ui/friends-view.js'
 import { accounts, writeMeta } from './accounts.js';
 import { compareVersions } from './editions.js';
 import { cloud, setEngineIds } from './cloud.js';
+import { MOODS, moodName, moodFit } from './mood.js';
 import { diagText } from './diag.js';
 setEngineIds(() => [engine.track?.id, engine.upcoming?.track?.id]);
 import { showLogin, noteAccount, connectSheet, restoreSheet } from './ui/accounts-view.js';
@@ -1204,26 +1205,42 @@ const COOK_STYLES = [
 function cookSheet() {
   const vis = [...library.tracks.values()].filter((t) => library.visible(t));
   if (vis.length < 2) { toast('Add some music first'); return; }
-  const gs = [...(library.genres?.values() || [])].map((G) => {
-    const tr = G.tracks.filter((t) => library.visible(t));
-    const arts = [...new Set(tr.map((t) => library.album(t.albumId)?.artId).filter(Boolean))].slice(0, 4);
-    return { ...G, n: tr.length, arts };
-  }).filter((G) => G.n >= 4).sort((a, b) => b.n - a.n).slice(0, 24);
+  const artsOf = (tr) => [...new Set(tr.map((t) => library.album(t.albumId)?.artId).filter(Boolean))].slice(0, 4);
+  // main genres (every song in one) …
+  const gs = [...(library.genres?.values() || [])].map((G) => { const tr = G.tracks.filter((t) => library.visible(t)); return { ...G, tr, n: tr.length, arts: artsOf(tr) }; })
+    .filter((G) => G.n >= 2).sort((a, b) => b.n - a.n);
+  // … and the specific styles in your tags (Trap, Deep House, Neo-Soul…), for "More genres"
+  const famNames = new Set(gs.map((G) => G.name.toLowerCase()));
+  const tagMap = new Map();
+  for (const t of vis) {
+    const tags = new Set(String(`${t.genre || ''};${t.artistGenre || ''}`).split(/[;,|]/).map((x) => x.trim()).filter((x) => x && x.length < 30 && !/^(pop\/rock|music|other|unknown|misc|various)$/i.test(x)));
+    for (const g of tags) { const k = g.toLowerCase(); if (famNames.has(k)) continue; let e = tagMap.get(k); if (!e) { e = { id: 'tag:' + k, name: g, tr: [] }; tagMap.set(k, e); } e.tr.push(t); }
+  }
+  const tags = [...tagMap.values()].filter((x) => x.tr.length >= 3).sort((a, b) => b.tr.length - a.tr.length).slice(0, 60).map((x) => ({ ...x, n: x.tr.length, arts: artsOf(x.tr) }));
+  const byId = new Map([...gs, ...tags].map((G) => [G.id, G]));
   const allArts = [...new Set(vis.map((t) => library.album(t.albumId)?.artId).filter(Boolean))].sort(() => Math.random() - 0.5).slice(0, 4);
   const cur = engine.track;
-  const picked = new Set();
+  const last = settings.get('cookLast') || {};
+  const picked = new Set((last.genres || []).filter((id) => byId.has(id)));
+  let moods = (last.moods || []).filter((m) => MOODS.some((x) => x.id === m)).slice(0, 2);
+  let journey = last.journey || 10, moreGenres = false;
   const sheet = $('#sheet');
   const lv = () => settings.get('cookLevel') || 'smooth';
   const likePool = () => { const p = vis.filter((t) => t.artist === cur.artist || (cur.genreFamily && t.genreFamily === cur.genreFamily)); return p.length < 8 ? vis : p; };
-  const count = () => {
-    if (picked.has('@cur') && cur) return likePool().length;
-    if (!picked.size) return vis.length;
-    const set = new Set(); for (const id of picked) for (const t of library.genres.get(id)?.tracks || []) if (library.visible(t)) set.add(t.id);
-    return set.size;
+  const poolNow = () => {
+    if (picked.has('@cur') && cur) return likePool();
+    if (!picked.size) return vis;
+    const set = new Set(); for (const id of picked) for (const t of byId.get(id)?.tr || []) set.add(t);
+    return [...set];
   };
   const mosaic = (arts) => html`<span class="ck-mosaic">${[0, 1, 2, 3].map((i) => arts[i] ? art(arts[i], 'sm') : html`<i></i>`)}</span>`;
+  const card = (G) => html`<button class="ck-card${picked.has(G.id) ? ' on' : ''}" data-cg="${G.id}">${mosaic(G.arts)}<b>${G.name}</b><small>${G.n} songs</small><i class="ck-check">${icon('check')}</i></button>`;
+  const moodTxt = () => !moods.length ? 'Any mood — it follows the energy' : moods.length === 1 ? `Stays ${moodName(moods[0]).toLowerCase()}` : `${moodName(moods[0])} → ${moodName(moods[1])}, a little at a time over ~${journey} songs`;
   const draw = () => {
-    const n = count();
+    const pool = poolNow();
+    const n = pool.length;
+    // how many songs in the pool really fit the chosen mood(s)
+    const fits = moods.length ? moods.map((m) => pool.filter((t) => moodFit(t, m) >= 0.48).length) : null;
     sheet.innerHTML = html`<div class="sheet-backdrop" data-x></div>
       <div class="sheet-panel ck">
         <div class="ck-hero"><span class="ck-bg"><i></i><i></i><i></i></span>
@@ -1231,16 +1248,25 @@ function cookSheet() {
           <div><b>DJ Cook It Up</b><small>A set from your library — picked to fit, mixed on the beat</small></div>
           <button class="ck-x" data-x aria-label="Close">${icon('x')}</button>
         </div>
-        <div class="ck-sec">Style</div>
+        <div class="ck-sec"><i>1</i> Mix type</div>
         <div class="ck-styles">${COOK_STYLES.map(([k, ic, name, sub]) => html`<button class="ck-style${lv() === k ? ' on' : ''}" data-cl="${k}"><span>${icon(ic)}</span><b>${name}</b><small>${sub}</small></button>`)}</div>
-        <div class="ck-sec">What to play</div>
+        <div class="ck-sec"><i>2</i> Mood <small>tap one — or two to go from one to the other</small></div>
+        <div class="ck-moods">
+          <button class="ck-mood${!moods.length ? ' on' : ''}" data-cm="">✨<b>Any</b></button>
+          ${MOODS.map((m) => { const k = moods.indexOf(m.id); return html`<button class="ck-mood${k >= 0 ? ' on' : ''}" data-cm="${m.id}">${m.emoji}<b>${m.name}</b>${k >= 0 && moods.length === 2 ? html`<em>${k === 0 ? 'from' : 'to'}</em>` : ''}</button>`; })}
+        </div>
+        <p class="ck-note">${moodTxt()}${fits ? ` · ${fits.map((f, i) => `${f} songs ${moodName(moods[i]).toLowerCase()}`).join(', ')}` : ''}</p>
+        ${moods.length === 2 ? html`<div class="ck-journey">${[[6, 'Quick'], [10, 'Steady'], [16, 'Slow']].map(([v, l]) => html`<button class="${journey === v ? 'on' : ''}" data-cj="${v}">${l}<small>~${v} songs</small></button>`)}</div>` : ''}
+        <div class="ck-sec"><i>3</i> Genres <small>pick any — or none for everything</small></div>
         <div class="ck-grid">
           <button class="ck-card${!picked.size ? ' on' : ''}" data-cg="">${mosaic(allArts)}<b>Everything</b><small>${vis.length.toLocaleString()} songs</small><i class="ck-check">${icon('check')}</i></button>
           ${cur ? html`<button class="ck-card${picked.has('@cur') ? ' on' : ''}" data-cg="@cur"><span class="ck-mosaic one">${art(library.album(cur.albumId)?.artId || cur.artId, 'sm')}</span><b>Like this song</b><small>${cur.title}</small><i class="ck-check">${icon('check')}</i></button>` : ''}
-          ${gs.map((G) => html`<button class="ck-card${picked.has(G.id) ? ' on' : ''}" data-cg="${G.id}">${mosaic(G.arts)}<b>${G.name}</b><small>${G.n} songs</small><i class="ck-check">${icon('check')}</i></button>`)}
+          ${gs.map(card)}
         </div>
-        ${!gs.length ? html`<p class="ck-note">Your songs don’t have genre tags, so the DJ goes by tempo, key and energy.</p>` : html`<p class="ck-note">Pick one or mix several genres.</p>`}
-        <div class="ck-foot"><button class="ck-start" data-cstart ${n < 2 ? 'disabled' : ''}>${icon('play')}<span>Start the set</span><small>${n.toLocaleString()} songs</small></button></div>
+        ${tags.length ? html`<button class="ck-more" data-cmore>${moreGenres ? 'Fewer genres' : `More genres (${tags.length})`}</button>
+          ${moreGenres ? html`<div class="ck-tags">${tags.map((G) => html`<button class="ck-tag${picked.has(G.id) ? ' on' : ''}" data-cg="${G.id}">${G.name}<small>${G.n}</small></button>`)}</div>` : ''}` : ''}
+        ${!gs.length ? html`<p class="ck-note">Your songs don’t have genre tags, so the DJ goes by tempo, key, energy and mood.</p>` : ''}
+        <div class="ck-foot"><button class="ck-start" data-cstart ${n < 2 ? 'disabled' : ''}>${icon('play')}<span>Start the set</span><small>${n.toLocaleString()} songs${moods.length ? ` · ${moods.map(moodName).join(' → ')}` : ''}</small></button></div>
       </div>`.toString();
   };
   draw();
@@ -1255,17 +1281,29 @@ function cookSheet() {
       else { picked.delete('@cur'); picked.has(id) ? picked.delete(id) : picked.add(id); }
       haptic(6); draw(); return;
     }
+    const m = e.target.closest('[data-cm]');
+    if (m) {
+      const id = m.dataset.cm;
+      if (!id) moods = [];
+      else if (moods.includes(id)) moods = moods.filter((x) => x !== id);
+      else moods = moods.length >= 2 ? [moods[1], id] : [...moods, id];
+      haptic(6); draw(); return;
+    }
+    const jb = e.target.closest('[data-cj]');
+    if (jb) { journey = +jb.dataset.cj; haptic(6); draw(); return; }
+    if (e.target.closest('[data-cmore]')) { moreGenres = !moreGenres; draw(); return; }
     const l = e.target.closest('[data-cl]');
     if (l) { settings.set('cookLevel', l.dataset.cl); haptic(6); draw(); return; }
     if (e.target.closest('[data-cstart]')) {
       let pool = null, name = 'DJ Cook It Up', keep = false;
       if (picked.has('@cur') && cur) { pool = likePool(); name = `Cook It Up · like ${cur.title}`; keep = true; }
       else if (picked.size) {
-        const set = new Set(); for (const id of picked) for (const t of library.genres.get(id)?.tracks || []) if (library.visible(t)) set.add(t);
-        pool = [...set];
-        name = `Cook It Up · ${[...picked].map((id) => library.genres.get(id)?.name).filter(Boolean).slice(0, 3).join(' + ')}`;
+        pool = poolNow();
+        name = `Cook It Up · ${[...picked].map((id) => byId.get(id)?.name).filter(Boolean).slice(0, 3).join(' + ')}`;
       }
-      if (!engine.cookItUp(pool, { keepCurrent: keep, name })) { toast('Not enough songs there'); return; }
+      if (moods.length) name += ` · ${moods.map(moodName).join(' → ')}`;
+      settings.set('cookLast', { genres: [...picked].filter((x) => x !== '@cur'), moods, journey });
+      if (!engine.cookItUp(pool, { keepCurrent: keep, name, moods, journey })) { toast('Not enough songs there'); return; }
       shut(); haptic(25); toast(`🔥 ${name}`, { ms: 3000 });
       if (settings.get('engine') !== 'enhanced' && /iPhone|iPad/.test(navigator.userAgent)) toast('Tip: turn on Enhanced audio for the full DJ mixing on iPhone', { ms: 5000 });
       return;

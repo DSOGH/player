@@ -1567,3 +1567,21 @@ body.dual.scrolled .page-head { background: var(--glass); -webkit-backdrop-filte
 .np-rate.show { height: 40px; opacity: 1; }
 .np-rate button { font-size: 18px; width: 40px; height: 32px; border-radius: 16px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: inherit; }
 .np-rate button:active { transform: scale(.92); background: rgba(255,255,255,.2); }
+
+/* v1.41 — Cook It Up: numbered steps, moods, journeys, more genres */
+.ck-sec i { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 6px; border-radius: 50%; background: var(--accent, #ff5a36); color: #fff; font-style: normal; font-size: 12px; font-weight: 700; vertical-align: 1px; }
+.ck-sec small { margin-left: 6px; font-weight: 400; opacity: .6; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.ck-moods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.ck-mood { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px 8px; border-radius: 14px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05); color: inherit; font-size: 22px; }
+.ck-mood b { font-size: 12px; font-weight: 600; }
+.ck-mood.on { border-color: var(--accent, #ff5a36); background: color-mix(in srgb, var(--accent, #ff5a36) 22%, transparent); }
+.ck-mood em { position: absolute; top: 4px; right: 5px; font-size: 9px; font-style: normal; text-transform: uppercase; letter-spacing: .04em; opacity: .85; }
+.ck-journey { display: flex; gap: 8px; margin: 2px 0 6px; }
+.ck-journey button { flex: 1; padding: 8px 6px; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); color: inherit; font-weight: 600; font-size: 13px; }
+.ck-journey button small { display: block; font-weight: 400; opacity: .6; font-size: 11px; }
+.ck-journey button.on { border-color: var(--accent, #ff5a36); background: color-mix(in srgb, var(--accent, #ff5a36) 22%, transparent); }
+.ck-more { display: block; margin: 10px auto 4px; padding: 8px 16px; border-radius: 18px; border: 1px solid rgba(255,255,255,.15); background: none; color: inherit; font-size: 13px; }
+.ck-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+.ck-tag { padding: 6px 11px; border-radius: 16px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); color: inherit; font-size: 13px; }
+.ck-tag small { margin-left: 5px; opacity: .55; font-size: 11px; }
+.ck-tag.on { border-color: var(--accent, #ff5a36); background: color-mix(in srgb, var(--accent, #ff5a36) 25%, transparent); }

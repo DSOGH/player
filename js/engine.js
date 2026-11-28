@@ -13,6 +13,7 @@ import { findCue, findHandoff, titleEntry, keyCompat } from './dj.js';
 import { getLyrics, cachedLyrics } from './lyrics.js';
 import { plex } from './plex.js';
 import { brain } from './dj-brain.js';
+import { moodOf, moodTarget, moodScore, moodFit, lyricThemeFit, lyricLink, moodName } from './mood.js';
 import { soundSim, soundAI } from './sound-ai.js';
 import { hearWithAI } from './analysis.js';
 
@@ -767,12 +768,26 @@ class Engine extends Emitter {
   }
   // ---------- queue ----------
   // DJ Cook It Up: your whole library in random order, mixed with a different wild transition each time
-  cookItUp(pool = null, { keepCurrent = false, name = 'DJ Cook It Up' } = {}) {
+  cookItUp(pool = null, { keepCurrent = false, name = 'DJ Cook It Up', moods = null, journey = 10 } = {}) {
     let all = (pool || [...library.tracks.values()].filter((t) => library.visible(t))).filter((t) => (t.duration || 200) > 45);
     if (!all.length) return false;
     for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-    // start somewhere it knows sounds good: a liked / often-played song from the crate
-    if (!keepCurrent) {
+    this.cookMoods = moods?.length ? moods.slice(0, 2) : null;
+    this.cookJourney = journey;
+    if (this.cookMoods?.length === 1 && all.length > 30) {
+      // one mood: the set plays from the songs that fit it best (the top ~2/3)
+      const m = this.cookMoods[0];
+      all = all.map((t) => [t, moodFit(t, m)]).sort((a, b) => b[1] - a[1]).slice(0, Math.max(30, Math.round(all.length * 0.65))).map(([t]) => t);
+      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+    }
+    if (!keepCurrent && this.cookMoods) {
+      // the first song is right in the starting mood
+      const m = this.cookMoods[0];
+      const top = all.slice(0, 200).map((t, i) => [i, moodFit(t, m) + (library.likes.has(t.id) ? 0.1 : 0)]).sort((a, b) => b[1] - a[1]).slice(0, 8);
+      const pickI = top[Math.floor(Math.random() * top.length)]?.[0] ?? 0;
+      if (pickI > 0) all.unshift(...all.splice(pickI, 1));
+    } else if (!keepCurrent) {
+      // start somewhere it knows sounds good: a liked / often-played song from the crate
       const fav = all.findIndex((t) => library.likes.has(t.id) || (library.stats[t.id]?.p || 0) >= 3);
       if (fav > 0 && fav < 80) all.unshift(...all.splice(fav, 1));
     }
@@ -1452,7 +1467,10 @@ class Engine extends Emitter {
     // or a ballad straight into a banger
     this._cookN = (this._cookN || 0) + 1;
     // (it mostly holds or climbs — hype goes into hype; only every so often a small breather)
-    const target = eA == null ? null : eA + 2 + 3 * Math.cos(this._cookN / 3);
+    // a mood (or a journey from one mood to another) sets where the energy goes instead
+    const mt = this.cookMoods ? moodTarget(this.cookMoods, this._cookN, this.cookJourney || 10) : null;
+    const mCur = mt ? moodOf(cur) : null;
+    const target = eA == null ? null : mt?.energy != null ? (eA * 0.4 + mt.energy * 0.6) + 2 * Math.cos(this._cookN / 3) : eA + 2 + 3 * Math.cos(this._cookN / 3);
     const recent = this.queue.slice(Math.max(0, this.index - 5), this.index + 1).map((id) => library.track(id)).filter(Boolean);
     const recentArtists = new Set(recent.map((t) => t.artist)), recentAlbums = new Set(recent.map((t) => t.albumId));
     let best = -1, bestS = -Infinity, bestF = null;
@@ -1503,6 +1521,15 @@ class Engine extends Emitter {
         if (mA.aggr != null && mB.aggr != null) sc -= Math.abs(mA.aggr - mB.aggr) * 1.5;
         if (mA.relax != null && mB.relax != null) sc -= Math.abs(mA.relax - mB.relax) * 1;
       }
+      // the mood: fits where the set is heading right now — and never a jump: a little at a time
+      if (mt) {
+        sc += (moodScore(t, mt) - 0.5) * 7;
+        const mB = moodOf(t);
+        if (mCur && mB) { let dist = 0; for (const k in mB) dist += Math.abs(mB[k] - (mCur[k] ?? 0.5)); sc -= Math.max(0, dist - 0.8) * 2.2; }
+      }
+      // lyrics about the same things (love into love, the club into the club)
+      const lt = lyricThemeFit(cur, t);
+      if (lt != null) sc += lt * 2.2;
       // the taste AI: what it has learned you think makes a good next song
       let r2 = bA && bB ? bB / bA : 0; if (r2 > 1.4) r2 /= 2; else if (r2 && r2 < 0.7) r2 *= 2;
       const pf = brain.pickFeatures({
@@ -1521,6 +1548,8 @@ class Engine extends Emitter {
     for (const t of lookup) onlineBpm(t).catch(() => {});
     if (best > i) { const [id] = this.queue.splice(best, 1); this.queue.splice(i, 0, id); this.emit('queue'); }
     if (best >= i) this._pickF = { id: this.queue[i], f: bestF };
+    // the next few likely songs' lyrics are fetched now, so themes and lyric links can be used
+    for (let j = i; j < Math.min(this.queue.length, i + 4); j++) { const t2 = library.track(this.queue[j]); if (t2 && !cachedLyrics(t2)) getLyrics(t2).catch(() => {}); }
   }
   prepareNext() {
     if (this.upcoming || this.transition || this.sleepEndOfTrack) return;
@@ -1803,7 +1832,7 @@ class Engine extends Emitter {
             // seamless = both songs at a similar energy where they overlap
             const eA = loudAt(aA, ms, ms + ovT), eB = loudAt(aB, st.bS, st.bS + ov * bRate);
             const eGap = eA != null && eB != null ? Math.abs(eA - eB) / 20 : 0;
-            let cookS = 0;
+            let cookS = 0, lw = null;
             if (cookBlend) {
               // energy must flow: the incoming song at the energy the outgoing one is leaving with —
               // and never lower (a dip in the middle of a set is what makes a mix feel flat)
@@ -1831,12 +1860,15 @@ class Engine extends Emitter {
               // the next song's entry lands on the start of one of its sections (not inside a build)
               const bPre = loudAt(aB, st.bS - 6, st.bS), bPost = loudAt(aB, st.bS, st.bS + 6);
               if (st.phrase && bPre != null && bPost != null && bPost - bPre >= 8) cookS -= 0.5;
+              // a word the outgoing song sings as it leaves and the next one sings as it comes in
+              lw = lyricLink(A, B, ms + ovT * 0.6, st.bS);
+              if (lw) cookS -= 1.6;
             }
             // the taste AI: how you've rated mixes like this one (where it leaves, where it comes in, how long)
             const aiS = cookBlend ? brain.bonus('mix', brain.mixFeatures({ energyGap: eA != null && eB != null ? eB - eA : null, leaveStrong: eA != null && eA >= (loudAt(aA, 0, dur) ?? 0),
               enterSection: !!st.section, enterLand: !!st.land, enterIntro: !st.phrase, exitFrac: ms / dur, beats: bt, stretch: Math.abs(bRate - 1), keyFit: kc,
               kind: 'blend', club: !!cookBlend.club, level: settings.get('cookLevel') }), 2.5) : 0;
-            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn, land: st.land, section: !!st.section,
+            tries.push({ bt, ms, ov, clash, bS: st.bS, dropOn: st.dropOn, land: st.land, section: !!st.section, word: cookBlend ? lw : null,
               score: clash * 6 + (cookBlend ? 0 : eGap) + cookS - aiS + (st.dropOn ? -2 : 0) + k * (cookBlend?.club ? 0.04 : cookBlend ? 0.3 : 0.7) + (beats - bt) * (cookBlend ? 0.25 : 0.06) });
           }
         }
@@ -1845,7 +1877,7 @@ class Engine extends Emitter {
       const pick = tries[0];
       if (pick) {
         const { ms, ov: overlapR, bt } = pick;
-        const dropTxt = (pick.dropOn ? ' · drop on the mix' : pick.land ? ' · chorus hits as it leaves' : '') + (cookBlend && pick.bS > 8 ? ` · in at ${Math.floor(pick.bS / 60)}:${String(Math.floor(pick.bS % 60)).padStart(2, '0')}` : '');
+        const dropTxt = (pick.word ? ` · lyric link “${pick.word}”` : '') + (pick.dropOn ? ' · drop on the mix' : pick.land ? ' · chorus hits as it leaves' : '') + (cookBlend && pick.bS > 8 ? ` · in at ${Math.floor(pick.bS / 60)}:${String(Math.floor(pick.bS % 60)).padStart(2, '0')}` : '');
         const T = bpmA * aRate;
         const tempoTxt = Math.abs(aRate - 1) > 0.002 ? `${Math.round(bpmA)}→${Math.round(T)}←${Math.round(aB.bpm)} BPM` : `${Math.round(bpmA)} BPM`;
         // still two voices at once? take the outgoing song's vocals out and blend just its music and beat
